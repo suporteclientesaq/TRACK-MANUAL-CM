@@ -3,6 +3,7 @@ import { logoutAction } from "@/app/actions";
 import { requireAuth } from "@/lib/auth";
 import { setupProblem } from "@/lib/store";
 import { StorageProblem } from "@/app/StorageProblem";
+import { Logo } from "@/app/Logo";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +15,7 @@ export default async function PainelLayout({ children }: { children: React.React
     <>
       <header className="topbar">
         <Link href="/" className="brand">
+          <Logo size={22} />
           Track Manual
         </Link>
         <nav className="nav">

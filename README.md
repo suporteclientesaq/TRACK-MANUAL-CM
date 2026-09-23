@@ -115,6 +115,26 @@ cliques e conversas iniciadas.
 
 **Vários Clientes.** Cada cliente tem pixel, tokens, Página e endereço de entrada próprios.
 
+## Design
+
+Página de entrada com vídeo de fundo em tela cheia, barra transparente e chamada centralizada; o painel usa a
+mesma identidade. Cores: roxo `#7b39fc` (principal) e roxo escuro `#2b2344`. Fontes (baixadas no build, sem
+chamada externa): Manrope (interface e navegação), Cabin (botões e etiquetas), Instrument Serif (títulos) e
+Inter (texto). O painel respeita o tema claro/escuro do sistema.
+
+Onde mexer:
+
+- **Textos da página de entrada**: `app/login/Hero.tsx` (constantes `COPY` e `NAV_LINKS`) e `app/login/page.tsx`
+  (recursos, passos e rodapé).
+- **Logo**: `app/Logo.tsx`, constante `LOGO_PATH` (cole o `d` do path do seu SVG).
+- **Vídeo de fundo**: `public/fundo.mp4` (cópia leve, 470 KB) e `public/fundo.jpg` (imagem mostrada enquanto
+  carrega); o original do design fica como reserva em `VIDEO_FALLBACK_URL`. Para trocar, substitua os dois
+  arquivos.
+- **Cores do painel**: variáveis no topo de `app/globals.css` (`--accent`, `--bg`, `--surface`…).
+
+Tailwind (v4, só utilidades, sem reset) está disponível para as telas novas; o CSS do painel fica na camada
+`panel`, abaixo das utilidades.
+
 ## Acessos no Meta (Cadastrados Dentro do Painel)
 
 **ID do Pixel.** Gerenciador de Eventos > seu pixel; aparece no topo da tela de Configurações.
@@ -184,6 +204,9 @@ local), `META_API_VERSION` (padrão v25.0). Testes contra a API: `TEST_SUPABASE_
 `TEST_SUPABASE_PG_URL` (um PostgREST e o Postgres por baixo dele).
 
 ```
+app/login/               página de entrada (Hero.tsx: vídeo, barra e chamada; page.tsx: login e seções)
+app/Logo.tsx             marca (LOGO_PATH)
+public/fundo.mp4|jpg     vídeo de fundo e imagem de espera
 app/(painel)/            telas: leads, importar, detalhe do lead, eventos, clientes, configurações
 app/api/webhook/leona/   entrada automática de leads
 app/actions.ts           salvar, importar, conferir, enviar, reenviar, puxar dados do anúncio

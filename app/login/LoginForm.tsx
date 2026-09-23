@@ -9,7 +9,7 @@ export function LoginForm() {
     <form action={action}>
       {state.error && <div className="note note-err">{state.error}</div>}
       <label htmlFor="password">Senha</label>
-      <input id="password" name="password" type="password" autoComplete="current-password" required autoFocus />
+      <input id="password" name="password" type="password" autoComplete="current-password" required />
       <div className="actions">
         <button className="btn btn-primary" disabled={pending}>
           {pending ? "Entrando…" : "Entrar"}
@@ -25,7 +25,7 @@ export function SetupForm() {
     <form action={action}>
       {state.error && <div className="note note-err">{state.error}</div>}
       <label htmlFor="password">Nova Senha</label>
-      <input id="password" name="password" type="password" autoComplete="new-password" minLength={6} required autoFocus />
+      <input id="password" name="password" type="password" autoComplete="new-password" minLength={6} required />
       <label htmlFor="confirm" style={{ marginTop: 10 }}>
         Repita a Senha
       </label>
