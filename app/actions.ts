@@ -2,6 +2,7 @@
 
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { login, logout, requireAuth, startSession } from "@/lib/auth";
 import { appSecret, hasPassword, setPassword, verifyPassword } from "@/lib/config";
@@ -27,6 +28,7 @@ import {
   upsertAd,
 } from "@/lib/store";
 import { MESSAGING_EVENTS, type FormState } from "@/lib/types";
+import { THEME_COOKIE, prefsFromForm, serializePrefs } from "@/lib/theme";
 
 const text = (fd: FormData, name: string): string | null => {
   const v = fd.get(name);
@@ -59,6 +61,23 @@ export async function loginAction(_prev: FormState, fd: FormData): Promise<FormS
 export async function logoutAction() {
   await logout();
   redirect("/login");
+}
+
+/** Aparência (tema, cor, densidade, títulos): fica num cookie de um ano. */
+export async function saveThemeAction(fd: FormData): Promise<void> {
+  await requireAuth();
+  const prefs = prefsFromForm(fd);
+  const h = await headers();
+  const https = (h.get("x-forwarded-proto") || "").split(",")[0].trim() === "https";
+  const jar = await cookies();
+  jar.set(THEME_COOKIE, serializePrefs(prefs), {
+    httpOnly: true,
+    secure: https,
+    sameSite: "lax",
+    path: "/",
+    maxAge: 365 * 24 * 60 * 60,
+  });
+  revalidatePath("/", "layout");
 }
 
 export async function changePasswordAction(_prev: FormState, fd: FormData): Promise<FormState> {
@@ -186,7 +205,9 @@ export async function deleteLeadAction(fd: FormData) {
   const id = text(fd, "id");
   if (id) await deleteLead(id);
   revalidatePath("/");
-  redirect("/");
+  // Volta para a lista de onde veio (com os mesmos filtros), nunca para fora do painel.
+  const back = text(fd, "back") || "";
+  redirect(/^\/(?!\/)/.test(back) ? back : "/");
 }
 
 // ---------------------------------------------------------------------------

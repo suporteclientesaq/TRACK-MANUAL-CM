@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ChevronLeft, ChevronRight, Plus, Search, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatDateTime, formatMoney, formatPhone } from "@/lib/format";
+import { DeleteLeadButton } from "./leads/DeleteLeadButton";
 import { adsFor, listClients, listLeads, sentForLeads } from "@/lib/store";
 import { eventLabel } from "@/lib/types";
 
@@ -116,6 +117,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                 <th>Rastreio</th>
                 <th>Já Enviado</th>
                 <th>Chegou Em</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -174,6 +176,9 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                       )}
                     </td>
                     <td className="small muted nowrap">{formatDateTime(lead.first_seen_at)}</td>
+                    <td className="row-actions">
+                      <DeleteLeadButton id={lead.id} name={lead.name || formatPhone(lead.phone)} back={pageLink(page)} />
+                    </td>
                   </tr>
                 );
               })}

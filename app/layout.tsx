@@ -1,5 +1,7 @@
 import type { Metadata, Viewport } from "next";
+import { cookies } from "next/headers";
 import { Cabin, Inter, Instrument_Serif, Manrope } from "next/font/google";
+import { THEME_COOKIE, htmlAttrs, parsePrefs } from "@/lib/theme";
 import "./globals.css";
 
 // Fontes do design: Manrope (interface e navegação), Cabin (botões e etiquetas),
@@ -23,9 +25,15 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = { width: "device-width", initialScale: 1, themeColor: "#2b2344" };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  // Aparência escolhida em Configurações: aplicada no servidor, sem piscar.
+  const prefs = parsePrefs((await cookies()).get(THEME_COOKIE)?.value);
   return (
-    <html lang="pt-BR" className={`${manrope.variable} ${cabin.variable} ${instrumentSerif.variable} ${inter.variable}`}>
+    <html
+      lang="pt-BR"
+      className={`${manrope.variable} ${cabin.variable} ${instrumentSerif.variable} ${inter.variable}`}
+      {...htmlAttrs(prefs)}
+    >
       <body>{children}</body>
     </html>
   );

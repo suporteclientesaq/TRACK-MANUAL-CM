@@ -1,5 +1,8 @@
+import { cookies } from "next/headers";
 import { isOnline, localPaths, stats, storeKind } from "@/lib/store";
+import { THEME_COOKIE, parsePrefs } from "@/lib/theme";
 import { ChangePasswordForm } from "./ChangePasswordForm";
+import { ThemeForm } from "./ThemeForm";
 
 export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ salvo?: string }> }) {
   const { salvo } = await searchParams;
@@ -7,14 +10,23 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
   const paths = localPaths();
   const online = isOnline();
   const kind = storeKind();
+  const prefs = parsePrefs((await cookies()).get(THEME_COOKIE)?.value);
 
   return (
     <>
       <div className="page-head">
-        <h1>Configurações</h1>
+        <div>
+          <h1>Configurações</h1>
+          <p className="muted small">Aparência, senha e onde os dados ficam guardados.</p>
+        </div>
       </div>
 
       {salvo && <div className="note note-ok">Senha trocada.</div>}
+
+      <div className="card">
+        <h2>Aparência</h2>
+        <ThemeForm initial={prefs} />
+      </div>
 
       <div className="grid-2">
         <div className="card">
