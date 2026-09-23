@@ -1,0 +1,15 @@
+# Track Manual no Netlify.
+# Variáveis de ambiente (Site configuration > Environment variables):
+#   DATABASE_URL  = string de conexão do Postgres (Supabase: "Transaction pooler")
+#   APP_SECRET    = opcional; 64 caracteres aleatórios. Sem ela, o painel gera e guarda no banco.
+
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "22"
+  NEXT_TELEMETRY_DISABLED = "1"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
