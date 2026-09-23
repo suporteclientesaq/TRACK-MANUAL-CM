@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Logo } from "@/app/Logo";
+import { LiquidButton } from "@/components/ui/liquid-glass-button";
 
 /**
  * Seção de abertura do painel: vídeo de fundo em tela cheia, barra de navegação
@@ -206,12 +207,13 @@ export function Hero({ setup }: { setup: boolean }) {
           >
             {setup ? "Criar Minha Senha" : COPY.ctaPrimary}
           </a>
-          <a
-            href="#como-funciona"
-            className="inline-flex h-12 items-center justify-center rounded-[10px] border border-white/15 bg-brand-dark px-6 font-btn text-[16px] font-medium text-[#f6f7f9] no-underline transition hover:bg-[#3a2f5c] hover:no-underline"
+          <LiquidButton
+            asChild
+            size="xl"
+            className="rounded-[10px] px-6 font-btn text-[16px] font-medium text-[#f6f7f9] no-underline hover:no-underline"
           >
-            {COPY.ctaSecondary}
-          </a>
+            <a href="#como-funciona">{COPY.ctaSecondary}</a>
+          </LiquidButton>
         </div>
       </div>
     </section>

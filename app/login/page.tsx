@@ -4,6 +4,7 @@ import { hasPassword } from "@/lib/config";
 import { setupProblem } from "@/lib/store";
 import { StorageProblem } from "@/app/StorageProblem";
 import { Logo } from "@/app/Logo";
+import { EntrarButton } from "./EntrarButton";
 import { Hero } from "./Hero";
 import { LoginForm, SetupForm } from "./LoginForm";
 
@@ -93,9 +94,7 @@ export default async function LoginPage() {
             ))}
           </div>
           <div className="mt-8 flex justify-center">
-            <a href="#entrar" className="btn btn-primary btn-lg">
-              {setup ? "Criar Minha Senha" : "Entrar no Painel"}
-            </a>
+            <EntrarButton label={setup ? "Criar Minha Senha" : "Acessar o Painel"} />
           </div>
         </div>
       </section>

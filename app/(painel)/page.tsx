@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { ChevronLeft, ChevronRight, Plus, Search, Upload } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { formatDateTime, formatMoney, formatPhone } from "@/lib/format";
 import { adsFor, listClients, listLeads, sentForLeads } from "@/lib/store";
 import { eventLabel } from "@/lib/types";
@@ -15,15 +17,18 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
 
   if (clients.length === 0) {
     return (
-      <div className="card">
+      <div className="card empty">
         <h1>Bem-Vindo ao Track Manual</h1>
-        <p className="muted">
+        <p>
           Para começar, cadastre o primeiro cliente com o pixel, o token e o ID da Página. Depois é só importar os leads
           da Leona ou adicionar à mão.
         </p>
-        <Link className="btn btn-primary" href="/clientes/novo">
-          Cadastrar Primeiro Cliente
-        </Link>
+        <Button asChild>
+          <Link href="/clientes/novo">
+            <Plus />
+            Cadastrar Primeiro Cliente
+          </Link>
+        </Button>
       </div>
     );
   }
@@ -56,13 +61,19 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
           <h1>Leads</h1>
           <p className="muted small">Abra um lead para conferir os dados e enviar o evento ao Meta.</p>
         </div>
-        <div className="actions" style={{ marginTop: 0 }}>
-          <Link className="btn btn-primary" href="/leads/importar">
-            Importar da Leona
-          </Link>
-          <Link className="btn" href="/leads/novo">
-            Adicionar à Mão
-          </Link>
+        <div className="actions">
+          <Button asChild variant="outline">
+            <Link href="/leads/novo">
+              <Plus />
+              Adicionar à Mão
+            </Link>
+          </Button>
+          <Button asChild>
+            <Link href="/leads/importar">
+              <Upload />
+              Importar da Leona
+            </Link>
+          </Button>
         </div>
       </div>
 
@@ -83,7 +94,10 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
           <option value="com-ctwa">Só Com ctwa_clid</option>
           <option value="sem-ctwa">Só Sem ctwa_clid</option>
         </select>
-        <button className="btn">Filtrar</button>
+        <Button variant="secondary" type="submit">
+          <Search />
+          Filtrar
+        </Button>
       </form>
 
       <div className="card table-wrap">
@@ -149,7 +163,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                     </td>
                     <td>
                       {sent.length === 0 ? (
-                        <span className="muted">Nada</span>
+                        <span className="muted small">Nada</span>
                       ) : (
                         sent.map((ev) => (
                           <div key={ev.id} className="small">
@@ -159,7 +173,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                         ))
                       )}
                     </td>
-                    <td className="small muted">{formatDateTime(lead.first_seen_at)}</td>
+                    <td className="small muted nowrap">{formatDateTime(lead.first_seen_at)}</td>
                   </tr>
                 );
               })}
@@ -168,18 +182,26 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
         )}
       </div>
 
-      <div className="actions">
-        {page > 1 && (
-          <Link className="btn btn-small" href={pageLink(page - 1)}>
-            Página Anterior
-          </Link>
-        )}
-        {hasNext && (
-          <Link className="btn btn-small" href={pageLink(page + 1)}>
-            Próxima Página
-          </Link>
-        )}
-      </div>
+      {(page > 1 || hasNext) && (
+        <div className="actions">
+          {page > 1 && (
+            <Button asChild variant="outline" size="sm">
+              <Link href={pageLink(page - 1)}>
+                <ChevronLeft />
+                Página Anterior
+              </Link>
+            </Button>
+          )}
+          {hasNext && (
+            <Button asChild variant="outline" size="sm">
+              <Link href={pageLink(page + 1)}>
+                Próxima Página
+                <ChevronRight />
+              </Link>
+            </Button>
+          )}
+        </div>
+      )}
     </>
   );
 }

@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { ChevronLeft, RotateCcw, Trash2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { deleteLeadAction, resendEventAction } from "@/app/actions";
 import { daysSince, formatDateTime, formatMoney, formatNumber, formatPhone } from "@/lib/format";
 import { contentNames, getAd, getClient, getLead, listClients, listEventsForLead } from "@/lib/store";
@@ -41,9 +43,12 @@ export default async function LeadPage({
             {lead.origin === "leona" ? "pela Leona" : "(importado ou adicionado à mão)"}
           </p>
         </div>
-        <Link className="btn" href="/">
-          Voltar aos Leads
-        </Link>
+        <Button asChild variant="outline">
+          <Link href="/">
+            <ChevronLeft />
+            Voltar aos Leads
+          </Link>
+        </Button>
       </div>
 
       {salvo && <div className="note note-ok">Alterações salvas.</div>}
@@ -160,7 +165,7 @@ export default async function LeadPage({
             <tbody>
               {events.map((ev) => (
                 <tr key={ev.id}>
-                  <td className="small">{formatDateTime(ev.created_at)}</td>
+                  <td className="small nowrap">{formatDateTime(ev.created_at)}</td>
                   <td>
                     {eventLabel(ev.event_name)} {ev.is_test && <span className="badge badge-warn">Teste</span>}
                   </td>
@@ -172,9 +177,12 @@ export default async function LeadPage({
                       <>
                         <span className="badge badge-err">Erro</span>
                         <div className="small" style={{ marginTop: 4 }}>{ev.error_message}</div>
-                        <form action={resendEventAction} style={{ marginTop: 6 }}>
+                        <form action={resendEventAction} style={{ marginTop: 8 }}>
                           <input type="hidden" name="event_id" value={ev.id} />
-                          <button className="btn btn-small">Reenviar</button>
+                          <Button variant="outline" size="sm" type="submit">
+                            <RotateCcw />
+                            Reenviar
+                          </Button>
                         </form>
                       </>
                     )}
@@ -209,7 +217,10 @@ export default async function LeadPage({
           <pre className="payload" style={{ marginTop: 12 }}>{JSON.stringify(lead.raw ?? null, null, 2)}</pre>
           <form action={deleteLeadAction}>
             <input type="hidden" name="id" value={lead.id} />
-            <button className="btn btn-danger btn-small">Excluir Este Lead e Seu Histórico</button>
+            <Button variant="destructive" size="sm" type="submit">
+              <Trash2 />
+              Excluir Este Lead e Seu Histórico
+            </Button>
           </form>
         </details>
       </div>

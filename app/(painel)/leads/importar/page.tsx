@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { ChevronLeft } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { listClients } from "@/lib/store";
 import { ImportForm } from "./ImportForm";
 
@@ -11,9 +13,12 @@ export default async function ImportPage() {
           <h1>Importar Leads da Leona</h1>
           <p className="muted small">Aceita o CSV exportado da Leona ou qualquer planilha que tenha uma coluna de telefone.</p>
         </div>
-        <Link className="btn" href="/">
-          Voltar
-        </Link>
+        <Button asChild variant="outline">
+          <Link href="/">
+            <ChevronLeft />
+            Voltar
+          </Link>
+        </Button>
       </div>
 
       <div className="grid-2">

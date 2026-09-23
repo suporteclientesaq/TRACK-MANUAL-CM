@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useActionState } from "react";
 import { importCsvAction, type ImportState } from "@/app/actions";
 import type { Client } from "@/lib/types";
+import { Upload } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 const FIELD_LABEL: Record<string, string> = {
   name: "Nome",
@@ -46,10 +48,10 @@ export function ImportForm({ clients }: { clients: Pick<Client, "id" | "name">[]
               {r.skipped > r.problems.length && <li>… e mais {r.skipped - r.problems.length} linha(s) sem telefone.</li>}
             </ul>
           )}
-          <div style={{ marginTop: 8 }}>
-            <Link className="btn btn-small" href="/">
-              Ver os Leads
-            </Link>
+          <div style={{ marginTop: 10 }}>
+            <Button asChild variant="outline" size="sm">
+              <Link href="/">Ver os Leads</Link>
+            </Button>
           </div>
         </div>
       )}
@@ -74,9 +76,10 @@ export function ImportForm({ clients }: { clients: Pick<Client, "id" | "name">[]
       <div className="hint">Separado por vírgula ou ponto e vírgula; a primeira linha precisa ter os nomes das colunas.</div>
 
       <div className="actions">
-        <button className="btn btn-primary" disabled={pending}>
+        <Button type="submit" disabled={pending}>
+          <Upload />
           {pending ? "Importando…" : "Importar"}
-        </button>
+        </Button>
       </div>
     </form>
   );

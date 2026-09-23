@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { ChevronLeft, ChevronRight } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { formatDateTime, formatMoney, formatPhone } from "@/lib/format";
 import { listEvents, recentSent } from "@/lib/store";
 import { eventLabel } from "@/lib/types";
@@ -40,10 +42,16 @@ export default async function EventsPage({
             {formatMoney(revenue)} em valor enviado.
           </p>
         </div>
-        <div className="actions" style={{ marginTop: 0 }}>
-          <Link className="btn btn-small" href={link(1, "")}>Todos</Link>
-          <Link className="btn btn-small" href={link(1, "enviado")}>Só Recebidos</Link>
-          <Link className="btn btn-small" href={link(1, "erro")}>Só Com Erro</Link>
+        <div className="seg" role="group" aria-label="Filtro">
+          {[
+            { value: "", label: "Todos" },
+            { value: "enviado", label: "Recebidos" },
+            { value: "erro", label: "Com Erro" },
+          ].map((f) => (
+            <Button key={f.value} asChild variant={(sp.status || "") === f.value ? "outline" : "ghost"} size="sm">
+              <Link href={link(1, f.value)}>{f.label}</Link>
+            </Button>
+          ))}
         </div>
       </div>
 
@@ -64,7 +72,7 @@ export default async function EventsPage({
             <tbody>
               {events.map((ev) => (
                 <tr key={ev.id}>
-                  <td className="small">{formatDateTime(ev.created_at)}</td>
+                  <td className="small nowrap">{formatDateTime(ev.created_at)}</td>
                   <td>
                     <Link href={`/leads/${ev.lead_id}`}>{ev.lead_name || "Sem Nome"}</Link>
                     <div className="muted small">
@@ -93,10 +101,26 @@ export default async function EventsPage({
         )}
       </div>
 
-      <div className="actions">
-        {page > 1 && <Link className="btn btn-small" href={link(page - 1)}>Página Anterior</Link>}
-        {hasNext && <Link className="btn btn-small" href={link(page + 1)}>Próxima Página</Link>}
-      </div>
+      {(page > 1 || hasNext) && (
+        <div className="actions">
+          {page > 1 && (
+            <Button asChild variant="outline" size="sm">
+              <Link href={link(page - 1)}>
+                <ChevronLeft />
+                Página Anterior
+              </Link>
+            </Button>
+          )}
+          {hasNext && (
+            <Button asChild variant="outline" size="sm">
+              <Link href={link(page + 1)}>
+                Próxima Página
+                <ChevronRight />
+              </Link>
+            </Button>
+          )}
+        </div>
+      )}
     </>
   );
 }

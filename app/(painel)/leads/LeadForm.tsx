@@ -3,6 +3,7 @@
 import { useActionState } from "react";
 import { saveLeadAction } from "@/app/actions";
 import type { Client, Lead } from "@/lib/types";
+import { Button } from "@/components/ui/button";
 
 export function LeadForm({ clients, lead }: { clients: Pick<Client, "id" | "name">[]; lead?: Lead }) {
   const [state, action, pending] = useActionState(saveLeadAction, { error: null });
@@ -85,9 +86,9 @@ export function LeadForm({ clients, lead }: { clients: Pick<Client, "id" | "name
       </div>
 
       <div className="actions">
-        <button className="btn btn-primary" disabled={pending}>
+        <Button type="submit" disabled={pending}>
           {pending ? "Salvando…" : lead ? "Salvar Alterações" : "Adicionar Lead"}
-        </button>
+        </Button>
       </div>
     </form>
   );

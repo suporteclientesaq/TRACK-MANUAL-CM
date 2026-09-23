@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { Plus } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { listClients } from "@/lib/store";
 
 export default async function ClientsPage() {
@@ -11,9 +13,12 @@ export default async function ClientsPage() {
           <h1>Clientes</h1>
           <p className="muted small">Cada cliente tem o próprio pixel, tokens e Página. Comece com o seu.</p>
         </div>
-        <Link className="btn btn-primary" href="/clientes/novo">
-          Cadastrar Cliente
-        </Link>
+        <Button asChild>
+          <Link href="/clientes/novo">
+            <Plus />
+            Cadastrar Cliente
+          </Link>
+        </Button>
       </div>
 
       <div className="card table-wrap">

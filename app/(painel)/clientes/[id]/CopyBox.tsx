@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { Check, Copy } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 export function CopyBox({ label, value, multiline = false }: { label: string; value: string; multiline?: boolean }) {
   const [copied, setCopied] = useState(false);
@@ -25,9 +27,10 @@ export function CopyBox({ label, value, multiline = false }: { label: string; va
           <input className="mono" readOnly value={value} onFocus={(e) => e.currentTarget.select()} />
         </div>
       )}
-      <button type="button" className="btn btn-small" onClick={copy}>
+      <Button type="button" variant="outline" size="sm" onClick={copy}>
+        {copied ? <Check /> : <Copy />}
         {copied ? "Copiado" : "Copiar"}
-      </button>
+      </Button>
     </div>
   );
 }

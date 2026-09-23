@@ -3,6 +3,7 @@
 import { useActionState } from "react";
 import { saveClientAction } from "@/app/actions";
 import type { Client } from "@/lib/types";
+import { Button } from "@/components/ui/button";
 
 export function ClientForm({ client }: { client?: Client }) {
   const [state, action, pending] = useActionState(saveClientAction, { error: null });
@@ -100,9 +101,9 @@ export function ClientForm({ client }: { client?: Client }) {
       </div>
 
       <div className="actions">
-        <button className="btn btn-primary" disabled={pending}>
+        <Button type="submit" disabled={pending}>
           {pending ? "Salvando…" : client ? "Salvar Alterações" : "Cadastrar Cliente"}
-        </button>
+        </Button>
       </div>
     </form>
   );

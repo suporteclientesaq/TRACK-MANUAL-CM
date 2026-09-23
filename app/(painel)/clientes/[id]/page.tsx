@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { headers } from "next/headers";
 import { notFound } from "next/navigation";
+import { ChevronLeft } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { getClient, isOnline } from "@/lib/store";
 import type { Client } from "@/lib/types";
 import { ClientForm } from "./ClientForm";
@@ -42,10 +44,18 @@ export default async function ClientPage({
   return (
     <>
       <div className="page-head">
-        <h1>{client ? client.name : "Cadastrar Cliente"}</h1>
-        <Link className="btn" href="/clientes">
-          Voltar aos Clientes
-        </Link>
+        <div>
+          <h1>{client ? client.name : "Cadastrar Cliente"}</h1>
+          <p className="muted small">
+            {client ? "Pixel, tokens, Página e a entrada dos leads deste cliente." : "Pixel, token da API de Conversões e ID da Página."}
+          </p>
+        </div>
+        <Button asChild variant="outline">
+          <Link href="/clientes">
+            <ChevronLeft />
+            Voltar aos Clientes
+          </Link>
+        </Button>
       </div>
 
       {salvo && <div className="note note-ok">Cliente salvo.</div>}

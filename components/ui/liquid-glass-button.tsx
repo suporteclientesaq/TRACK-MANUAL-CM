@@ -1,0 +1,111 @@
+"use client";
+
+import * as React from "react";
+import { Slot, Slottable } from "@radix-ui/react-slot";
+import { cva, type VariantProps } from "class-variance-authority";
+
+import { cn } from "@/lib/utils";
+
+// O botão padrão e o metálico moram em arquivos próprios; ficam reexportados
+// aqui para quem importar tudo de "@/components/ui/liquid-glass-button".
+export { Button, buttonVariants, type ButtonProps } from "@/components/ui/button";
+export { MetalButton, type MetalButtonProps } from "@/components/ui/metal-button";
+
+/**
+ * Botão "vidro líquido": transparente, com brilho nas bordas e um filtro SVG que
+ * distorce levemente o que está atrás (efeito de vidro). Feito para ficar sobre
+ * fotos ou vídeo, como na página de entrada. O filtro no backdrop funciona no
+ * Chrome/Edge; nos outros navegadores sobra o vidro sem distorção.
+ */
+const liquidbuttonVariants = cva(
+  "inline-flex items-center transition-colors justify-center cursor-pointer gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-[color,box-shadow] disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive",
+  {
+    variants: {
+      variant: {
+        default: "bg-transparent hover:scale-105 duration-300 transition text-primary",
+        destructive:
+          "bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40",
+        outline: "border border-input bg-background hover:bg-accent hover:text-accent-foreground",
+        secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
+        ghost: "hover:bg-accent hover:text-accent-foreground",
+        link: "text-primary underline-offset-4 hover:underline",
+      },
+      size: {
+        default: "h-9 px-4 py-2 has-[>svg]:px-3",
+        sm: "h-8 text-xs gap-1.5 px-4 has-[>svg]:px-4",
+        lg: "h-10 rounded-md px-6 has-[>svg]:px-4",
+        xl: "h-12 rounded-md px-8 has-[>svg]:px-6",
+        xxl: "h-14 rounded-md px-10 has-[>svg]:px-8",
+        icon: "size-9",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+      size: "xxl",
+    },
+  }
+);
+
+export type LiquidButtonProps = React.ComponentProps<"button"> &
+  VariantProps<typeof liquidbuttonVariants> & {
+    asChild?: boolean;
+  };
+
+function LiquidButton({ className, variant, size, asChild = false, children, ...props }: LiquidButtonProps) {
+  const Comp = asChild ? Slot : "button";
+  // Um id por instância: vários botões na mesma página não disputam o mesmo filtro.
+  const filterId = `liquid-glass-${React.useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
+
+  return (
+    <Comp
+      data-slot="button"
+      className={cn("relative isolate", liquidbuttonVariants({ variant, size, className }))}
+      {...props}
+    >
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute top-0 left-0 z-0 h-full w-full rounded-[inherit]
+            shadow-[0_0_6px_rgba(0,0,0,0.03),0_2px_6px_rgba(0,0,0,0.08),inset_3px_3px_0.5px_-3px_rgba(0,0,0,0.9),inset_-3px_-3px_0.5px_-3px_rgba(0,0,0,0.85),inset_1px_1px_1px_-0.5px_rgba(0,0,0,0.6),inset_-1px_-1px_1px_-0.5px_rgba(0,0,0,0.6),inset_0_0_6px_6px_rgba(0,0,0,0.12),inset_0_0_2px_2px_rgba(0,0,0,0.06),0_0_12px_rgba(255,255,255,0.15)]
+        transition-all
+        dark:shadow-[0_0_8px_rgba(0,0,0,0.03),0_2px_6px_rgba(0,0,0,0.08),inset_3px_3px_0.5px_-3.5px_rgba(255,255,255,0.09),inset_-3px_-3px_0.5px_-3.5px_rgba(255,255,255,0.85),inset_1px_1px_1px_-0.5px_rgba(255,255,255,0.6),inset_-1px_-1px_1px_-0.5px_rgba(255,255,255,0.6),inset_0_0_6px_6px_rgba(255,255,255,0.12),inset_0_0_2px_2px_rgba(255,255,255,0.06),0_0_12px_rgba(0,0,0,0.15)]"
+      />
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute top-0 left-0 isolate -z-10 h-full w-full overflow-hidden rounded-[inherit]"
+        style={{ backdropFilter: `url("#${filterId}")`, WebkitBackdropFilter: `url("#${filterId}")` }}
+      />
+
+      {asChild ? <Slottable>{children}</Slottable> : <span className="pointer-events-none relative z-10">{children}</span>}
+      <GlassFilter id={filterId} />
+    </Comp>
+  );
+}
+
+function GlassFilter({ id }: { id: string }) {
+  return (
+    <svg className="hidden" aria-hidden="true">
+      <defs>
+        <filter id={id} x="0%" y="0%" width="100%" height="100%" colorInterpolationFilters="sRGB">
+          {/* Ruído para a distorção */}
+          <feTurbulence type="fractalNoise" baseFrequency="0.05 0.05" numOctaves="1" seed="1" result="turbulence" />
+          {/* Suaviza o ruído */}
+          <feGaussianBlur in="turbulence" stdDeviation="2" result="blurredNoise" />
+          {/* Desloca o fundo pelo ruído */}
+          <feDisplacementMap
+            in="SourceGraphic"
+            in2="blurredNoise"
+            scale="70"
+            xChannelSelector="R"
+            yChannelSelector="B"
+            result="displaced"
+          />
+          {/* Desfoque final */}
+          <feGaussianBlur in="displaced" stdDeviation="4" result="finalBlur" />
+          <feComposite in="finalBlur" in2="finalBlur" operator="over" />
+        </filter>
+      </defs>
+    </svg>
+  );
+}
+
+export { LiquidButton, liquidbuttonVariants, GlassFilter };

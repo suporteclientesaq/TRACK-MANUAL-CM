@@ -10,6 +10,7 @@ import {
   type EventSendResult,
 } from "@/app/actions";
 import { MESSAGING_EVENTS } from "@/lib/types";
+import { Button } from "@/components/ui/button";
 
 /** Horário local no formato que o campo datetime-local espera. */
 function localNow(): string {
@@ -126,9 +127,9 @@ export function SendEventForm({
 
       {!preview && (
         <div className="actions">
-          <button className="btn btn-primary" onClick={doPreview} disabled={pending || !when}>
+          <Button type="button" onClick={doPreview} disabled={pending || !when}>
             {pending ? "Montando…" : "Conferir Antes de Enviar"}
-          </button>
+          </Button>
         </div>
       )}
 
@@ -171,12 +172,12 @@ export function SendEventForm({
           <pre className="payload">{JSON.stringify(preview.payload, null, 2)}</pre>
 
           <div className="actions">
-            <button className="btn btn-primary" onClick={doSend} disabled={pending || !preview.ok || blockedByDouble}>
+            <Button type="button" variant="cool" size="lg" onClick={doSend} disabled={pending || !preview.ok || blockedByDouble}>
               {pending ? "Enviando…" : preview.isTest ? "Enviar Evento de Teste" : "Enviar ao Meta Agora"}
-            </button>
-            <button className="btn" onClick={() => setPreview(null)} disabled={pending}>
+            </Button>
+            <Button type="button" variant="ghost" onClick={() => setPreview(null)} disabled={pending}>
               Voltar e Corrigir
-            </button>
+            </Button>
           </div>
         </div>
       )}

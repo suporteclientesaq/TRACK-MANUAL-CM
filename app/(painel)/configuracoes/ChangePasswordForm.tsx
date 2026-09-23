@@ -2,6 +2,7 @@
 
 import { useActionState } from "react";
 import { changePasswordAction } from "@/app/actions";
+import { Button } from "@/components/ui/button";
 
 export function ChangePasswordForm() {
   const [state, action, pending] = useActionState(changePasswordAction, { error: null });
@@ -19,9 +20,9 @@ export function ChangePasswordForm() {
       </label>
       <input id="confirm" name="confirm" type="password" autoComplete="new-password" minLength={6} required />
       <div className="actions">
-        <button className="btn btn-primary" disabled={pending}>
+        <Button type="submit" disabled={pending}>
           {pending ? "Trocando…" : "Trocar Senha"}
-        </button>
+        </Button>
       </div>
     </form>
   );

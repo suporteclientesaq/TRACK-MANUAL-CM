@@ -2,6 +2,7 @@
 
 import { useActionState } from "react";
 import { loginAction, setupPasswordAction } from "@/app/actions";
+import { Button } from "@/components/ui/button";
 
 export function LoginForm() {
   const [state, action, pending] = useActionState(loginAction, { error: null });
@@ -11,9 +12,9 @@ export function LoginForm() {
       <label htmlFor="password">Senha</label>
       <input id="password" name="password" type="password" autoComplete="current-password" required />
       <div className="actions">
-        <button className="btn btn-primary" disabled={pending}>
+        <Button type="submit" disabled={pending}>
           {pending ? "Entrando…" : "Entrar"}
-        </button>
+        </Button>
       </div>
     </form>
   );
@@ -31,9 +32,9 @@ export function SetupForm() {
       </label>
       <input id="confirm" name="confirm" type="password" autoComplete="new-password" minLength={6} required />
       <div className="actions">
-        <button className="btn btn-primary" disabled={pending}>
+        <Button type="submit" disabled={pending}>
           {pending ? "Criando…" : "Criar Senha e Entrar"}
-        </button>
+        </Button>
       </div>
     </form>
   );
