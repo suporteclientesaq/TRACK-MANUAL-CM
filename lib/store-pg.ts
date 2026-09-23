@@ -1,6 +1,8 @@
 import "server-only";
 import { randomBytes, randomUUID } from "node:crypto";
 import { Pool, type PoolClient, type QueryResultRow } from "pg";
+import { databaseUrlAdvice, explainDatabaseError, normalizeDatabaseUrl } from "./db-url";
+import { SCHEMA_SQL } from "./schema-sql";
 import {
   AD_COLS,
   CLIENT_COLS,
@@ -23,109 +25,51 @@ import type { EventRow } from "./types";
  * As tabelas são criadas sozinhas na primeira conexão.
  */
 
-const SCHEMA = `
-create table if not exists clients (
-  id                  text primary key,
-  name                text not null,
-  webhook_key         text not null unique,
-  pixel_id            text,
-  capi_token_enc      text,
-  page_id             text,
-  waba_id             text,
-  id_mode             text not null default 'page',
-  ad_account_id       text,
-  marketing_token_enc text,
-  test_event_code     text,
-  default_currency    text not null default 'BRL',
-  send_extra_data     boolean not null default true,
-  created_at          text not null,
-  updated_at          text not null
-);
+const SCHEMA = SCHEMA_SQL;
 
-create table if not exists leads (
-  id             text primary key,
-  client_id      text not null references clients(id) on delete cascade,
-  name           text,
-  phone          text not null,
-  email          text,
-  city           text,
-  state          text,
-  zip            text,
-  country        text not null default 'br',
-  ctwa_clid      text,
-  source_id      text,
-  source_url     text,
-  source_type    text,
-  thumbnail_url  text,
-  media_url      text,
-  headline       text,
-  ad_body        text,
-  origin         text not null default 'manual',
-  notes          text,
-  raw            jsonb,
-  first_seen_at  text not null,
-  clid_seen_at   text,
-  updated_at     text not null,
-  unique (client_id, phone)
-);
-create index if not exists leads_client_seen_idx on leads (client_id, first_seen_at desc);
-create index if not exists leads_source_idx on leads (source_id);
+const g = globalThis as unknown as {
+  __trackPool?: Pool;
+  __trackPoolUrl?: string;
+  __trackSchema?: Promise<void>;
+  __trackCheck?: { url: string; at: number; problem: string | null };
+};
 
-create table if not exists events (
-  id              text primary key,
-  client_id       text not null references clients(id) on delete cascade,
-  lead_id         text not null references leads(id) on delete cascade,
-  event_name      text not null,
-  event_id        text not null,
-  event_time      text not null,
-  value           numeric(12,2),
-  currency        text,
-  content_name    text,
-  action_source   text not null,
-  is_test         boolean not null default false,
-  status          text not null,
-  http_status     integer,
-  events_received integer,
-  fbtrace_id      text,
-  error_message   text,
-  payload         jsonb not null,
-  response        jsonb,
-  created_at      text not null
-);
-create index if not exists events_lead_idx on events (lead_id, created_at desc);
-create index if not exists events_client_idx on events (client_id, created_at desc);
-
-create table if not exists ad_cache (
-  client_id      text not null references clients(id) on delete cascade,
-  ad_id          text not null,
-  ad_name        text,
-  ad_status      text,
-  adset_id       text,
-  adset_name     text,
-  campaign_id    text,
-  campaign_name  text,
-  creative_title text,
-  creative_body  text,
-  thumbnail_url  text,
-  spend          numeric(12,2),
-  impressions    bigint,
-  clicks         bigint,
-  conversations  bigint,
-  raw            jsonb,
-  fetched_at     text not null,
-  primary key (client_id, ad_id)
-);
-
-create table if not exists settings (
-  key   text primary key,
-  value text not null
-);
-`;
-
-const g = globalThis as unknown as { __trackPool?: Pool; __trackPoolUrl?: string; __trackSchema?: Promise<void> };
-
+/**
+ * String de conexão do Postgres. DATABASE_URL é o nome oficial; os outros são os
+ * que plataformas costumam criar sozinhas (Vercel, extensões do Netlify), aceitos
+ * só quando de fato contêm uma URL de Postgres.
+ */
 export function databaseUrl(): string {
-  return (process.env.DATABASE_URL || "").trim();
+  for (const name of ["DATABASE_URL", "POSTGRES_URL", "SUPABASE_DB_URL", "SUPABASE_DATABASE_URL"]) {
+    const v = normalizeDatabaseUrl(process.env[name]);
+    if (!v) continue;
+    if (name === "DATABASE_URL" || /^postgres(ql)?:\/\//i.test(v)) return v;
+  }
+  return "";
+}
+
+/**
+ * Tenta conectar e criar as tabelas. Devolve null quando está tudo certo ou uma
+ * explicação em português do que está errado (senha recusada, endereço errado…).
+ * Sucesso fica guardado enquanto o processo viver; falha é tentada de novo a cada 15 s.
+ */
+export async function checkConnection(): Promise<string | null> {
+  const url = databaseUrl();
+  if (!url) return "DATABASE_URL não configurada.";
+  const advice = databaseUrlAdvice(url);
+  if (advice) return advice;
+  const c = g.__trackCheck;
+  const now = Date.now();
+  if (c && c.url === url && (c.problem === null || now - c.at < 15_000)) return c.problem;
+  let problem: string | null = null;
+  try {
+    await ready();
+    await pool().query("select 1");
+  } catch (e) {
+    problem = explainDatabaseError(e, url);
+  }
+  g.__trackCheck = { url, at: now, problem };
+  return problem;
 }
 
 function pool(): Pool {
@@ -149,7 +93,8 @@ function pool(): Pool {
     // Funções serverless abrem poucas conexões por instância; o Supabase tem limite.
     max: 3,
     idleTimeoutMillis: 30_000,
-    connectionTimeoutMillis: 10_000,
+    // Abaixo do limite de 10 s das funções do Netlify, para o erro chegar à tela.
+    connectionTimeoutMillis: 8_000,
   });
   g.__trackPoolUrl = url;
   g.__trackSchema = undefined;

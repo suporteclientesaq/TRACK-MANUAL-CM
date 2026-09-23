@@ -4,13 +4,21 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 /**
- * Os mesmos testes rodam contra os dois modos:
+ * Os mesmos testes rodam contra os três modos:
  *  - SQLite: sempre, numa pasta temporária.
  *  - Postgres: só quando TEST_DATABASE_URL está definida (banco de teste real).
+ *  - API do Supabase: só com TEST_SUPABASE_URL + TEST_SUPABASE_KEY (PostgREST real)
+ *    e TEST_SUPABASE_PG_URL (o mesmo banco, por baixo, para criar as tabelas).
  * O modo é escolhido antes de importar o store, porque ele lê o ambiente.
  */
 const PG_URL = (process.env.TEST_DATABASE_URL || "").trim();
-const modes: ("sqlite" | "postgres")[] = PG_URL ? ["sqlite", "postgres"] : ["sqlite"];
+const REST_URL = (process.env.TEST_SUPABASE_URL || "").trim();
+const REST_KEY = (process.env.TEST_SUPABASE_KEY || "").trim();
+const REST_PG_URL = (process.env.TEST_SUPABASE_PG_URL || "").trim();
+type Mode = "sqlite" | "postgres" | "supabase-rest";
+const modes: Mode[] = ["sqlite"];
+if (PG_URL) modes.push("postgres");
+if (REST_URL && REST_KEY && REST_PG_URL) modes.push("supabase-rest");
 
 for (const mode of modes) {
   describe(`banco (${mode})`, () => {
@@ -22,19 +30,32 @@ for (const mode of modes) {
 
     beforeAll(async () => {
       process.env.TRACK_DATA_DIR = tmp;
+      delete process.env.DATABASE_URL;
+      delete process.env.SUPABASE_DATABASE_URL;
+      delete process.env.SUPABASE_SERVICE_ROLE_KEY;
       if (mode === "postgres") process.env.DATABASE_URL = PG_URL;
-      else delete process.env.DATABASE_URL;
+      if (mode === "supabase-rest") {
+        process.env.SUPABASE_DATABASE_URL = REST_URL;
+        process.env.SUPABASE_SERVICE_ROLE_KEY = REST_KEY;
+      }
       // isolamento entre os modos: módulos novos a cada describe
       const { vi } = await import("vitest");
       vi.resetModules();
       store = await import("@/lib/store");
       config = await import("@/lib/config");
       ingest = await import("@/lib/ingest");
-      if (mode === "postgres") {
-        // limpa o banco de teste
+      if (mode === "postgres" || mode === "supabase-rest") {
+        // limpa o banco de teste; no modo API também cria as tabelas (como a pessoa faria no SQL Editor)
         const { Pool } = await import("pg");
-        const p = new Pool({ connectionString: PG_URL });
+        const { normalizeDatabaseUrl } = await import("@/lib/db-url");
+        const p = new Pool({ connectionString: normalizeDatabaseUrl(mode === "postgres" ? PG_URL : REST_PG_URL) });
         await p.query("drop table if exists events, ad_cache, leads, clients, settings cascade");
+        if (mode === "supabase-rest") {
+          const { SUPABASE_SETUP_SQL } = await import("@/lib/schema-sql");
+          await p.query(SUPABASE_SETUP_SQL);
+          // o PostgREST recarrega o cache ao receber o notify; dá um instante para isso
+          await new Promise((r) => setTimeout(r, 400));
+        }
         await p.end();
       }
       expect(store.storeKind()).toBe(mode);

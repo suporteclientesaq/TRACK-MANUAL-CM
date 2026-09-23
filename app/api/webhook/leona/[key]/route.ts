@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { ingestLead } from "@/lib/ingest";
 import { parseBody } from "@/lib/leona";
-import { getClientByWebhookKey, storageProblem } from "@/lib/store";
+import { getClientByWebhookKey, setupProblem } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -13,8 +13,8 @@ const MAX_BODY = 50_000;
  * identifica o cliente. Aceita POST (JSON ou formulário) e GET.
  */
 async function handle(req: NextRequest, key: string) {
-  const problem = storageProblem();
-  if (problem) return NextResponse.json({ ok: false, error: problem }, { status: 503 });
+  const problem = await setupProblem();
+  if (problem) return NextResponse.json({ ok: false, error: problem.message }, { status: 503 });
   if (!/^[a-f0-9]{32,64}$/i.test(key)) {
     return NextResponse.json({ ok: false, error: "Chave inválida." }, { status: 404 });
   }

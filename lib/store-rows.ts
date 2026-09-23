@@ -166,7 +166,7 @@ export interface Stats {
 type MaybeAsync<T> = T | Promise<T>;
 
 export interface StoreImpl {
-  readonly kind: "sqlite" | "postgres";
+  readonly kind: "sqlite" | "postgres" | "supabase-rest";
 
   listClients(): MaybeAsync<Client[]>;
   getClient(id: string): MaybeAsync<Client | null>;

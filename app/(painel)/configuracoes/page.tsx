@@ -1,4 +1,4 @@
-import { isOnline, localPaths, stats } from "@/lib/store";
+import { isOnline, localPaths, stats, storeKind } from "@/lib/store";
 import { ChangePasswordForm } from "./ChangePasswordForm";
 
 export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ salvo?: string }> }) {
@@ -6,6 +6,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
   const s = await stats();
   const paths = localPaths();
   const online = isOnline();
+  const kind = storeKind();
 
   return (
     <>
@@ -26,12 +27,23 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           {online ? (
             <>
               <p className="small">
-                O painel está no modo online: os dados ficam no banco Postgres apontado pela variável{" "}
-                <span className="mono">DATABASE_URL</span> (Supabase). O backup é feito lá, no painel do Supabase.
+                {kind === "supabase-rest" ? (
+                  <>
+                    O painel está no modo online: os dados ficam no seu projeto do Supabase, acessado pela API com as
+                    variáveis <span className="mono">SUPABASE_DATABASE_URL</span> e{" "}
+                    <span className="mono">SUPABASE_SERVICE_ROLE_KEY</span> (extensão do Supabase no Netlify). O backup é
+                    feito lá, no painel do Supabase.
+                  </>
+                ) : (
+                  <>
+                    O painel está no modo online: os dados ficam no banco Postgres apontado pela variável{" "}
+                    <span className="mono">DATABASE_URL</span> (Supabase). O backup é feito lá, no painel do Supabase.
+                  </>
+                )}
               </p>
               <dl className="data">
                 <dt>Modo</dt>
-                <dd>Online (Postgres)</dd>
+                <dd>{kind === "supabase-rest" ? "Online (Supabase pela API)" : "Online (Postgres)"}</dd>
                 <dt>Cadastrados</dt>
                 <dd>
                   {s.clients} cliente(s), {s.leads} lead(s), {s.events} evento(s)

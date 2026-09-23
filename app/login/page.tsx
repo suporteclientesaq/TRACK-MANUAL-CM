@@ -1,15 +1,15 @@
 import { redirect } from "next/navigation";
 import { isLoggedIn } from "@/lib/auth";
 import { hasPassword } from "@/lib/config";
-import { storageProblem } from "@/lib/store";
+import { setupProblem } from "@/lib/store";
 import { StorageProblem } from "@/app/StorageProblem";
 import { LoginForm, SetupForm } from "./LoginForm";
 
 export const dynamic = "force-dynamic";
 
 export default async function LoginPage() {
-  const problem = storageProblem();
-  if (problem) return <StorageProblem message={problem} />;
+  const problem = await setupProblem();
+  if (problem) return <StorageProblem message={problem.message} database={problem.database} sql={problem.sql} />;
   const setup = !(await hasPassword());
   if (!setup && (await isLoggedIn())) redirect("/");
   return (

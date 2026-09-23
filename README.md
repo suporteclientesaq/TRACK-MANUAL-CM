@@ -13,7 +13,9 @@ O mesmo código roda de dois jeitos:
 | Contas necessárias | GitHub, Netlify, Supabase (gratuitas) | Nenhuma |
 | Onde ficam os dados | Postgres no Supabase | Arquivo na pasta `data/` |
 
-O painel decide o modo sozinho: com a variável `DATABASE_URL` definida, é online; sem ela, é local.
+O painel decide o modo sozinho pelas variáveis de ambiente: `DATABASE_URL` (Postgres direto) ou
+`SUPABASE_DATABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (API do Supabase, criadas pela extensão do Netlify) ligam o
+modo online; sem nenhuma delas, é local.
 
 ---
 
@@ -31,23 +33,33 @@ pasta `track-manual/` dentro). Se a pasta do repositório no seu computador tem 
 O Netlify percebe o push e faz o build sozinho. Nesse primeiro build ele ainda vai reclamar de banco de
 dados; é o próximo passo.
 
-### 2. Criar o Banco no Supabase
+### 2. Criar o Projeto no Supabase
 
-1. Entre em supabase.com e crie um projeto (região **South America (São Paulo)**).
-2. Na criação ele pede uma **senha do banco**. Use só letras e números (sem símbolos) e guarde a senha.
-3. Com o projeto pronto, clique em **Connect** (botão no topo) e escolha a aba **Transaction pooler**.
-4. Copie a URI, que se parece com
-   `postgresql://postgres.abcdefgh:[YOUR-PASSWORD]@aws-0-sa-east-1.pooler.supabase.com:6543/postgres`,
-   e troque `[YOUR-PASSWORD]` pela senha do passo 2.
+Entre em supabase.com e crie um projeto (região **South America (São Paulo)**). Ele pede uma senha do banco;
+guarde-a (só letras e números facilita). Não precisa criar tabela nenhuma agora.
 
-Não precisa criar tabela nenhuma: o painel cria tudo sozinho na primeira vez que conecta.
+### 3. Ligar o Netlify ao Supabase
 
-### 3. Configurar o Netlify
+Há dois jeitos. O primeiro é o mais fácil.
 
-1. No site, **Site configuration > Environment variables > Add a variable**.
-2. Chave `DATABASE_URL`, valor = a URI do passo anterior. Salve.
-3. **Deploys > Trigger deploy > Deploy site**.
-4. Abra o endereço do site (`https://seu-site.netlify.app`). Na primeira tela, crie a sua senha.
+**Pela extensão (recomendado).** No Netlify: **Extensions > Supabase > Install**, depois, dentro do site,
+**Supabase > Connect** (ele pede para entrar na sua conta do Supabase) e escolha o projeto. A extensão cria
+sozinha as variáveis `SUPABASE_DATABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` e outras. Faça **Deploys > Trigger
+deploy > Deploy site** e abra o site: a tela vai dizer que faltam as tabelas e mostrar um trecho de SQL com um
+botão **Copiar**. No Supabase, abra o **SQL Editor** (menu da esquerda), cole, clique em **Run** e recarregue o
+site. É uma vez só. Na tela seguinte você cria a sua senha. (O mesmo SQL está no arquivo `supabase-tabelas.sql`.)
+
+**Pela variável.** Se preferir a conexão direta ao Postgres: no Supabase, clique em **Connect** (botão no
+topo) e escolha **Transaction pooler**. Copie a URI, que se parece com
+`postgresql://postgres.abcdefgh:[YOUR-PASSWORD]@aws-0-sa-east-1.pooler.supabase.com:6543/postgres`, e troque
+`[YOUR-PASSWORD]` (com os colchetes) pela senha do banco. No Netlify: **Site configuration > Environment
+variables > Add a variable**, chave `DATABASE_URL`, valor = a URI, escopo **All scopes**. Depois **Deploys >
+Trigger deploy > Deploy site**. Nesse modo o painel cria as tabelas sozinho.
+
+Toda mudança em variável só vale depois de um deploy novo. Se a conexão não der certo, a tela do painel diz o
+que está errado (chave pública em vez da de serviço, senha recusada, conexão direta em vez do pooler,
+`[YOUR-PASSWORD]` esquecido, projeto pausado…). Colchetes, espaços e aspas que sobrarem na `DATABASE_URL` são
+ignorados, e símbolos na senha são aceitos.
 
 Opcional: a variável `APP_SECRET` (64 caracteres aleatórios) guarda fora do banco o segredo que protege os
 tokens do Meta. Sem ela, o painel gera um e guarda na tabela `settings`.
@@ -166,8 +178,10 @@ npm test                                      # testes (SQLite)
 TEST_DATABASE_URL=postgres://... npm test     # testes também contra Postgres
 ```
 
-Variáveis: `DATABASE_URL` (liga o modo online), `APP_SECRET` (opcional), `PORT`, `TRACK_DATA_DIR`
-(pasta dos dados no modo local), `META_API_VERSION` (padrão v25.0).
+Variáveis: `DATABASE_URL` (Postgres direto) ou `SUPABASE_DATABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (API do
+Supabase) ligam o modo online; `APP_SECRET` (opcional), `PORT`, `TRACK_DATA_DIR` (pasta dos dados no modo
+local), `META_API_VERSION` (padrão v25.0). Testes contra a API: `TEST_SUPABASE_URL`, `TEST_SUPABASE_KEY` e
+`TEST_SUPABASE_PG_URL` (um PostgREST e o Postgres por baixo dele).
 
 ```
 app/(painel)/            telas: leads, importar, detalhe do lead, eventos, clientes, configurações
@@ -176,6 +190,9 @@ app/actions.ts           salvar, importar, conferir, enviar, reenviar, puxar dad
 lib/store.ts             fachada do banco: escolhe SQLite ou Postgres pelo ambiente
 lib/store-sqlite.ts      modo local (SQLite embutido no Node)
 lib/store-pg.ts          modo online (Postgres via DATABASE_URL)
+lib/store-rest.ts        modo online pela API do Supabase (extensão do Netlify)
+lib/schema-sql.ts        tabelas (o Postgres direto roda sozinho; na API a pessoa cola no SQL Editor)
+lib/db-url.ts            limpeza da DATABASE_URL e tradução dos erros de conexão
 lib/config.ts            segredo e senha (config.json local ou tabela settings)
 lib/meta.ts              montagem do evento, envio, consulta do anúncio
 lib/csv.ts               leitura do CSV e reconhecimento das colunas

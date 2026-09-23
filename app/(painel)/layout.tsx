@@ -1,14 +1,14 @@
 import Link from "next/link";
 import { logoutAction } from "@/app/actions";
 import { requireAuth } from "@/lib/auth";
-import { storageProblem } from "@/lib/store";
+import { setupProblem } from "@/lib/store";
 import { StorageProblem } from "@/app/StorageProblem";
 
 export const dynamic = "force-dynamic";
 
 export default async function PainelLayout({ children }: { children: React.ReactNode }) {
-  const problem = storageProblem();
-  if (problem) return <StorageProblem message={problem} />;
+  const problem = await setupProblem();
+  if (problem) return <StorageProblem message={problem.message} database={problem.database} sql={problem.sql} />;
   await requireAuth();
   return (
     <>
