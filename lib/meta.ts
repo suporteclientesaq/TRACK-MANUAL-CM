@@ -237,6 +237,27 @@ function describeMetaError(json: unknown): string | null {
     );
   }
 
+  const codeNum = typeof err.code === "number" ? err.code : Number(err.code);
+  const errMsg = typeof err.message === "string" ? err.message : "";
+
+  if (subcode === 33 || (codeNum === 100 && errMsg.includes("Unsupported get request"))) {
+    return (
+      "Objeto não encontrado ou falta de permissão no Meta (código 100/33): " +
+      "O Meta recusou o acesso a este anúncio/objeto com o token cadastrado. " +
+      "Como resolver: " +
+      "1) No Gerenciador de Negócios (business.facebook.com), vá em 'Configurações do Negócio' > 'Usuários do Sistema', selecione o usuário do token e em 'Ativos Conectados' adicione a Conta de Anúncios com permissão de leitura ou controle total; " +
+      "2) Ao gerar o Token de Leitura, marque obrigatoriamente a permissão 'ads_read' (o token gerado no Gerenciador de Eventos só serve para o Pixel/CAPI, não tem permissão para ler anúncios); " +
+      "3) Verifique se o ID de origem do lead pertence à mesma Conta de Anúncios configurada neste cliente."
+    );
+  }
+
+  if (codeNum === 190) {
+    return (
+      "Token de acesso do Meta expirado ou revogado (código 190): " +
+      "Gere um novo token no Gerenciador de Negócios (Usuários do Sistema) e atualize no cadastro do cliente."
+    );
+  }
+
   const parts = [err.error_user_title, err.error_user_msg, err.message]
     .filter((p): p is string => typeof p === "string" && p.length > 0);
   const unique = [...new Set(parts)];
@@ -362,72 +383,140 @@ export async function fetchAd(opts: {
   const doFetch = opts.fetchImpl ?? fetch;
   const token = encodeURIComponent(opts.accessToken);
   const base = `${GRAPH}/${opts.apiVersion}/${opts.adId}`;
-  const fields =
-    "name,effective_status,adset{id,name},campaign{id,name},creative{title,body,thumbnail_url,image_url,object_story_spec,effective_object_story_id}";
 
-  try {
-    const adRes = await doFetch(`${base}?fields=${encodeURIComponent(fields)}&access_token=${token}`, {
-      cache: "no-store",
-    });
-    const adJson = (await adRes.json()) as Record<string, unknown>;
-    if (!adRes.ok || adJson.error) {
-      return { ok: false, error: describeMetaError(adJson) ?? `O Meta respondeu ${adRes.status}.` };
-    }
+  // Tentativas com conjuntos de campos progressivamente mais seguros:
+  // 1. Completo: criativo com spec da página (pode falhar em Reels/Instagram/Advantage+/Dinâmico)
+  // 2. Seguro: criativo padrão (sem object_story_spec)
+  // 3. Básico: apenas anúncio, conjunto e campanha (sem criativo)
+  // 4. Fallback caso o ID de origem seja de um Conjunto de Anúncios (adset)
+  // 5. Fallback caso o ID de origem seja de uma Campanha (campaign)
+  const attempts: { fields: string; kind: "ad_full" | "ad_safe" | "ad_basic" | "adset" | "campaign" }[] = [
+    {
+      fields:
+        "name,effective_status,adset{id,name},campaign{id,name},creative{title,body,thumbnail_url,image_url,object_story_spec,effective_object_story_id}",
+      kind: "ad_full",
+    },
+    {
+      fields: "name,effective_status,adset{id,name},campaign{id,name},creative{title,body,thumbnail_url,image_url}",
+      kind: "ad_safe",
+    },
+    {
+      fields: "name,effective_status,adset{id,name},campaign{id,name}",
+      kind: "ad_basic",
+    },
+    {
+      fields: "name,effective_status,campaign{id,name}",
+      kind: "adset",
+    },
+    {
+      fields: "name,effective_status",
+      kind: "campaign",
+    },
+  ];
 
-    // Os números de desempenho são um extra: se falharem, os nomes ainda voltam.
-    let insights: Record<string, unknown> | null = null;
+  let adJson: Record<string, unknown> | null = null;
+  let lastError: string | null = null;
+  let kindUsed: "ad_full" | "ad_safe" | "ad_basic" | "adset" | "campaign" = "ad_full";
+
+  for (const att of attempts) {
     try {
-      const insRes = await doFetch(
-        `${base}/insights?fields=spend,impressions,clicks,actions&date_preset=maximum&access_token=${token}`,
-        { cache: "no-store" }
-      );
-      const insJson = (await insRes.json()) as { data?: Record<string, unknown>[] };
-      insights = insRes.ok && Array.isArray(insJson.data) ? insJson.data[0] ?? null : null;
-    } catch {
-      insights = null;
+      const adRes = await doFetch(`${base}?fields=${encodeURIComponent(att.fields)}&access_token=${token}`, {
+        cache: "no-store",
+      });
+      const json = (await adRes.json()) as Record<string, unknown>;
+      if (adRes.ok && !json.error) {
+        adJson = json;
+        kindUsed = att.kind;
+        break;
+      }
+      lastError = describeMetaError(json) ?? `O Meta respondeu ${adRes.status}.`;
+      const errObj = json.error as { code?: number } | undefined;
+      // Se for erro de autenticação/token inválido ou expirado, não adianta tentar outros campos
+      if (errObj && (errObj.code === 190 || errObj.code === 102)) {
+        break;
+      }
+    } catch (e) {
+      return {
+        ok: false,
+        error: `Não foi possível falar com o Meta: ${e instanceof Error ? e.message : String(e)}`,
+      };
     }
-
-    const adset = (adJson.adset || {}) as Record<string, unknown>;
-    const campaign = (adJson.campaign || {}) as Record<string, unknown>;
-    const creative = (adJson.creative || {}) as Record<string, unknown>;
-    const storySpec = (creative.object_story_spec || {}) as Record<string, unknown>;
-    const storyId = typeof creative.effective_object_story_id === "string" ? creative.effective_object_story_id : "";
-    const adPageId =
-      (typeof storySpec.page_id === "string" && storySpec.page_id) ||
-      (typeof storySpec.page_id === "number" ? String(storySpec.page_id) : null) ||
-      (storyId && storyId.includes("_") ? storyId.split("_")[0] : null);
-
-    const actions = Array.isArray(insights?.actions)
-      ? (insights!.actions as { action_type?: string; value?: string }[])
-      : [];
-    const conv = actions.find((a) =>
-      (a.action_type || "").includes("messaging_conversation_started")
-    );
-
-    return {
-      ok: true,
-      ad: {
-        ad_name: str(adJson.name),
-        ad_status: str(adJson.effective_status),
-        adset_id: str(adset.id),
-        adset_name: str(adset.name),
-        campaign_id: str(campaign.id),
-        campaign_name: str(campaign.name),
-        creative_title: str(creative.title),
-        creative_body: str(creative.body),
-        thumbnail_url: str(creative.image_url) ?? str(creative.thumbnail_url),
-        spend: num(insights?.spend),
-        impressions: num(insights?.impressions),
-        clicks: num(insights?.clicks),
-        conversations: conv ? num(conv.value) : null,
-        page_id: str(adPageId),
-        raw: { ad: adJson, insights },
-      },
-    };
-  } catch (e) {
-    return {
-      ok: false,
-      error: `Não foi possível falar com o Meta: ${e instanceof Error ? e.message : String(e)}`,
-    };
   }
+
+  if (!adJson) {
+    return { ok: false, error: lastError || "Não foi possível carregar os dados no Meta." };
+  }
+
+  // Os números de desempenho são um extra: se falharem, os nomes ainda voltam.
+  let insights: Record<string, unknown> | null = null;
+  try {
+    const insRes = await doFetch(
+      `${base}/insights?fields=spend,impressions,clicks,actions&date_preset=maximum&access_token=${token}`,
+      { cache: "no-store" }
+    );
+    const insJson = (await insRes.json()) as { data?: Record<string, unknown>[] };
+    insights = insRes.ok && Array.isArray(insJson.data) ? insJson.data[0] ?? null : null;
+  } catch {
+    insights = null;
+  }
+
+  const adset = (adJson.adset || {}) as Record<string, unknown>;
+  const campaign = (adJson.campaign || {}) as Record<string, unknown>;
+  const creative = (adJson.creative || {}) as Record<string, unknown>;
+  const storySpec = (creative.object_story_spec || {}) as Record<string, unknown>;
+  const storyId = typeof creative.effective_object_story_id === "string" ? creative.effective_object_story_id : "";
+  const adPageId =
+    (typeof storySpec.page_id === "string" && storySpec.page_id) ||
+    (typeof storySpec.page_id === "number" ? String(storySpec.page_id) : null) ||
+    (storyId && storyId.includes("_") ? storyId.split("_")[0] : null);
+
+  const actions = Array.isArray(insights?.actions)
+    ? (insights!.actions as { action_type?: string; value?: string }[])
+    : [];
+  const conv = actions.find((a) =>
+    (a.action_type || "").includes("messaging_conversation_started")
+  );
+
+  let adName: string | null = null;
+  let adsetName: string | null = null;
+  let campaignName: string | null = null;
+  let adsetId: string | null = null;
+  let campaignId: string | null = null;
+
+  if (kindUsed === "campaign") {
+    campaignName = str(adJson.name);
+    campaignId = opts.adId;
+  } else if (kindUsed === "adset") {
+    adsetName = str(adJson.name);
+    adsetId = opts.adId;
+    campaignName = str(campaign.name);
+    campaignId = str(campaign.id);
+  } else {
+    adName = str(adJson.name);
+    adsetName = str(adset.name);
+    adsetId = str(adset.id);
+    campaignName = str(campaign.name);
+    campaignId = str(campaign.id);
+  }
+
+  return {
+    ok: true,
+    ad: {
+      ad_name: adName,
+      ad_status: str(adJson.effective_status),
+      adset_id: adsetId,
+      adset_name: adsetName,
+      campaign_id: campaignId,
+      campaign_name: campaignName,
+      creative_title: str(creative.title),
+      creative_body: str(creative.body),
+      thumbnail_url: str(creative.image_url) ?? str(creative.thumbnail_url),
+      spend: num(insights?.spend),
+      impressions: num(insights?.impressions),
+      clicks: num(insights?.clicks),
+      conversations: conv ? num(conv.value) : null,
+      page_id: str(adPageId),
+      raw: { ad: adJson, insights, kind: kindUsed },
+    },
+  };
 }
