@@ -87,7 +87,6 @@ export interface AdInfo {
   impressions: number | null;
   clicks: number | null;
   conversations: number | null;
-  page_id?: string | null;
   raw: unknown;
   fetched_at: string;
 }

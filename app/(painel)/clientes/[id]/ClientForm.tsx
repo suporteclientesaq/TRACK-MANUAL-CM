@@ -44,24 +44,19 @@ export function ClientForm({ client }: { client?: Client }) {
         <div>
           <label htmlFor="page_id">ID da Página do Facebook</label>
           <input id="page_id" name="page_id" inputMode="numeric" defaultValue={client?.page_id || ""} />
-          <div className="hint">
-            A Página que veicula o anúncio. No Facebook: Página &gt; Sobre &gt; Transparência da Página &gt; ID da Página (Não use ID do Gerenciador de Negócios nem da Conta de Anúncios).
-          </div>
+          <div className="hint">A Página ligada ao número de WhatsApp dos anúncios.</div>
         </div>
         <div>
-          <label htmlFor="waba_id">ID da Conta do WhatsApp Business (WABA)</label>
+          <label htmlFor="waba_id">ID da Conta do WhatsApp Business</label>
           <input id="waba_id" name="waba_id" inputMode="numeric" defaultValue={client?.waba_id || ""} />
-          <div className="hint">Necessário apenas se os anúncios direcionam para a API Oficial do WhatsApp (Cloud API / provedores).</div>
+          <div className="hint">Só para quem usa a API Oficial do WhatsApp. Pode ficar em branco.</div>
         </div>
         <div>
           <label htmlFor="id_mode">Identificar o WhatsApp Por</label>
           <select id="id_mode" name="id_mode" defaultValue={client?.id_mode || "page"}>
-            <option value="page">ID da Página (Padrão para anúncios CTWA normais)</option>
-            <option value="waba">ID da Conta do WhatsApp Business (API Oficial / WABA)</option>
+            <option value="page">ID da Página (API não oficial, uazapi)</option>
+            <option value="waba">ID da Conta do WhatsApp Business (API Oficial)</option>
           </select>
-          <div className="hint">
-            Se ocorrer o erro 2804072 (Página e clique não correspondentes), confira se o anúncio pertence a esta Página ou se o número usa WABA.
-          </div>
         </div>
         <div>
           <label htmlFor="test_event_code">Código de Eventos de Teste</label>
