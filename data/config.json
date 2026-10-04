@@ -1,4 +1,6 @@
 {
+  "createdAt": "2026-10-04T16:24:54.954Z",
   "appSecret": "e4ea807a6d581e36a11a3f5de9ae97060401442b2c1ff0758bbd7167b173f4df",
-  "createdAt": "2026-10-04T16:24:54.954Z"
+  "passwordSalt": "431962f8d3502d11277444ad4251f7db",
+  "passwordHash": "58427302cf1ff8acbadd43448ecbbe825d7b436875eb0c0c3c4b4ed9ffb3cd895ef62d9508b6e1a6acd0adec3098de771be22904db64b7e93b4d41d53860db0c"
 }
