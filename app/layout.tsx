@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { cookies } from "next/headers";
 import { Cabin, Inter, Instrument_Serif, Manrope } from "next/font/google";
 import { THEME_COOKIE, htmlAttrs, parsePrefs } from "@/lib/theme";
+import { GlobalProgressBar } from "@/components/GlobalProgressBar";
 import "./globals.css";
 
 // Fontes do design: Manrope (interface e navegação), Cabin (botões e etiquetas),
@@ -34,7 +35,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       className={`${manrope.variable} ${cabin.variable} ${instrumentSerif.variable} ${inter.variable}`}
       {...htmlAttrs(prefs)}
     >
-      <body>{children}</body>
+      <body>
+        <GlobalProgressBar />
+        {children}
+      </body>
     </html>
   );
 }
