@@ -23,6 +23,8 @@ import {
   insertEvent,
   insertLead,
   isUniqueViolation,
+  listClients,
+  listLeads,
   updateClient,
   updateLead,
   upsertAd,
@@ -311,6 +313,7 @@ async function prepare(input: EventFormInput, eventId: string) {
     value,
     currency: input.currency || client.default_currency,
     contentName: input.contentName,
+    allowFallbackWithoutPageId: true,
   });
 
   const alreadySent = await countSent(lead.id, String(built.event.event_name));
@@ -359,9 +362,15 @@ async function sendAndRecord(input: EventFormInput, eventId: string): Promise<Ev
     accessToken: token,
     event: p.built.event,
     testEventCode: p.client.test_event_code,
+    autoFallback: true,
   });
 
   const custom = (p.built.event.custom_data || {}) as Record<string, unknown>;
+  const recordedActionSource = result.recovered ? "chat" : p.built.actionSource;
+  const recordedError = result.recovered
+    ? "Recuperado automaticamente via correspondência de telefone após divergência no ctwa_clid/page_id"
+    : result.errorMessage;
+
   await insertEvent({
     client_id: p.client.id,
     lead_id: p.lead.id,
@@ -371,13 +380,13 @@ async function sendAndRecord(input: EventFormInput, eventId: string): Promise<Ev
     value: p.value,
     currency: (custom.currency as string) ?? null,
     content_name: input.contentName.trim() || null,
-    action_source: p.built.actionSource,
+    action_source: recordedActionSource,
     is_test: base.isTest,
     status: result.ok ? "enviado" : "erro",
     http_status: result.httpStatus,
     events_received: result.eventsReceived,
     fbtrace_id: result.fbtraceId,
-    error_message: result.errorMessage,
+    error_message: recordedError,
     payload: result.body,
     response: result.response,
   });
@@ -391,9 +400,11 @@ async function sendAndRecord(input: EventFormInput, eventId: string): Promise<Ev
     ok: result.ok,
     sent: result.ok,
     message: result.ok
-      ? base.isTest
-        ? "Evento de teste recebido pelo Meta. Confira na aba Eventos de Teste."
-        : "Evento recebido pelo Meta."
+      ? result.recovered
+        ? "Evento recebido pelo Meta (recuperado com sucesso via telefone)."
+        : base.isTest
+          ? "Evento de teste recebido pelo Meta. Confira na aba Eventos de Teste."
+          : "Evento recebido pelo Meta."
       : result.errorMessage || "O Meta não confirmou o recebimento.",
   };
 }
@@ -438,13 +449,15 @@ export async function refreshAdAction(_prev: FormState, fd: FormData): Promise<F
   const client = lead ? await getClient(lead.client_id) : null;
   if (!lead || !client) return { error: "Lead não encontrado." };
   if (!lead.source_id) return { error: "Este lead não tem ID de origem (ID do anúncio)." };
-  if (!client.marketing_token_enc) {
-    return { error: "Cadastre no cliente o token de leitura dos anúncios (permissão ads_read)." };
+
+  const tokenEnc = client.marketing_token_enc || client.capi_token_enc;
+  if (!tokenEnc) {
+    return { error: "Cadastre no cliente o Token da API de Conversões ou o Token de Leitura." };
   }
 
   let token: string;
   try {
-    token = decrypt(client.marketing_token_enc, await appSecret());
+    token = decrypt(tokenEnc, await appSecret());
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) };
   }
@@ -456,4 +469,68 @@ export async function refreshAdAction(_prev: FormState, fd: FormData): Promise<F
   revalidatePath(`/leads/${leadId}`);
   revalidatePath("/");
   return { error: null };
+}
+
+/**
+ * Sincroniza dados e gastos de todos os anúncios associados a leads no Meta,
+ * atualizando o cache para o Dashboard de ROI/ROAS em tempo real.
+ */
+export async function syncDashboardMetaAction(clientId?: string | null): Promise<{
+  ok: boolean;
+  syncedCount: number;
+  message: string;
+}> {
+  await requireAuth();
+  const clients = await listClients();
+  const targetClients = clientId ? clients.filter((c) => c.id === clientId) : clients;
+
+  if (targetClients.length === 0) {
+    return { ok: false, syncedCount: 0, message: "Nenhum cliente cadastrado." };
+  }
+
+  let synced = 0;
+  for (const client of targetClients) {
+    const tokenEnc = client.marketing_token_enc || client.capi_token_enc;
+    if (!tokenEnc) continue;
+
+    let token: string;
+    try {
+      token = decrypt(tokenEnc, await appSecret());
+    } catch {
+      continue;
+    }
+
+    const leads = await listLeads({ clientId: client.id, filter: "todos", offset: 0, limit: 5000 });
+    const uniqueSourceIds = [...new Set(leads.map((l) => l.source_id).filter((s): s is string => Boolean(s)))];
+
+    for (const adId of uniqueSourceIds) {
+      try {
+        const res = await fetchAd({
+          apiVersion: metaApiVersion(),
+          adId,
+          accessToken: token,
+        });
+        if (res.ok) {
+          await upsertAd({
+            client_id: client.id,
+            ad_id: adId,
+            ...res.ad,
+          });
+          synced++;
+        }
+      } catch {
+        // Segue para os próximos anúncios
+      }
+    }
+  }
+
+  revalidatePath("/dashboard");
+  revalidatePath("/");
+  return {
+    ok: true,
+    syncedCount: synced,
+    message: synced > 0
+      ? `${synced} anúncio(s) sincronizado(s) com o Meta com sucesso!`
+      : "Nenhum anúncio precisou de atualização.",
+  };
 }

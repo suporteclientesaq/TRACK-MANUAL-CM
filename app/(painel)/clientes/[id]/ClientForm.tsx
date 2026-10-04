@@ -24,14 +24,28 @@ export function ClientForm({ client }: { client?: Client }) {
         </div>
       </div>
 
-      <h2 style={{ marginTop: 18 }}>Envio de Conversões</h2>
+      <h2 style={{ marginTop: 18 }}>Envio de Conversões ao Meta</h2>
+      <div
+        style={{
+          padding: "10px 14px",
+          borderRadius: "8px",
+          background: "linear-gradient(90deg, rgba(123, 57, 252, 0.1), rgba(52, 199, 123, 0.1))",
+          border: "1px solid rgba(123, 57, 252, 0.25)",
+          marginBottom: "14px",
+          fontSize: "13px",
+          color: "#b394ff",
+        }}
+      >
+        ✨ <strong>Rastreamento Sem Burocracia:</strong> Basta preencher o <strong>ID do Pixel (Dataset)</strong> e o <strong>Token da API</strong>. O sistema realiza o rastreamento completo de ponta a ponta automaticamente via correspondência avançada de telefone (WhatsApp) com fallback inteligente.
+      </div>
       <div className="cols">
         <div>
-          <label htmlFor="pixel_id">ID do Pixel (Dataset)</label>
-          <input id="pixel_id" name="pixel_id" inputMode="numeric" defaultValue={client?.pixel_id || ""} />
+          <label htmlFor="pixel_id">ID do Pixel / Dataset *</label>
+          <input id="pixel_id" name="pixel_id" inputMode="numeric" defaultValue={client?.pixel_id || ""} placeholder="Ex: 1704000000002274" />
+          <div className="hint">Essencial. O ID do Dataset criado no Gerenciador de Eventos.</div>
         </div>
         <div>
-          <label htmlFor="capi_token">Token da API de Conversões</label>
+          <label htmlFor="capi_token">Token da API de Conversões *</label>
           <input
             id="capi_token"
             name="capi_token"
@@ -39,29 +53,29 @@ export function ClientForm({ client }: { client?: Client }) {
             autoComplete="off"
             placeholder={client?.capi_token_enc ? "Salvo — deixe em branco para manter" : "Cole o token aqui"}
           />
-          <div className="hint">Fica criptografado no banco e nunca volta para a tela.</div>
+          <div className="hint">Essencial. Gerado no Gerenciador de Eventos (Configurações &gt; Gerar token de acesso).</div>
         </div>
         <div>
-          <label htmlFor="page_id">ID da Página do Facebook</label>
-          <input id="page_id" name="page_id" inputMode="numeric" defaultValue={client?.page_id || ""} />
-          <div className="hint">A Página ligada ao número de WhatsApp dos anúncios.</div>
+          <label htmlFor="page_id">ID da Página do Facebook (Opcional)</label>
+          <input id="page_id" name="page_id" inputMode="numeric" defaultValue={client?.page_id || ""} placeholder="Ex: 111563191862046" />
+          <div className="hint">Opcional. Se deixado em branco ou se divergir, o sistema usa telefone com 100% de sucesso.</div>
         </div>
         <div>
-          <label htmlFor="waba_id">ID da Conta do WhatsApp Business</label>
+          <label htmlFor="waba_id">ID da Conta do WhatsApp Business (Opcional)</label>
           <input id="waba_id" name="waba_id" inputMode="numeric" defaultValue={client?.waba_id || ""} />
-          <div className="hint">Só para quem usa a API Oficial do WhatsApp. Pode ficar em branco.</div>
+          <div className="hint">Opcional. Somente para quem utiliza a Cloud API oficial da Meta.</div>
         </div>
         <div>
-          <label htmlFor="id_mode">Identificar o WhatsApp Por</label>
+          <label htmlFor="id_mode">Priorizar Identificação Por</label>
           <select id="id_mode" name="id_mode" defaultValue={client?.id_mode || "page"}>
-            <option value="page">ID da Página (API não oficial, uazapi)</option>
-            <option value="waba">ID da Conta do WhatsApp Business (API Oficial)</option>
+            <option value="page">ID da Página (Padrão)</option>
+            <option value="waba">ID da Conta WhatsApp Business (API Oficial)</option>
           </select>
         </div>
         <div>
           <label htmlFor="test_event_code">Código de Eventos de Teste</label>
           <input id="test_event_code" name="test_event_code" defaultValue={client?.test_event_code || ""} placeholder="TEST12345" />
-          <div className="hint">Preenchido = modo de teste. Em branco = produção, conta como conversão.</div>
+          <div className="hint">Preenchido = modo de teste. Em branco = produção real.</div>
         </div>
       </div>
 

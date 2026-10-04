@@ -2,24 +2,23 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import {
   ArrowUpRight,
   BarChart3,
   Calendar,
   CheckCircle2,
   DollarSign,
+  GitMerge,
   Layers,
   MessageSquare,
-  Percent,
   RefreshCw,
   Search,
-  ShoppingCart,
   Sparkles,
   Target,
   TrendingUp,
   Zap,
 } from "lucide-react";
+import { syncDashboardMetaAction } from "@/app/actions";
 import { ActionProgressModal } from "@/components/ActionProgressModal";
 import { Button } from "@/components/ui/button";
 import type { DashboardData } from "@/lib/dashboard";
@@ -30,32 +29,52 @@ interface DashboardClientProps {
 }
 
 export function DashboardClient({ data }: DashboardClientProps) {
-  const router = useRouter();
   const [activeTab, setActiveTab] = useState<"campanhas" | "conjuntos" | "anuncios" | "funil">("campanhas");
   const [searchQuery, setSearchQuery] = useState("");
   const [isSyncing, setIsSyncing] = useState(false);
   const [hoveredPoint, setHoveredPoint] = useState<number | null>(null);
+
+  // Filtro de data customizada
+  const [customStart, setCustomStart] = useState("");
+  const [customEnd, setCustomEnd] = useState("");
 
   const { kpis, chart, campaigns, adsets, ads, funnel, currency } = data;
 
   const handlePeriodChange = (p: string) => {
     const params = new URLSearchParams(window.location.search);
     params.set("periodo", p);
-    router.push(`/dashboard?${params.toString()}`);
+    window.location.href = `/dashboard?${params.toString()}`;
   };
 
   const handleClientChange = (cId: string) => {
     const params = new URLSearchParams(window.location.search);
     if (cId) params.set("cliente", cId);
     else params.delete("cliente");
-    router.push(`/dashboard?${params.toString()}`);
+    window.location.href = `/dashboard?${params.toString()}`;
+  };
+
+  const handleCustomDateSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!customStart || !customEnd) return;
+    const params = new URLSearchParams(window.location.search);
+    params.set("periodo", `${customStart}_${customEnd}`);
+    window.location.href = `/dashboard?${params.toString()}`;
+  };
+
+  const handleStartSync = async () => {
+    setIsSyncing(true);
+    try {
+      await syncDashboardMetaAction(data.filterClient);
+    } catch (e) {
+      console.error("Erro na sincronização:", e);
+    }
   };
 
   const syncSteps = [
     { label: "Conectando à API do Meta…", threshold: 25 },
-    { label: "Buscando métricas da Conta de Anúncios…", threshold: 55 },
-    { label: "Cruzando vendas e cliques (ctwa_clid)…", threshold: 85 },
-    { label: "Atualizando métricas de ROI e funil…", threshold: 100 },
+    { label: "Buscando métricas e gastos da Conta de Anúncios…", threshold: 55 },
+    { label: "Cruzando criativos, cliques e conversões…", threshold: 85 },
+    { label: "Atualizando dados reais de ROI e ROAS…", threshold: 100 },
   ];
 
   // Cálculo de escala do gráfico
@@ -83,7 +102,7 @@ export function DashboardClient({ data }: DashboardClientProps) {
         steps={syncSteps}
         onClose={() => {
           setIsSyncing(false);
-          router.refresh();
+          window.location.reload();
         }}
       />
 
@@ -150,7 +169,7 @@ export function DashboardClient({ data }: DashboardClientProps) {
             </select>
           )}
 
-          {/* Filtros Rápidos de Período */}
+          {/* Filtros Rápidos de Período com Links Diretos */}
           <div
             style={{
               display: "flex",
@@ -171,32 +190,82 @@ export function DashboardClient({ data }: DashboardClientProps) {
               { id: "todos", label: "Tudo" },
             ].map((p) => {
               const active = data.filterPeriod === p.id;
+              const targetUrl = `/dashboard?periodo=${p.id}${data.filterClient ? `&cliente=${data.filterClient}` : ""}`;
               return (
-                <button
+                <Link
                   key={p.id}
-                  onClick={() => handlePeriodChange(p.id)}
+                  href={targetUrl}
                   style={{
                     background: active ? "var(--brand)" : "transparent",
                     color: active ? "#ffffff" : "var(--text-muted)",
-                    border: "none",
                     borderRadius: "6px",
                     padding: "5px 11px",
                     fontSize: "12px",
                     fontWeight: active ? 700 : 500,
-                    cursor: "pointer",
+                    textDecoration: "none",
+                    display: "inline-block",
                     transition: "all 150ms ease",
                   }}
                 >
                   {p.label}
-                </button>
+                </Link>
               );
             })}
           </div>
 
+          {/* Seletor Customizado de Data (De / Até) */}
+          <form
+            onSubmit={handleCustomDateSubmit}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              background: "var(--surface)",
+              borderRadius: "8px",
+              border: "1px solid var(--border)",
+              padding: "3px 8px",
+            }}
+          >
+            <Calendar size={13} style={{ color: "#9a92ad" }} />
+            <input
+              type="date"
+              value={customStart}
+              onChange={(e) => setCustomStart(e.target.value)}
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "var(--text)",
+                fontSize: "11px",
+                padding: "2px",
+              }}
+            />
+            <span style={{ color: "#9a92ad", fontSize: "11px" }}>até</span>
+            <input
+              type="date"
+              value={customEnd}
+              onChange={(e) => setCustomEnd(e.target.value)}
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "var(--text)",
+                fontSize: "11px",
+                padding: "2px",
+              }}
+            />
+            <Button
+              size="sm"
+              type="submit"
+              variant="outline"
+              style={{ padding: "2px 8px", height: "24px", fontSize: "11px" }}
+            >
+              OK
+            </Button>
+          </form>
+
           {/* Botão de Sincronização com Barra de Progresso 1-100% */}
           <Button
             size="sm"
-            onClick={() => setIsSyncing(true)}
+            onClick={handleStartSync}
             style={{
               background: "linear-gradient(90deg, #7b39fc 0%, #6825ee 100%)",
               color: "#fff",
@@ -209,6 +278,28 @@ export function DashboardClient({ data }: DashboardClientProps) {
             Sincronizar com Meta
           </Button>
         </div>
+      </div>
+
+      {/* Banner de Atribuição Last-Click */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "10px",
+          padding: "10px 16px",
+          borderRadius: "10px",
+          background: "linear-gradient(90deg, rgba(123, 57, 252, 0.1), rgba(52, 199, 123, 0.08))",
+          border: "1px solid rgba(123, 57, 252, 0.25)",
+          fontSize: "12px",
+          color: "#b394ff",
+        }}
+      >
+        <GitMerge size={15} style={{ flexShrink: 0 }} />
+        <span>
+          <strong style={{ color: "#ebe8f2" }}>Atribuição Last-Click ativa</strong>
+          {" — "}
+          {data.attributionNote}
+        </span>
       </div>
 
       {/* Grid Principal de KPIs (Cards Estilo UTMfy) */}
@@ -288,7 +379,7 @@ export function DashboardClient({ data }: DashboardClientProps) {
             {formatMoney(kpis.spend, currency)}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "8px", fontSize: "12px", color: "#9a92ad" }}>
-            <span>Investimento em tráfego</span>
+            <span>{kpis.spend > 0 ? "Investimento em tráfego" : "Clique em 'Sincronizar com Meta' para puxar gastos"}</span>
           </div>
         </div>
 
@@ -323,28 +414,32 @@ export function DashboardClient({ data }: DashboardClientProps) {
             style={{
               fontSize: "24px",
               fontWeight: 800,
-              color: kpis.roas >= 2 ? "#34c77b" : kpis.roas >= 1 ? "#e3a72f" : "#ef5a5a",
+              color: kpis.spend > 0 ? (kpis.roas >= 2 ? "#34c77b" : kpis.roas >= 1 ? "#e3a72f" : "#ef5a5a") : "#b394ff",
               display: "flex",
               alignItems: "baseline",
               gap: "6px",
             }}
           >
-            {kpis.roas.toFixed(2)}x
-            <span
-              style={{
-                fontSize: "11px",
-                padding: "2px 7px",
-                borderRadius: "999px",
-                background: kpis.roas >= 2 ? "rgba(52, 199, 123, 0.2)" : "rgba(227, 167, 47, 0.2)",
-                color: kpis.roas >= 2 ? "#34c77b" : "#e3a72f",
-                fontWeight: 700,
-              }}
-            >
-              {kpis.roas >= 2 ? "ESCALA ALTA" : "EQUILÍBRIO"}
-            </span>
+            {kpis.spend > 0 ? `${kpis.roas.toFixed(2)}x` : kpis.revenue > 0 ? "100% orgânico" : "0.00x"}
+            {kpis.spend > 0 && (
+              <span
+                style={{
+                  fontSize: "11px",
+                  padding: "2px 7px",
+                  borderRadius: "999px",
+                  background: kpis.roas >= 2 ? "rgba(52, 199, 123, 0.2)" : "rgba(227, 167, 47, 0.2)",
+                  color: kpis.roas >= 2 ? "#34c77b" : "#e3a72f",
+                  fontWeight: 700,
+                }}
+              >
+                {kpis.roas >= 2 ? "ESCALA ALTA" : "EQUILÍBRIO"}
+              </span>
+            )}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "8px", fontSize: "12px", color: "#9a92ad" }}>
-            <span>ROI: {kpis.roiPercent > 0 ? `+${kpis.roiPercent}%` : `${kpis.roiPercent}%`}</span>
+            <span>
+              ROI: {kpis.spend > 0 ? (kpis.roiPercent > 0 ? `+${kpis.roiPercent}%` : `${kpis.roiPercent}%`) : "Sem gasto informado"}
+            </span>
           </div>
         </div>
 
@@ -622,18 +717,24 @@ export function DashboardClient({ data }: DashboardClientProps) {
                       </td>
                       <td className="mono">{formatMoney(camp.cpa, currency)}</td>
                       <td>
-                        <span
-                          style={{
-                            fontSize: "12px",
-                            fontWeight: 700,
-                            padding: "3px 8px",
-                            borderRadius: "6px",
-                            background: camp.roas >= 2 ? "rgba(52, 199, 123, 0.15)" : "rgba(227, 167, 47, 0.15)",
-                            color: camp.roas >= 2 ? "#34c77b" : "#e3a72f",
-                          }}
-                        >
-                          {camp.roas.toFixed(2)}x
-                        </span>
+                        {camp.spend > 0 ? (
+                          <span
+                            style={{
+                              fontSize: "12px",
+                              fontWeight: 700,
+                              padding: "3px 8px",
+                              borderRadius: "6px",
+                              background: camp.roas >= 2 ? "rgba(52, 199, 123, 0.15)" : "rgba(227, 167, 47, 0.15)",
+                              color: camp.roas >= 2 ? "#34c77b" : "#e3a72f",
+                            }}
+                          >
+                            {camp.roas.toFixed(2)}x
+                          </span>
+                        ) : (
+                          <span className="muted small" style={{ fontSize: "11px" }}>
+                            {camp.revenue > 0 ? "100% orgânico" : "0.00x"}
+                          </span>
+                        )}
                       </td>
                     </tr>
                   ))
@@ -677,18 +778,24 @@ export function DashboardClient({ data }: DashboardClientProps) {
                         {formatMoney(adset.revenue, currency)}
                       </td>
                       <td>
-                        <span
-                          style={{
-                            fontSize: "12px",
-                            fontWeight: 700,
-                            padding: "3px 8px",
-                            borderRadius: "6px",
-                            background: adset.roas >= 2 ? "rgba(52, 199, 123, 0.15)" : "rgba(227, 167, 47, 0.15)",
-                            color: adset.roas >= 2 ? "#34c77b" : "#e3a72f",
-                          }}
-                        >
-                          {adset.roas.toFixed(2)}x
-                        </span>
+                        {adset.spend > 0 ? (
+                          <span
+                            style={{
+                              fontSize: "12px",
+                              fontWeight: 700,
+                              padding: "3px 8px",
+                              borderRadius: "6px",
+                              background: adset.roas >= 2 ? "rgba(52, 199, 123, 0.15)" : "rgba(227, 167, 47, 0.15)",
+                              color: adset.roas >= 2 ? "#34c77b" : "#e3a72f",
+                            }}
+                          >
+                            {adset.roas.toFixed(2)}x
+                          </span>
+                        ) : (
+                          <span className="muted small" style={{ fontSize: "11px" }}>
+                            {adset.revenue > 0 ? "100% orgânico" : "0.00x"}
+                          </span>
+                        )}
                       </td>
                     </tr>
                   ))
@@ -761,18 +868,24 @@ export function DashboardClient({ data }: DashboardClientProps) {
                         {formatMoney(ad.revenue, currency)}
                       </td>
                       <td>
-                        <span
-                          style={{
-                            fontSize: "12px",
-                            fontWeight: 700,
-                            padding: "3px 8px",
-                            borderRadius: "6px",
-                            background: ad.roas >= 2 ? "rgba(52, 199, 123, 0.15)" : "rgba(227, 167, 47, 0.15)",
-                            color: ad.roas >= 2 ? "#34c77b" : "#e3a72f",
-                          }}
-                        >
-                          {ad.roas.toFixed(2)}x
-                        </span>
+                        {ad.spend > 0 ? (
+                          <span
+                            style={{
+                              fontSize: "12px",
+                              fontWeight: 700,
+                              padding: "3px 8px",
+                              borderRadius: "6px",
+                              background: ad.roas >= 2 ? "rgba(52, 199, 123, 0.15)" : "rgba(227, 167, 47, 0.15)",
+                              color: ad.roas >= 2 ? "#34c77b" : "#e3a72f",
+                            }}
+                          >
+                            {ad.roas.toFixed(2)}x
+                          </span>
+                        ) : (
+                          <span className="muted small" style={{ fontSize: "11px" }}>
+                            {ad.revenue > 0 ? "100% orgânico" : "0.00x"}
+                          </span>
+                        )}
                       </td>
                     </tr>
                   ))
@@ -812,7 +925,7 @@ export function DashboardClient({ data }: DashboardClientProps) {
                         height: "100%",
                         width: `${Math.max(step.percent, 3)}%`,
                         background:
-                          idx === 3
+                          idx === 4
                             ? "linear-gradient(90deg, #34c77b, #00f2fe)"
                             : "linear-gradient(90deg, #7b39fc, #34c77b)",
                         borderRadius: "999px",

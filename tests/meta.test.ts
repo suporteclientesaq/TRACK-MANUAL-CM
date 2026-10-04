@@ -298,4 +298,105 @@ describe("fetchAd", () => {
       expect(res.ad.spend).toBeNull();
     }
   });
+
+  it("recupera dados usando fallback progressivo quando campos completos dão erro 100/33", async () => {
+    let callCount = 0;
+    const res = await fetchAd({
+      apiVersion: "v25.0",
+      adId: "120246958877430258",
+      accessToken: "t",
+      fetchImpl: async (url) => {
+        callCount++;
+        // Primeira tentativa (ad_full) falha com 100/33
+        if (url.includes("effective_status")) {
+          return new Response(
+            JSON.stringify({
+              error: { message: "Unsupported get request", code: 100, error_subcode: 33 },
+            }),
+            { status: 400 }
+          );
+        }
+        // Segunda tentativa (ad_safe) tem sucesso
+        if (url.includes("adset")) {
+          return new Response(
+            JSON.stringify({
+              name: "Anúncio Recuperado",
+              status: "ACTIVE",
+              adset: { id: "adset_1", name: "Conjunto 1" },
+              campaign: { id: "camp_1", name: "Campanha 1" },
+            })
+          );
+        }
+        return new Response(JSON.stringify({ name: "Fallback" }));
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.ad.ad_name).toBe("Anúncio Recuperado");
+      expect(res.ad.campaign_name).toBe("Campanha 1");
+    }
+  });
 });
+
+describe("recuperação automática de envio de evento (Smart CAPI Fallback)", () => {
+  const baseEvent = buildEvent(base()).event;
+
+  it("recupera automaticamente via telefone quando o Meta recusa o page_id (código 2804065)", async () => {
+    let attempt = 0;
+    const sentBodies: string[] = [];
+
+    const res = await sendEvent({
+      apiVersion: "v25.0",
+      pixelId: "1704000000002274",
+      accessToken: "TOKEN",
+      event: baseEvent,
+      fetchImpl: async (_url, init) => {
+        attempt++;
+        sentBodies.push(String(init?.body));
+
+        if (attempt === 1) {
+          // Meta rejeita a primeira tentativa por erro de página não associada ao dataset
+          return new Response(
+            JSON.stringify({
+              error: {
+                message: "A identificação da Página não corresponde a este conjunto de dados",
+                code: 100,
+                error_subcode: 2804065,
+              },
+            }),
+            { status: 400 }
+          );
+        }
+
+        // Segunda tentativa (fallback via telefone puro) é aceita pelo Meta
+        return new Response(JSON.stringify({ events_received: 1, fbtrace_id: "TraceRecuperado" }), { status: 200 });
+      },
+    });
+
+    expect(attempt).toBe(2);
+    expect(res.ok).toBe(true);
+    expect(res.recovered).toBe(true);
+    expect(res.eventsReceived).toBe(1);
+
+    // Na segunda tentativa os parâmetros conflitantes foram removidos
+    const secondPayload = JSON.parse(sentBodies[1]).data[0];
+    expect(secondPayload.action_source).toBe("chat");
+    expect(secondPayload.messaging_channel).toBeUndefined();
+    expect(secondPayload.user_data.ctwa_clid).toBeUndefined();
+    expect(secondPayload.user_data.page_id).toBeUndefined();
+    expect(secondPayload.user_data.ph).toBeDefined(); // Telefone mantido para atribuição
+  });
+
+  it("permite envio sem página quando allowFallbackWithoutPageId é true", () => {
+    const built = buildEvent(
+      base({
+        client: { page_id: null, waba_id: null, id_mode: "page", send_extra_data: true },
+        allowFallbackWithoutPageId: true,
+      })
+    );
+    expect(built.errors).toEqual([]);
+    expect(built.actionSource).toBe("chat");
+    expect(built.event.user_data).toHaveProperty("ph");
+  });
+});
+

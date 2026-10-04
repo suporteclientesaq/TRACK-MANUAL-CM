@@ -1,11 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ChevronLeft, RotateCcw, Trash2 } from "lucide-react";
+import { ChevronLeft, GitMerge, RotateCcw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { deleteLeadAction, resendEventAction } from "@/app/actions";
 import { daysSince, formatDateTime, formatMoney, formatNumber, formatPhone } from "@/lib/format";
-import { contentNames, getAd, getClient, getLead, listClients, listEventsForLead } from "@/lib/store";
+import { contentNames, findLeadsByPhones, getAd, getClient, getLead, listClients, listEventsForLead } from "@/lib/store";
 import { eventLabel } from "@/lib/types";
+import { attributeLead, resolveWinningLead } from "@/lib/attribution";
 import { LeadForm } from "../LeadForm";
 import { RefreshAdButton } from "./RefreshAdButton";
 import { SendEventForm } from "./SendEventForm";
@@ -23,15 +24,22 @@ export default async function LeadPage({
 
   const lead = await getLead(id);
   if (!lead) notFound();
-  const [client, clientsData, events, ad, products] = await Promise.all([
+  const [client, clientsData, events, ad, products, leadsForPhone] = await Promise.all([
     getClient(lead.client_id),
     listClients(),
     listEventsForLead(lead.id),
     lead.source_id ? getAd(lead.client_id, lead.source_id) : Promise.resolve(null),
     contentNames(lead.client_id),
+    findLeadsByPhones(lead.client_id, [lead.phone]),
   ]);
   const clidAge = daysSince(lead.clid_seen_at);
   const thumb = lead.thumbnail_url || ad?.thumbnail_url;
+
+  // Atribuição last-click: determina se este lead é o vencedor do grupo de telefone
+  const winner = resolveWinningLead(leadsForPhone.length > 0 ? leadsForPhone : [lead]);
+  const isWinner = winner.id === lead.id;
+  const winnerAttribution = attributeLead(winner);
+  const isDuplicate = leadsForPhone.length > 1 && !isWinner;
 
   return (
     <>
@@ -52,6 +60,59 @@ export default async function LeadPage({
       </div>
 
       {salvo && <div className="note note-ok">Alterações salvas.</div>}
+
+      {/* Banner de Atribuição Last-Click */}
+      {leadsForPhone.length > 1 && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            gap: "10px",
+            padding: "12px 16px",
+            borderRadius: "10px",
+            background: isDuplicate
+              ? "linear-gradient(90deg, rgba(239, 90, 90, 0.1), rgba(21, 18, 29, 0.95))"
+              : "linear-gradient(90deg, rgba(52, 199, 123, 0.1), rgba(21, 18, 29, 0.95))",
+            border: `1px solid ${isDuplicate ? "rgba(239, 90, 90, 0.3)" : "rgba(52, 199, 123, 0.3)"}`,
+            fontSize: "13px",
+            color: isDuplicate ? "#ef9090" : "#34c77b",
+          }}
+        >
+          <GitMerge size={16} style={{ flexShrink: 0, marginTop: 2 }} />
+          <div>
+            {isDuplicate ? (
+              <>
+                <strong style={{ color: "#ef5a5a" }}>Atribuição: Lead Duplicado</strong>
+                <br />
+                <span style={{ color: "#9a92ad", fontSize: "12px" }}>
+                  Este número de telefone aparece em{" "}
+                  <strong style={{ color: "#ebe8f2" }}>{leadsForPhone.length} campanhas</strong>.
+                  A venda será atribuída ao lead mais recente com ctwa_clid{" "}
+                  {winner.source_id ? (
+                    <>
+                      (anúncio <code style={{ fontSize: "11px" }}>#{winner.source_id.slice(-6)}</code>)
+                    </>
+                  ) : null}
+                  . Este lead <strong style={{ color: "#ef5a5a" }}>não receberá crédito</strong> de conversão no
+                  dashboard para evitar duplicação.
+                </span>
+              </>
+            ) : (
+              <>
+                <strong style={{ color: "#34c77b" }}>Atribuição: Lead Vencedor ✓</strong>
+                <br />
+                <span style={{ color: "#9a92ad", fontSize: "12px" }}>
+                  Este número aparece em{" "}
+                  <strong style={{ color: "#ebe8f2" }}>{leadsForPhone.length} campanhas</strong>, mas este
+                  lead tem o clique mais recente (
+                  {winnerAttribution.model === "ctwa_last_click" ? "ctwa_clid" : "source_id"}) e{" "}
+                  <strong style={{ color: "#34c77b" }}>receberá o crédito</strong> da conversão no dashboard.
+                </span>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="grid-2">
         <div>
