@@ -4,6 +4,7 @@ import { ChevronLeft, RotateCcw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { deleteLeadAction, resendEventAction } from "@/app/actions";
 import { daysSince, formatDateTime, formatMoney, formatNumber, formatPhone } from "@/lib/format";
+import { getAdPageId } from "@/lib/meta";
 import { contentNames, getAd, getClient, getLead, listClients, listEventsForLead } from "@/lib/store";
 import { eventLabel } from "@/lib/types";
 import { LeadForm } from "../LeadForm";
@@ -32,6 +33,7 @@ export default async function LeadPage({
   ]);
   const clidAge = daysSince(lead.clid_seen_at);
   const thumb = lead.thumbnail_url || ad?.thumbnail_url;
+  const adPageId = getAdPageId(ad);
 
   return (
     <>
@@ -122,6 +124,12 @@ export default async function LeadPage({
                 <dd>{formatNumber(ad.clicks)}</dd>
                 <dt>Conversas Iniciadas</dt>
                 <dd>{formatNumber(ad.conversations)}</dd>
+                {adPageId && (
+                  <>
+                    <dt>ID da Página do Anúncio</dt>
+                    <dd className="mono">{adPageId}</dd>
+                  </>
+                )}
                 <dt>Atualizado Em</dt>
                 <dd className="muted small">{formatDateTime(ad.fetched_at)}</dd>
               </dl>
@@ -130,6 +138,11 @@ export default async function LeadPage({
                 Com o ID de origem, o painel busca no Meta o nome da campanha, do conjunto e do anúncio, a miniatura e o
                 gasto.
               </p>
+            )}
+            {adPageId && client?.page_id && adPageId !== client.page_id && (
+              <div className="note note-warn" style={{ marginBottom: 12 }}>
+                <strong>Atenção para erro 2804072:</strong> O anúncio deste lead pertence à Página <code>{adPageId}</code>, mas este cliente está configurado com a Página <code>{client.page_id}</code>. Se o envio com ctwa_clid falhar, ajuste a Página no cadastro do cliente ou use o modo &quot;Apenas Telefone / Chat&quot;.
+              </div>
             )}
             {lead.source_id ? (
               <RefreshAdButton leadId={lead.id} hasData={!!ad} />
@@ -142,7 +155,12 @@ export default async function LeadPage({
         <div>
           <div className="card">
             <h2>Enviar Evento ao Meta</h2>
-            <SendEventForm leadId={lead.id} defaultCurrency={client?.default_currency || "BRL"} products={products} />
+            <SendEventForm
+              leadId={lead.id}
+              defaultCurrency={client?.default_currency || "BRL"}
+              products={products}
+              hasCtwaClid={!!lead.ctwa_clid}
+            />
           </div>
         </div>
       </div>
@@ -177,13 +195,24 @@ export default async function LeadPage({
                       <>
                         <span className="badge badge-err">Erro</span>
                         <div className="small" style={{ marginTop: 4 }}>{ev.error_message}</div>
-                        <form action={resendEventAction} style={{ marginTop: 8 }}>
-                          <input type="hidden" name="event_id" value={ev.id} />
-                          <Button variant="outline" size="sm" type="submit">
-                            <RotateCcw />
-                            Reenviar
-                          </Button>
-                        </form>
+                        <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginTop: 8 }}>
+                          <form action={resendEventAction}>
+                            <input type="hidden" name="event_id" value={ev.id} />
+                            <Button variant="outline" size="sm" type="submit">
+                              <RotateCcw />
+                              Reenviar
+                            </Button>
+                          </form>
+                          {ev.action_source === "business_messaging" && (
+                            <form action={resendEventAction}>
+                              <input type="hidden" name="event_id" value={ev.id} />
+                              <input type="hidden" name="ignore_clid" value="1" />
+                              <Button variant="secondary" size="sm" type="submit" title="Reenvia casando pelo telefone (sem ctwa_clid), contornando erros de incompatibilidade de página">
+                                Reenviar sem ctwa_clid (por Telefone)
+                              </Button>
+                            </form>
+                          )}
+                        </div>
                       </>
                     )}
                   </td>

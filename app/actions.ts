@@ -271,6 +271,8 @@ export interface EventFormInput {
   value: string;
   currency: string;
   contentName: string;
+  /** Se true, ignora o ctwa_clid e envia no modo conversa/chat casado pelo telefone */
+  ignoreClid?: boolean;
 }
 
 export interface EventPreview {
@@ -311,6 +313,7 @@ async function prepare(input: EventFormInput, eventId: string) {
     value,
     currency: input.currency || client.default_currency,
     contentName: input.contentName,
+    forceChat: !!input.ignoreClid,
   });
 
   const alreadySent = await countSent(lead.id, String(built.event.event_name));
@@ -413,6 +416,7 @@ export async function resendEventAction(fd: FormData) {
   if (!id) return;
   const ev = await getEvent(id);
   if (!ev || ev.status !== "erro") return;
+  const ignoreClid = fd.get("ignore_clid") === "1";
   await sendAndRecord(
     {
       leadId: ev.lead_id,
@@ -421,6 +425,7 @@ export async function resendEventAction(fd: FormData) {
       value: ev.value !== null ? String(ev.value) : "",
       currency: ev.currency || "",
       contentName: ev.content_name || "",
+      ignoreClid,
     },
     ev.event_id
   );

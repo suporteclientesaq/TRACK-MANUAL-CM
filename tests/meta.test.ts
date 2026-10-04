@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { buildEvent, fetchAd, sendEvent, type BuildEventInput } from "@/lib/meta";
+import { buildEvent, fetchAd, getAdPageId, sendEvent, type BuildEventInput } from "@/lib/meta";
 
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 const NOW = new Date("2026-09-21T15:00:00Z");
@@ -155,6 +155,39 @@ describe("validações", () => {
   it("recusa moeda inválida", () => {
     expect(buildEvent(base({ currency: "reais" })).errors.join(" ")).toMatch(/Moeda inválida/);
   });
+  it("forceChat: ignora ctwa_clid mesmo quando lead tem clid", () => {
+    const { event, warnings } = buildEvent(base({ forceChat: true }));
+    const ud = event.user_data as Record<string, unknown>;
+    expect(ud.ctwa_clid).toBeUndefined();
+    // action_source deve ser website ou chat, não depende do clid
+    expect(event.action_source).toBe("chat");
+    expect(warnings.some((w) => /Telefone|ctwa_clid|phone/i.test(w))).toBe(true);
+  });
+  it("sem forceChat usa ctwa_clid normalmente", () => {
+    const { event } = buildEvent(base());
+    const ud = event.user_data as Record<string, unknown>;
+    expect(ud.ctwa_clid).toBeDefined();
+  });
+});
+
+describe("getAdPageId", () => {
+  it("extrai page_id de object_story_spec", () => {
+    const ad = {
+      raw: { ad: { creative: { object_story_spec: { page_id: "999888777" } } } },
+    };
+    expect(getAdPageId(ad as any)).toBe("999888777");
+  });
+  it("extrai page_id de effective_object_story_id", () => {
+    const ad = {
+      raw: { ad: { creative: { effective_object_story_id: "123456789_987654321" } } },
+    };
+    expect(getAdPageId(ad as any)).toBe("123456789");
+  });
+  it("retorna null quando não há dados suficientes", () => {
+    expect(getAdPageId(null as any)).toBeNull();
+    expect(getAdPageId({ raw: null } as any)).toBeNull();
+    expect(getAdPageId({ raw: { ad: {} } } as any)).toBeNull();
+  });
 });
 
 describe("sendEvent", () => {
@@ -195,7 +228,7 @@ describe("sendEvent", () => {
     expect(result.body.test_event_code).toBeUndefined();
   });
 
-  it("traduz o erro do Meta", async () => {
+  it("traduz o erro do Meta - subcode 2804019", async () => {
     const result = await sendEvent({
       apiVersion: "v25.0",
       pixelId: "1",
@@ -211,9 +244,50 @@ describe("sendEvent", () => {
     });
     expect(result.ok).toBe(false);
     expect(result.httpStatus).toBe(400);
-    expect(result.errorMessage).toContain("ctwa_clid inválido");
-    expect(result.errorMessage).toContain("100/2804019");
+    // New hardcoded message for 2804019
+    expect(result.errorMessage).toContain("2804019");
+    expect(result.errorMessage).toContain("Telefone");
     expect(result.fbtraceId).toBe("Zzz");
+  });
+
+  it("traduz o erro do Meta - subcode 2804072", async () => {
+    const result = await sendEvent({
+      apiVersion: "v25.0",
+      pixelId: "1",
+      accessToken: "t",
+      event,
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            error: { message: "Invalid parameter", code: 100, error_subcode: 2804072, fbtrace_id: "Abc" },
+          }),
+          { status: 400 }
+        ),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errorMessage).toContain("2804072");
+    expect(result.errorMessage).toContain("ctwa_clid");
+    expect(result.fbtraceId).toBe("Abc");
+  });
+
+  it("traduz o erro do Meta - subcode 2804065", async () => {
+    const result = await sendEvent({
+      apiVersion: "v25.0",
+      pixelId: "1",
+      accessToken: "t",
+      event,
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            error: { message: "Invalid parameter", code: 100, error_subcode: 2804065, fbtrace_id: "Def" },
+          }),
+          { status: 400 }
+        ),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errorMessage).toContain("2804065");
+    expect(result.errorMessage).toContain("Conjunto de Dados");
+    expect(result.fbtraceId).toBe("Def");
   });
 
   it("não quebra quando a rede falha", async () => {

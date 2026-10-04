@@ -24,16 +24,19 @@ export function SendEventForm({
   leadId,
   defaultCurrency,
   products,
+  hasCtwaClid = false,
 }: {
   leadId: string;
   defaultCurrency: string;
   products: string[];
+  hasCtwaClid?: boolean;
 }) {
   const router = useRouter();
   const [eventName, setEventName] = useState<string>("Purchase");
   const [value, setValue] = useState("");
   const [currency, setCurrency] = useState(defaultCurrency);
   const [contentName, setContentName] = useState("");
+  const [attributionMode, setAttributionMode] = useState<"ctwa" | "phone">("ctwa");
   const [when, setWhen] = useState(localNow);
   const [preview, setPreview] = useState<EventPreview | null>(null);
   const [result, setResult] = useState<EventSendResult | null>(null);
@@ -49,6 +52,7 @@ export function SendEventForm({
     value,
     currency,
     contentName,
+    ignoreClid: hasCtwaClid ? attributionMode === "phone" : false,
   });
 
   // Qualquer alteração invalida a conferência: o que é enviado é sempre o que foi conferido.
@@ -123,6 +127,24 @@ export function SendEventForm({
           <label htmlFor="when">Quando Aconteceu</label>
           <input id="when" type="datetime-local" value={when} max={localNow()} onChange={(e) => changed(setWhen)(e.target.value)} />
         </div>
+        {hasCtwaClid && (
+          <div>
+            <label htmlFor="attribution_mode">Modo de Atribuição no Meta</label>
+            <select
+              id="attribution_mode"
+              value={attributionMode}
+              onChange={(e) => changed(setAttributionMode)(e.target.value as "ctwa" | "phone")}
+            >
+              <option value="ctwa">Com ctwa_clid (Atribuição ao clique no anúncio)</option>
+              <option value="phone">Apenas Telefone / Chat (Casamento por telefone, sem ctwa_clid)</option>
+            </select>
+            <div className="hint">
+              {attributionMode === "ctwa"
+                ? "Recomendado. Exige que a Página do cliente seja a mesma do anúncio."
+                : "Ideal para resolver erro 2804072 ou quando o clique veio de outra página."}
+            </div>
+          </div>
+        )}
       </div>
 
       {!preview && (
@@ -166,8 +188,9 @@ export function SendEventForm({
           )}
 
           <p className="small muted" style={{ marginBottom: 6 }}>
-            Exatamente isto será enviado ao Meta. Nome, telefone, cidade e estado vão embaralhados (hash SHA-256), como o
-            Meta exige; o ctwa_clid vai em texto puro.
+            {attributionMode === "phone"
+              ? "Enviando no modo conversa/chat: o Meta casará a conversão pelos dados do usuário (telefone, nome e localização com hash SHA-256), sem enviar o ctwa_clid."
+              : "Exatamente isto será enviado ao Meta. Nome, telefone, cidade e estado vão embaralhados (hash SHA-256), como o Meta exige; o ctwa_clid vai em texto puro."}
           </p>
           <pre className="payload">{JSON.stringify(preview.payload, null, 2)}</pre>
 
@@ -186,6 +209,22 @@ export function SendEventForm({
         <div className={`note ${result.sent ? "note-ok" : "note-err"}`} style={{ marginTop: 14 }}>
           <strong>{result.sent ? "Enviado." : "Não foi enviado."}</strong> {result.message}
           {!result.sent && result.errors.length > 0 && <ul>{result.errors.map((e) => <li key={e}>{e}</li>)}</ul>}
+          {!result.sent && hasCtwaClid && attributionMode === "ctwa" && (
+            <div style={{ marginTop: 12 }}>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setAttributionMode("phone");
+                  setPreview(null);
+                  setResult(null);
+                }}
+              >
+                Mudar para o modo &quot;Apenas Telefone / Chat&quot; e tentar de novo
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </div>

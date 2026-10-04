@@ -115,14 +115,41 @@ cliques e conversas iniciadas.
 
 **Vários Clientes.** Cada cliente tem pixel, tokens, Página e endereço de entrada próprios.
 
+**Excluir.** Na lista de leads, o ícone de lixeira no fim da linha exclui o lead e o histórico dele, depois de
+confirmar. O mesmo botão existe na página do lead, em "Dados Brutos Recebidos e Exclusão".
+
 ## Design
 
-Página de entrada com vídeo de fundo em tela cheia, barra transparente e chamada centralizada; o painel usa a
-mesma identidade. Cores: roxo `#7b39fc` (principal) e roxo escuro `#2b2344`. Fontes (baixadas no build, sem
-chamada externa): Manrope (interface e navegação), Cabin (botões e etiquetas), Instrument Serif (títulos) e
+**Página de entrada**: vídeo de fundo em tela cheia, barra transparente e chamada centralizada. **Painel**:
+minimalista, com a mesma identidade. Cores: roxo `#7b39fc` (marca) e roxo escuro `#2b2344`. Fontes (baixadas
+no build, sem chamada externa): Manrope (interface), Cabin (botões e etiquetas), Instrument Serif (títulos) e
 Inter (texto). O painel respeita o tema claro/escuro do sistema.
 
-Onde mexer:
+### Componentes (shadcn/ui)
+
+O projeto segue a estrutura do shadcn/ui: `components.json`, `lib/utils.ts` (`cn`), componentes em
+`components/ui/`, Tailwind v4 e TypeScript. Para adicionar outros componentes do shadcn: `npx shadcn@latest add <nome>`.
+
+| Arquivo | O que é | Onde é usado |
+| --- | --- | --- |
+| `components/ui/button.tsx` | `Button` — variantes `default`, `cool` (relevo), `outline`, `secondary`, `ghost`, `link`, `destructive`; tamanhos `sm`, `default`, `lg`, `icon`; `asChild` para links | Todos os botões do painel. `cool` só em "Enviar ao Meta" |
+| `components/ui/liquid-glass-button.tsx` | `LiquidButton` — vidro líquido com filtro SVG (distorce o fundo no Chrome/Edge); aceita `asChild` | "Ver Como Funciona", sobre o vídeo da página de entrada |
+| `components/ui/metal-button.tsx` | `MetalButton` — botão metálico com brilho e afundamento; variantes `default`, `primary`, `success`, `error`, `gold`, `bronze` | "Acessar o Painel", no fim da página de entrada |
+| `components/demo/liquid-glass-button-demo.tsx` | Exemplo de uso | Não usado pelo painel |
+
+Os tokens do shadcn (`--primary`, `--muted`, `--border`…) estão ligados às variáveis do painel em
+`app/globals.css`, então `bg-primary`, `border-input`, `ring-ring` etc. funcionam nas duas paletas. O Tailwind é
+carregado só com as utilidades (sem o reset "preflight"); o CSS do painel fica na camada `panel`, abaixo das
+utilidades, e por isso qualquer classe do Tailwind ganha do CSS do painel.
+
+### Aparência (Configurações > Aparência)
+
+Tema (Automático, Claro, Escuro, Preto total), cor de destaque (Roxo, Vermelho, Azul, Verde, Laranja, Rosa,
+Preto e branco), densidade (Confortável, Compacta) e títulos (com ou sem serifa). A escolha aplica na hora e
+fica num cookie de um ano, lido no servidor: a página já chega no tema certo, sem piscar e sem JavaScript
+extra. As opções e as cores estão em `lib/theme.ts`; o CSS de cada tema e cor, no topo de `app/globals.css`.
+
+### Onde mexer
 
 - **Textos da página de entrada**: `app/login/Hero.tsx` (constantes `COPY` e `NAV_LINKS`) e `app/login/page.tsx`
   (recursos, passos e rodapé).
@@ -130,10 +157,8 @@ Onde mexer:
 - **Vídeo de fundo**: `public/fundo.mp4` (cópia leve, 470 KB) e `public/fundo.jpg` (imagem mostrada enquanto
   carrega); o original do design fica como reserva em `VIDEO_FALLBACK_URL`. Para trocar, substitua os dois
   arquivos.
-- **Cores do painel**: variáveis no topo de `app/globals.css` (`--accent`, `--bg`, `--surface`…).
-
-Tailwind (v4, só utilidades, sem reset) está disponível para as telas novas; o CSS do painel fica na camada
-`panel`, abaixo das utilidades.
+- **Cores e tipografia do painel**: variáveis no topo de `app/globals.css` (`--brand`, `--bg`, `--surface`…).
+- **Navegação do painel**: `app/(painel)/PanelNav.tsx`.
 
 ## Acessos no Meta (Cadastrados Dentro do Painel)
 
@@ -205,7 +230,10 @@ local), `META_API_VERSION` (padrão v25.0). Testes contra a API: `TEST_SUPABASE_
 
 ```
 app/login/               página de entrada (Hero.tsx: vídeo, barra e chamada; page.tsx: login e seções)
+app/(painel)/PanelNav.tsx navegação do painel com a página atual marcada
 app/Logo.tsx             marca (LOGO_PATH)
+components/ui/           botões (shadcn/ui): button, liquid-glass-button, metal-button
+lib/utils.ts             cn() do shadcn
 public/fundo.mp4|jpg     vídeo de fundo e imagem de espera
 app/(painel)/            telas: leads, importar, detalhe do lead, eventos, clientes, configurações
 app/api/webhook/leona/   entrada automática de leads

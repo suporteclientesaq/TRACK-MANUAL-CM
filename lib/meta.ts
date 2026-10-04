@@ -46,6 +46,8 @@ export interface BuildEventInput {
   value?: number | null;
   currency?: string | null;
   contentName?: string | null;
+  /** Se true, ignora o ctwa_clid e envia no modo conversa/chat casado pelo telefone */
+  forceChat?: boolean;
 }
 
 export interface BuiltEvent {
@@ -62,8 +64,8 @@ export interface BuiltEvent {
  *
  * Com ctwa_clid: evento de mensagem de empresa (business_messaging / whatsapp),
  * que é o que liga a conversão ao clique no anúncio Click-to-WhatsApp.
- * Sem ctwa_clid: evento de conversa (chat) casado só pelo telefone com hash —
- * serve para públicos e medição, mas a atribuição ao anúncio é bem mais fraca.
+ * Sem ctwa_clid (ou com forceChat): evento de conversa (chat) casado pelo telefone com hash —
+ * serve para alimentar o algoritmo e públicos mesmo com divergência de página ou clique antigo.
  */
 export function buildEvent(input: BuildEventInput): BuiltEvent {
   const { client, lead } = input;
@@ -72,8 +74,12 @@ export function buildEvent(input: BuildEventInput): BuiltEvent {
   const now = input.now ?? new Date();
 
   const clid = (lead.ctwa_clid || "").trim();
-  const hasClid = clid.length > 0;
+  const hasClid = clid.length > 0 && !input.forceChat;
   const actionSource = hasClid ? "business_messaging" : "chat";
+
+  if (input.forceChat && clid.length > 0) {
+    warnings.push("Envio realizado no modo Apenas Telefone / Chat (sem ctwa_clid), casado pelos dados do lead.");
+  }
 
   // ---- horário do evento ---------------------------------------------------
   const eventTimeS = Math.floor(input.eventTime.getTime() / 1000);
@@ -200,6 +206,37 @@ function describeMetaError(json: unknown): string | null {
   if (!json || typeof json !== "object") return null;
   const err = (json as { error?: Record<string, unknown> }).error;
   if (!err) return null;
+
+  const subcode = typeof err.error_subcode === "number" ? err.error_subcode : Number(err.error_subcode);
+
+  if (subcode === 2804072) {
+    return (
+      "Incompatibilidade entre ctwa_clid e ID da Página (código 100/2804072): " +
+      "O clique recebido (ctwa_clid) pertence a uma Página do Facebook ou WABA diferente da cadastrada neste cliente. " +
+      "Como resolver: 1) Confira no Gerenciador de Anúncios qual Página veiculou o anúncio e atualize o ID da Página no cadastro do cliente; " +
+      "2) Se usa a API Oficial do WhatsApp, altere o modo para WABA e informe o WABA ID; " +
+      "ou 3) Reenvie o evento no modo 'Apenas Telefone / Chat' (sem ctwa_clid) para registrar a venda no Meta imediatamente casando pelo telefone."
+    );
+  }
+
+  if (subcode === 2804019) {
+    return (
+      "CTWA Click ID inválido ou expirado (código 100/2804019): " +
+      "O ctwa_clid não é reconhecido pelo Meta ou o clique expirou. " +
+      "Você pode enviar o evento no modo 'Apenas Telefone / Chat' para que o Meta registre a conversão casando pelo telefone."
+    );
+  }
+
+  if (subcode === 2804065) {
+    return (
+      "Página não associada ao Conjunto de Dados / Pixel (código 100/2804065): " +
+      "O ID da Página enviado não está vinculado a este Pixel no Gerenciador de Eventos. " +
+      "Como resolver: 1) No Gerenciador de Eventos, abra o Pixel > Configurações e vincule a Página do Facebook; " +
+      "2) Ou confira se o Pixel cadastrado no cliente é o mesmo onde a Página está conectada; " +
+      "ou 3) Reenvie no modo 'Apenas Telefone / Chat' (sem ctwa_clid) para registrar a conversão imediatamente."
+    );
+  }
+
   const parts = [err.error_user_title, err.error_user_msg, err.message]
     .filter((p): p is string => typeof p === "string" && p.length > 0);
   const unique = [...new Set(parts)];
@@ -288,6 +325,7 @@ export interface FetchedAd {
   impressions: number | null;
   clicks: number | null;
   conversations: number | null;
+  page_id?: string | null;
   raw: unknown;
 }
 
@@ -296,6 +334,21 @@ const num = (v: unknown): number | null => {
   const n = typeof v === "string" || typeof v === "number" ? Number(v) : NaN;
   return Number.isFinite(n) ? n : null;
 };
+
+/** Extrai o ID da Página do Facebook do criativo do anúncio, se disponível. */
+export function getAdPageId(ad: { raw?: unknown; page_id?: string | null } | null | undefined): string | null {
+  if (!ad) return null;
+  if ("page_id" in ad && typeof ad.page_id === "string" && ad.page_id) return ad.page_id;
+  const rawObj = (typeof ad.raw === "object" && ad.raw ? ad.raw : {}) as Record<string, unknown>;
+  const adJson = (rawObj.ad || {}) as Record<string, unknown>;
+  const creative = (adJson.creative || {}) as Record<string, unknown>;
+  const storySpec = (creative.object_story_spec || {}) as Record<string, unknown>;
+  if (typeof storySpec.page_id === "string" && storySpec.page_id) return storySpec.page_id;
+  if (typeof storySpec.page_id === "number") return String(storySpec.page_id);
+  const storyId = typeof creative.effective_object_story_id === "string" ? creative.effective_object_story_id : "";
+  if (storyId && storyId.includes("_")) return storyId.split("_")[0];
+  return null;
+}
 
 export async function fetchAd(opts: {
   apiVersion: string;
@@ -310,7 +363,7 @@ export async function fetchAd(opts: {
   const token = encodeURIComponent(opts.accessToken);
   const base = `${GRAPH}/${opts.apiVersion}/${opts.adId}`;
   const fields =
-    "name,effective_status,adset{id,name},campaign{id,name},creative{title,body,thumbnail_url,image_url}";
+    "name,effective_status,adset{id,name},campaign{id,name},creative{title,body,thumbnail_url,image_url,object_story_spec,effective_object_story_id}";
 
   try {
     const adRes = await doFetch(`${base}?fields=${encodeURIComponent(fields)}&access_token=${token}`, {
@@ -337,6 +390,13 @@ export async function fetchAd(opts: {
     const adset = (adJson.adset || {}) as Record<string, unknown>;
     const campaign = (adJson.campaign || {}) as Record<string, unknown>;
     const creative = (adJson.creative || {}) as Record<string, unknown>;
+    const storySpec = (creative.object_story_spec || {}) as Record<string, unknown>;
+    const storyId = typeof creative.effective_object_story_id === "string" ? creative.effective_object_story_id : "";
+    const adPageId =
+      (typeof storySpec.page_id === "string" && storySpec.page_id) ||
+      (typeof storySpec.page_id === "number" ? String(storySpec.page_id) : null) ||
+      (storyId && storyId.includes("_") ? storyId.split("_")[0] : null);
+
     const actions = Array.isArray(insights?.actions)
       ? (insights!.actions as { action_type?: string; value?: string }[])
       : [];
@@ -360,6 +420,7 @@ export async function fetchAd(opts: {
         impressions: num(insights?.impressions),
         clicks: num(insights?.clicks),
         conversations: conv ? num(conv.value) : null,
+        page_id: str(adPageId),
         raw: { ad: adJson, insights },
       },
     };
