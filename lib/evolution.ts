@@ -155,6 +155,14 @@ export interface EvolutionConfig {
   instanceName: string;
 }
 
+function formatFetchError(err: unknown, url: string): string {
+  const msg = err instanceof Error ? err.message : String(err || "");
+  if (msg.includes("fetch failed") || msg.includes("ECONNREFUSED") || msg.includes("Failed to fetch") || msg.includes("ENOTFOUND")) {
+    return `Não foi possível conectar ao servidor da Evolution API (${url}). O servidor está desligado ou o endereço está incorreto. Se você não tem a Evolution API rodando em servidor ou Docker, utilize a opção "WhatsApp Direto (Integrado)".`;
+  }
+  return msg;
+}
+
 export async function evolutionGetState(config: EvolutionConfig): Promise<{
   ok: boolean;
   state: "open" | "connecting" | "close" | "not_found";
@@ -176,7 +184,7 @@ export async function evolutionGetState(config: EvolutionConfig): Promise<{
     const state = json?.instance?.state || json?.state || "close";
     return { ok: true, state };
   } catch (e) {
-    return { ok: false, state: "close", error: e instanceof Error ? e.message : String(e) };
+    return { ok: false, state: "close", error: formatFetchError(e, base) };
   }
 }
 
@@ -202,7 +210,7 @@ export async function evolutionSetWebhook(
     });
     return { ok: res.ok };
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    return { ok: false, error: formatFetchError(e, base) };
   }
 }
 
@@ -222,6 +230,16 @@ export async function evolutionCreateOrConnect(
   if (current.ok && current.state === "open") {
     if (webhookUrl) await evolutionSetWebhook(config, webhookUrl);
     return { ok: true, state: "open", qrcode: null };
+  }
+
+  // Se falhou ao alcançar o servidor, aborta e avisa claramente o usuário
+  if (!current.ok && current.state !== "not_found") {
+    return {
+      ok: false,
+      state: "close",
+      qrcode: null,
+      error: current.error || formatFetchError(new Error("fetch failed"), base),
+    };
   }
 
   // 2. Se a instância não existe, cria
@@ -247,7 +265,7 @@ export async function evolutionCreateOrConnect(
         return { ok: true, state: "connecting", qrcode: qr };
       }
     } catch (e) {
-      return { ok: false, state: "close", qrcode: null, error: e instanceof Error ? e.message : String(e) };
+      return { ok: false, state: "close", qrcode: null, error: formatFetchError(e, base) };
     }
   }
 
@@ -262,7 +280,7 @@ export async function evolutionCreateOrConnect(
     const qr = json?.base64 || json?.qrcode?.base64 || null;
     return { ok: true, state: "connecting", qrcode: qr };
   } catch (e) {
-    return { ok: false, state: "close", qrcode: null, error: e instanceof Error ? e.message : String(e) };
+    return { ok: false, state: "close", qrcode: null, error: formatFetchError(e, base) };
   }
 }
 
@@ -276,7 +294,8 @@ export async function evolutionLogout(config: EvolutionConfig): Promise<{ ok: bo
     });
     return { ok: res.ok };
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    return { ok: false, error: formatFetchError(e, base) };
   }
 }
+
 
