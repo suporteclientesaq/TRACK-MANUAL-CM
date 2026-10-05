@@ -588,3 +588,44 @@ export async function disconnectEvolutionAction(opts: {
   return evolutionLogout(opts);
 }
 
+// ---------------------------------------------------------------------------
+// Conexão WhatsApp Nativa / Direta (Baileys Integrado no Track Manual)
+// ---------------------------------------------------------------------------
+
+export async function getNativeWhatsAppStatusAction(clientId: string): Promise<{
+  ok: boolean;
+  state: "open" | "connecting" | "close";
+  qrcode: string | null;
+  phone: string | null;
+  name: string | null;
+}> {
+  await requireAuth();
+  const { getNativeWhatsAppStatus } = await import("@/lib/whatsapp-baileys");
+  return getNativeWhatsAppStatus(clientId);
+}
+
+export async function connectNativeWhatsAppAction(clientId: string): Promise<{
+  ok: boolean;
+  state: "open" | "connecting" | "close";
+  qrcode: string | null;
+  phone?: string | null;
+  error?: string;
+}> {
+  await requireAuth();
+  const client = await getClient(clientId);
+  if (!client) return { ok: false, state: "close", qrcode: null, error: "Cliente não encontrado." };
+
+  const { connectNativeWhatsApp } = await import("@/lib/whatsapp-baileys");
+  return connectNativeWhatsApp(clientId);
+}
+
+export async function disconnectNativeWhatsAppAction(clientId: string): Promise<{
+  ok: boolean;
+  error?: string;
+}> {
+  await requireAuth();
+  const { disconnectNativeWhatsApp } = await import("@/lib/whatsapp-baileys");
+  return disconnectNativeWhatsApp(clientId);
+}
+
+

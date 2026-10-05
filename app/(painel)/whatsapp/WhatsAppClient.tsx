@@ -9,7 +9,9 @@ import {
   Loader2,
   LogOut,
   QrCode,
+  Radio,
   RefreshCw,
+  Server,
   ShieldCheck,
   Smartphone,
   Sparkles,
@@ -17,8 +19,11 @@ import {
 } from "lucide-react";
 import {
   connectEvolutionAction,
+  connectNativeWhatsAppAction,
   disconnectEvolutionAction,
+  disconnectNativeWhatsAppAction,
   getEvolutionStatusAction,
+  getNativeWhatsAppStatusAction,
 } from "@/app/actions";
 import { Button } from "@/components/ui/button";
 import type { Client } from "@/lib/types";
@@ -29,6 +34,9 @@ interface WhatsAppClientProps {
 
 export function WhatsAppClient({ clients }: WhatsAppClientProps) {
   const [selectedClientId, setSelectedClientId] = useState(clients[0]?.id || "");
+  const [connectionMode, setConnectionMode] = useState<"native" | "evolution">("native");
+
+  // Configurações do modo Evolution API externa
   const [serverUrl, setServerUrl] = useState("http://localhost:8080");
   const [apiKey, setApiKey] = useState("429683C4C977415CAAFCCE10F7D57E11");
   const [instanceName, setInstanceName] = useState(
@@ -38,45 +46,63 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
   const [loading, setLoading] = useState(false);
   const [checking, setChecking] = useState(false);
   const [connectionState, setConnectionState] = useState<"close" | "connecting" | "open" | "unknown">("unknown");
+  const [connectedPhone, setConnectedPhone] = useState<string | null>(null);
   const [qrCodeData, setQrCodeData] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successNotice, setSuccessNotice] = useState<string | null>(null);
 
   const selectedClient = clients.find((c) => c.id === selectedClientId);
 
-  // Troca de cliente atualiza o nome padrão da instância
+  // Troca de cliente atualiza o nome padrão da instância e checa status
   const handleClientSelect = (cId: string) => {
     setSelectedClientId(cId);
+    setQrCodeData(null);
+    setConnectionState("unknown");
     const cl = clients.find((c) => c.id === cId);
     if (cl) {
       setInstanceName(`track_${cl.name.toLowerCase().replace(/\W+/g, "_")}`);
     }
   };
 
-  // Checa status da conexão
+  // Checa status da conexão (Nativo ou Evolution)
   const checkStatus = async () => {
-    if (!serverUrl || !apiKey || !instanceName) return;
+    if (!selectedClientId) return;
     setChecking(true);
     setErrorMessage(null);
+
     try {
-      const res = await getEvolutionStatusAction({
-        serverUrl,
-        apiKey,
-        instanceName,
-      });
-      if (res.ok) {
-        if (res.state === "open") {
-          setConnectionState("open");
-          setQrCodeData(null);
-        } else if (res.state === "connecting") {
-          setConnectionState("connecting");
+      if (connectionMode === "native") {
+        const res = await getNativeWhatsAppStatusAction(selectedClientId);
+        if (res.ok) {
+          setConnectionState(res.state);
+          if (res.phone) setConnectedPhone(res.phone);
+          if (res.qrcode && res.state === "connecting") {
+            setQrCodeData(res.qrcode);
+          } else if (res.state === "open") {
+            setQrCodeData(null);
+          }
+        }
+      } else {
+        if (!serverUrl || !apiKey || !instanceName) return;
+        const res = await getEvolutionStatusAction({
+          serverUrl,
+          apiKey,
+          instanceName,
+        });
+        if (res.ok) {
+          if (res.state === "open") {
+            setConnectionState("open");
+            setQrCodeData(null);
+          } else if (res.state === "connecting") {
+            setConnectionState("connecting");
+          } else {
+            setConnectionState("close");
+          }
         } else {
           setConnectionState("close");
         }
-      } else {
-        setConnectionState("close");
       }
-    } catch (e) {
+    } catch {
       setConnectionState("close");
     } finally {
       setChecking(false);
@@ -94,34 +120,58 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
     setSuccessNotice(null);
 
     try {
-      const res = await connectEvolutionAction({
-        serverUrl,
-        apiKey,
-        instanceName,
-        clientId: selectedClientId,
-      });
-
-      if (res.ok) {
-        if (res.state === "open") {
-          setConnectionState("open");
-          setQrCodeData(null);
-          setSuccessNotice("WhatsApp já está conectado e pronto para rastreamento!");
-        } else {
-          setConnectionState("connecting");
-          if (res.qrcode) {
-            setQrCodeData(res.qrcode);
+      if (connectionMode === "native") {
+        const res = await connectNativeWhatsAppAction(selectedClientId);
+        if (res.ok) {
+          if (res.state === "open") {
+            setConnectionState("open");
+            setQrCodeData(null);
+            if (res.phone) setConnectedPhone(res.phone);
+            setSuccessNotice("WhatsApp conectado com sucesso e pronto para rastreamento!");
+          } else {
+            setConnectionState("connecting");
+            if (res.qrcode) {
+              setQrCodeData(res.qrcode);
+            }
           }
+        } else {
+          setErrorMessage(res.error || "Não foi possível iniciar o WhatsApp nativo.");
         }
       } else {
-        setErrorMessage(
-          res.error ||
-            "Não foi possível conectar à Evolution API. Verifique se ela está ligada em " + serverUrl
-        );
+        const res = await connectEvolutionAction({
+          serverUrl,
+          apiKey,
+          instanceName,
+          clientId: selectedClientId,
+        });
+
+        if (res.ok) {
+          if (res.state === "open") {
+            setConnectionState("open");
+            setQrCodeData(null);
+            setSuccessNotice("WhatsApp já está conectado e pronto para rastreamento!");
+          } else {
+            setConnectionState("connecting");
+            if (res.qrcode) {
+              setQrCodeData(res.qrcode);
+            }
+          }
+        } else {
+          setErrorMessage(
+            res.error ||
+              "Não foi possível conectar à Evolution API. Verifique se o servidor está rodando em " + serverUrl
+          );
+        }
       }
     } catch (e) {
-      setErrorMessage(
-        "Falha ao comunicar com a Evolution API: " + (e instanceof Error ? e.message : String(e))
-      );
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("fetch failed") || msg.includes("ECONNREFUSED")) {
+        setErrorMessage(
+          `Não foi possível alcançar o servidor (${serverUrl}). Verifique se a Evolution API está em execução. Para conectar sem precisar de servidor externo, utilize a opção "WhatsApp Direto (Nativo)".`
+        );
+      } else {
+        setErrorMessage("Erro ao conectar: " + msg);
+      }
     } finally {
       setLoading(false);
     }
@@ -133,13 +183,18 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
     setLoading(true);
     setErrorMessage(null);
     try {
-      await disconnectEvolutionAction({
-        serverUrl,
-        apiKey,
-        instanceName,
-      });
+      if (connectionMode === "native") {
+        await disconnectNativeWhatsAppAction(selectedClientId);
+      } else {
+        await disconnectEvolutionAction({
+          serverUrl,
+          apiKey,
+          instanceName,
+        });
+      }
       setConnectionState("close");
       setQrCodeData(null);
+      setConnectedPhone(null);
       setSuccessNotice("WhatsApp desconectado com sucesso.");
     } catch (e) {
       setErrorMessage("Erro ao desconectar: " + (e instanceof Error ? e.message : String(e)));
@@ -154,15 +209,27 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
     if (connectionState === "connecting") {
       interval = setInterval(async () => {
         try {
-          const res = await getEvolutionStatusAction({
-            serverUrl,
-            apiKey,
-            instanceName,
-          });
-          if (res.ok && res.state === "open") {
-            setConnectionState("open");
-            setQrCodeData(null);
-            setSuccessNotice("🎉 WhatsApp Conectado com Sucesso!");
+          if (connectionMode === "native") {
+            const res = await getNativeWhatsAppStatusAction(selectedClientId);
+            if (res.ok && res.state === "open") {
+              setConnectionState("open");
+              setQrCodeData(null);
+              if (res.phone) setConnectedPhone(res.phone);
+              setSuccessNotice("🎉 WhatsApp Conectado com Sucesso!");
+            } else if (res.ok && res.qrcode) {
+              setQrCodeData(res.qrcode);
+            }
+          } else {
+            const res = await getEvolutionStatusAction({
+              serverUrl,
+              apiKey,
+              instanceName,
+            });
+            if (res.ok && res.state === "open") {
+              setConnectionState("open");
+              setQrCodeData(null);
+              setSuccessNotice("🎉 WhatsApp Conectado com Sucesso!");
+            }
           }
         } catch {
           // segue polling
@@ -172,12 +239,13 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [connectionState, serverUrl, apiKey, instanceName]);
+  }, [connectionState, connectionMode, selectedClientId, serverUrl, apiKey, instanceName]);
 
-  // Checa status inicial ao carregar a página
+  // Checa status inicial ao trocar cliente ou modo
   useEffect(() => {
     checkStatus();
-  }, [instanceName]);
+  }, [selectedClientId, connectionMode]);
+
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "24px", maxWidth: "980px" }}>
@@ -185,7 +253,7 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
       <div className="page-head" style={{ marginBottom: "0" }}>
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            <h1 style={{ margin: 0, fontSize: "26px", fontWeight: 800 }}>Conectar WhatsApp (Evolution API)</h1>
+            <h1 style={{ margin: 0, fontSize: "26px", fontWeight: 800 }}>Conectar WhatsApp</h1>
             <span
               style={{
                 fontSize: "11px",
@@ -201,18 +269,72 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
               }}
             >
               <Zap size={12} />
-              BAILEYS NÃO-OFICIAL
+              BAILEYS INTEGRADO
             </span>
           </div>
           <p className="muted small" style={{ margin: "4px 0 0 0" }}>
-            Conecte seu WhatsApp escaneando o QR Code para capturar automaticamente cliques em anúncios, <code>ctwa_clid</code> e novas conversas.
+            Escaneie o QR Code para capturar automaticamente cliques em anúncios, <code>ctwa_clid</code> e novas conversas.
           </p>
         </div>
       </div>
 
+      {/* Seletor de Modo */}
+      <div style={{ display: "flex", gap: "10px" }}>
+        <button
+          type="button"
+          onClick={() => { setConnectionMode("native"); setQrCodeData(null); setErrorMessage(null); }}
+          style={{
+            flex: 1,
+            padding: "12px 16px",
+            borderRadius: "10px",
+            border: connectionMode === "native" ? "2px solid #7b39fc" : "2px solid var(--border)",
+            background: connectionMode === "native" ? "rgba(123, 57, 252, 0.12)" : "var(--surface)",
+            color: connectionMode === "native" ? "#b394ff" : "var(--text-muted)",
+            cursor: "pointer",
+            fontWeight: 600,
+            fontSize: "13px",
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            transition: "all 0.2s",
+          }}
+        >
+          <Radio size={16} />
+          <div style={{ textAlign: "left" }}>
+            <div>WhatsApp Direto (Integrado)</div>
+            <div style={{ fontSize: "11px", fontWeight: 400, opacity: 0.8 }}>Sem servidor externo, funciona aqui mesmo</div>
+          </div>
+        </button>
+        <button
+          type="button"
+          onClick={() => { setConnectionMode("evolution"); setQrCodeData(null); setErrorMessage(null); }}
+          style={{
+            flex: 1,
+            padding: "12px 16px",
+            borderRadius: "10px",
+            border: connectionMode === "evolution" ? "2px solid #7b39fc" : "2px solid var(--border)",
+            background: connectionMode === "evolution" ? "rgba(123, 57, 252, 0.12)" : "var(--surface)",
+            color: connectionMode === "evolution" ? "#b394ff" : "var(--text-muted)",
+            cursor: "pointer",
+            fontWeight: 600,
+            fontSize: "13px",
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            transition: "all 0.2s",
+          }}
+        >
+          <Server size={16} />
+          <div style={{ textAlign: "left" }}>
+            <div>Evolution API (Servidor)</div>
+            <div style={{ fontSize: "11px", fontWeight: 400, opacity: 0.8 }}>Para quem tem servidor próprio ou VPS</div>
+          </div>
+        </button>
+      </div>
+
       {errorMessage && (
-        <div className="note note-err" style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <AlertCircle size={16} style={{ flexShrink: 0 }} />
+        <div className="note note-err" style={{ display: "flex", alignItems: "flex-start", gap: "8px" }}>
+          <AlertCircle size={16} style={{ flexShrink: 0, marginTop: "2px" }} />
           <span>{errorMessage}</span>
         </div>
       )}
@@ -227,7 +349,9 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
       <div className="grid-2">
         {/* Painel Esquerdo: Configurações da Conexão */}
         <div className="card" style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-          <h2 style={{ fontSize: "16px", margin: "0 0 4px 0" }}>Dados da Instância</h2>
+          <h2 style={{ fontSize: "16px", margin: "0 0 4px 0" }}>
+            {connectionMode === "native" ? "Conexão Direta" : "Dados da Instância"}
+          </h2>
 
           <div>
             <label htmlFor="client_id" style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: 600 }}>
@@ -258,79 +382,111 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
             </div>
           </div>
 
-          <div>
-            <label htmlFor="instance_name" style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: 600 }}>
-              Nome da Instância
-            </label>
-            <input
-              id="instance_name"
-              type="text"
-              value={instanceName}
-              onChange={(e) => setInstanceName(e.target.value)}
+          {connectionMode === "native" ? (
+            <div
               style={{
-                width: "100%",
-                padding: "8px 12px",
-                borderRadius: "8px",
-                background: "var(--surface)",
-                border: "1px solid var(--border)",
-                color: "var(--text)",
-                fontSize: "13px",
+                padding: "14px",
+                borderRadius: "10px",
+                background: "rgba(52, 199, 123, 0.06)",
+                border: "1px solid rgba(52, 199, 123, 0.2)",
+                fontSize: "12px",
+                color: "var(--text-muted)",
+                display: "flex",
+                flexDirection: "column",
+                gap: "8px",
               }}
-            />
-            <div className="hint" style={{ marginTop: "4px" }}>
-              Identificador único da sessão na Evolution API.
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: "6px", color: "#34c77b", fontWeight: 600 }}>
+                <Radio size={14} />
+                <span>Modo Integrado Ativo</span>
+              </div>
+              <p style={{ margin: 0 }}>
+                Neste modo, o Track Manual se conecta diretamente ao WhatsApp, sem precisar de nenhum servidor externo. A sessão fica salva localmente e reconecta automaticamente.
+              </p>
+              {connectedPhone && (
+                <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "4px", color: "#34c77b", fontWeight: 600 }}>
+                  <CheckCircle2 size={13} />
+                  Número: +{connectedPhone}
+                </div>
+              )}
             </div>
-          </div>
+          ) : (
+            <>
+              <div>
+                <label htmlFor="instance_name" style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: 600 }}>
+                  Nome da Instância
+                </label>
+                <input
+                  id="instance_name"
+                  type="text"
+                  value={instanceName}
+                  onChange={(e) => setInstanceName(e.target.value)}
+                  style={{
+                    width: "100%",
+                    padding: "8px 12px",
+                    borderRadius: "8px",
+                    background: "var(--surface)",
+                    border: "1px solid var(--border)",
+                    color: "var(--text)",
+                    fontSize: "13px",
+                  }}
+                />
+                <div className="hint" style={{ marginTop: "4px" }}>
+                  Identificador único da sessão na Evolution API.
+                </div>
+              </div>
 
-          <div>
-            <label htmlFor="server_url" style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: 600 }}>
-              Endereço da Evolution API
-            </label>
-            <input
-              id="server_url"
-              type="text"
-              value={serverUrl}
-              onChange={(e) => setServerUrl(e.target.value)}
-              placeholder="http://localhost:8080"
-              style={{
-                width: "100%",
-                padding: "8px 12px",
-                borderRadius: "8px",
-                background: "var(--surface)",
-                border: "1px solid var(--border)",
-                color: "var(--text)",
-                fontSize: "13px",
-              }}
-            />
-            <div className="hint" style={{ marginTop: "4px" }}>
-              Porta padrão: 8080. Se estiver em uma VPS, coloque a URL completa.
-            </div>
-          </div>
+              <div>
+                <label htmlFor="server_url" style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: 600 }}>
+                  Endereço da Evolution API
+                </label>
+                <input
+                  id="server_url"
+                  type="text"
+                  value={serverUrl}
+                  onChange={(e) => setServerUrl(e.target.value)}
+                  placeholder="http://localhost:8080"
+                  style={{
+                    width: "100%",
+                    padding: "8px 12px",
+                    borderRadius: "8px",
+                    background: "var(--surface)",
+                    border: "1px solid var(--border)",
+                    color: "var(--text)",
+                    fontSize: "13px",
+                  }}
+                />
+                <div className="hint" style={{ marginTop: "4px" }}>
+                  Porta padrão: 8080. Se estiver em uma VPS, coloque a URL completa.
+                </div>
+              </div>
 
-          <div>
-            <label htmlFor="api_key" style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: 600 }}>
-              Chave Global da Evolution (API Key)
-            </label>
-            <input
-              id="api_key"
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder="AUTHENTICATION_API_KEY do arquivo .env"
-              style={{
-                width: "100%",
-                padding: "8px 12px",
-                borderRadius: "8px",
-                background: "var(--surface)",
-                border: "1px solid var(--border)",
-                color: "var(--text)",
-                fontSize: "13px",
-              }}
-            />
-            <div className="hint" style={{ marginTop: "4px" }}>
-              Definida na variável AUTHENTICATION_API_KEY no .env da Evolution API.
-            </div>
-          </div>
+              <div>
+                <label htmlFor="api_key" style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: 600 }}>
+                  Chave Global da Evolution (API Key)
+                </label>
+                <input
+                  id="api_key"
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder="AUTHENTICATION_API_KEY do arquivo .env"
+                  style={{
+                    width: "100%",
+                    padding: "8px 12px",
+                    borderRadius: "8px",
+                    background: "var(--surface)",
+                    border: "1px solid var(--border)",
+                    color: "var(--text)",
+                    fontSize: "13px",
+                  }}
+                />
+                <div className="hint" style={{ marginTop: "4px" }}>
+                  Definida na variável AUTHENTICATION_API_KEY no .env da Evolution API.
+                </div>
+              </div>
+            </>
+          )}
 
           <div style={{ display: "flex", gap: "10px", marginTop: "8px" }}>
             <Button
@@ -346,6 +502,7 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
             </Button>
           </div>
         </div>
+
 
         {/* Painel Direito: Status e QR Code */}
         <div
