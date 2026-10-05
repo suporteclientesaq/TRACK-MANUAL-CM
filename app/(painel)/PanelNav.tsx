@@ -7,6 +7,7 @@ const LINKS = [
   { href: "/dashboard", label: "📊 Dashboard", match: (p: string) => p.startsWith("/dashboard") },
   { href: "/", label: "Leads", match: (p: string) => p === "/" || p.startsWith("/leads") },
   { href: "/eventos", label: "Eventos", match: (p: string) => p.startsWith("/eventos") },
+  { href: "/whatsapp", label: "💬 Conectar WhatsApp", match: (p: string) => p.startsWith("/whatsapp") },
   { href: "/clientes", label: "Clientes", match: (p: string) => p.startsWith("/clientes") },
   { href: "/configuracoes", label: "Configurações", match: (p: string) => p.startsWith("/configuracoes") },
 ];

@@ -40,6 +40,7 @@ export default async function ClientPage({
   const host = h.get("x-forwarded-host") || h.get("host") || "localhost:3000";
   const proto = h.get("x-forwarded-proto") || "http";
   const webhookUrl = client ? `${proto}://${host}/api/webhook/leona/${client.webhook_key}` : "";
+  const evolutionWebhookUrl = client ? `${proto}://${host}/api/webhook/evolution/${client.webhook_key}` : "";
 
   return (
     <>
@@ -66,50 +67,31 @@ export default async function ClientPage({
 
       {client && (
         <div className="card">
-          <h2>Como os Leads Entram</h2>
-          {isOnline() ? (
-            <>
-              <p>
-                O painel está na internet, então a Leona pode mandar cada lead novo sozinha. No fluxo de boas-vindas,
-                logo depois do início, adicione um bloco de <strong>Integração</strong> com método{" "}
-                <strong>POST</strong>, cabeçalho <span className="mono">Content-Type: application/json</span>, o
-                endereço e o corpo abaixo. Ligue as duas saídas do bloco (sucesso e falha) ao passo seguinte, para o
-                lead nunca ficar parado.
-              </p>
-              <CopyBox label="Endereço (URL) — Trate Como Senha" value={webhookUrl} />
-              <CopyBox label="Corpo (JSON)" value={LEONA_BODY} multiline />
-              <div className="note note-warn">
-                Confira os nomes das variáveis no seletor de variáveis da Leona ao montar o bloco. Os campos de anúncio
-                aparecem lá como CTWA Click ID, Source ID, Source URL, Thumbnail URL e Media URL. Depois do primeiro
-                lead, abra-o aqui e veja em “Dados Brutos Recebidos” exatamente o que chegou.
-              </div>
-              <p className="muted small">
-                Para trazer os contatos antigos, use <Link href="/leads/importar">Importar</Link> com o CSV exportado da
-                Leona.
-              </p>
-            </>
-          ) : (
-            <>
-              <p>
-                O caminho normal é <Link href="/leads/importar">Importar</Link>: exporte os contatos na Leona e traga o
-                CSV. Quem já existe é atualizado pelo telefone, então pode repetir sempre que quiser.
-              </p>
-              <details>
-                <summary>Entrada automática pela Leona (só funciona com o painel em um endereço público)</summary>
-                <p className="muted small" style={{ marginTop: 10 }}>
-                  Rodando só no seu computador, a Leona não alcança o painel. Se o painel estiver publicado (Netlify,
-                  Vercel ou um túnel), adicione no fluxo de boas-vindas da Leona um bloco de{" "}
-                  <strong>Integração</strong> com método <strong>POST</strong>, cabeçalho{" "}
-                  <span className="mono">Content-Type: application/json</span>, o endereço e o corpo abaixo, trocando{" "}
-                  <span className="mono">{host}</span> pelo endereço público.
-                </p>
-                <CopyBox label="Endereço (URL) — Trate Como Senha" value={webhookUrl} />
-                <CopyBox label="Corpo (JSON)" value={LEONA_BODY} multiline />
-              </details>
-            </>
-          )}
+          <h2>Como os Leads Entram Automaticamente</h2>
+
+          <div style={{ marginBottom: "20px" }}>
+            <h3 style={{ fontSize: "15px", margin: "0 0 6px 0", color: "#34c77b" }}>
+              Opção 1: Webhook Evolution API (WhatsApp Direto)
+            </h3>
+            <p className="muted small" style={{ margin: "0 0 10px 0" }}>
+              Conecte sua instância da Evolution API (v1 ou v2). No painel da Evolution, configure este webhook ativando o evento <strong>MESSAGES_UPSERT</strong>. O Track Manual puxará automaticamente o telefone, nome, anúncio e o código <strong>ctwa_clid</strong> a cada nova conversa!
+            </p>
+            <CopyBox label="URL do Webhook Evolution API — Trate Como Senha" value={evolutionWebhookUrl} />
+          </div>
+
+          <div style={{ borderTop: "1px solid var(--border)", paddingTop: "16px" }}>
+            <h3 style={{ fontSize: "15px", margin: "0 0 6px 0", color: "#b394ff" }}>
+              Opção 2: Webhook Leona (Fluxo de Chatbot)
+            </h3>
+            <p className="muted small" style={{ margin: "0 0 10px 0" }}>
+              Para receber contatos pelo fluxo da Leona, adicione um bloco de <strong>Integração HTTP (POST)</strong> com cabeçalho <span className="mono">Content-Type: application/json</span>.
+            </p>
+            <CopyBox label="URL do Webhook Leona" value={webhookUrl} />
+            <CopyBox label="Corpo (JSON)" value={LEONA_BODY} multiline />
+          </div>
         </div>
       )}
     </>
   );
 }
+

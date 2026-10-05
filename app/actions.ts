@@ -9,6 +9,7 @@ import { appSecret, hasPassword, setPassword, verifyPassword } from "@/lib/confi
 import { decrypt, encrypt } from "@/lib/crypto";
 import { decodeCsv, parseCsv, rowsToRecords } from "@/lib/csv";
 import { metaApiVersion } from "@/lib/env";
+import { evolutionCreateOrConnect, evolutionGetState, evolutionLogout } from "@/lib/evolution";
 import { ingestMany } from "@/lib/ingest";
 import { buildEvent, fetchAd, sendEvent } from "@/lib/meta";
 import { normalizePhone, parseMoney, ufFromPhone } from "@/lib/normalize";
@@ -534,3 +535,56 @@ export async function syncDashboardMetaAction(clientId?: string | null): Promise
       : "Nenhum anúncio precisou de atualização.",
   };
 }
+
+// ---------------------------------------------------------------------------
+// Conexão WhatsApp via Evolution API (QR Code)
+// ---------------------------------------------------------------------------
+
+export async function getEvolutionStatusAction(opts: {
+  serverUrl: string;
+  apiKey: string;
+  instanceName: string;
+}): Promise<{ ok: boolean; state: string; error?: string }> {
+  await requireAuth();
+  return evolutionGetState(opts);
+}
+
+export async function connectEvolutionAction(opts: {
+  serverUrl: string;
+  apiKey: string;
+  instanceName: string;
+  clientId: string;
+}): Promise<{
+  ok: boolean;
+  state: "open" | "connecting" | "close";
+  qrcode: string | null;
+  error?: string;
+}> {
+  await requireAuth();
+  const client = await getClient(opts.clientId);
+  if (!client) return { ok: false, state: "close", qrcode: null, error: "Cliente não encontrado." };
+
+  const h = await headers();
+  const host = h.get("x-forwarded-host") || h.get("host") || "localhost:3000";
+  const proto = h.get("x-forwarded-proto") || "http";
+  const webhookUrl = `${proto}://${host}/api/webhook/evolution/${client.webhook_key}`;
+
+  return evolutionCreateOrConnect(
+    {
+      serverUrl: opts.serverUrl,
+      apiKey: opts.apiKey,
+      instanceName: opts.instanceName,
+    },
+    webhookUrl
+  );
+}
+
+export async function disconnectEvolutionAction(opts: {
+  serverUrl: string;
+  apiKey: string;
+  instanceName: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  await requireAuth();
+  return evolutionLogout(opts);
+}
+
