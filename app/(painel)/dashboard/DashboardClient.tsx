@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   ArrowUpRight,
@@ -11,6 +11,7 @@ import {
   GitMerge,
   Layers,
   MessageSquare,
+  Radio,
   RefreshCw,
   Search,
   Sparkles,
@@ -29,42 +30,92 @@ interface DashboardClientProps {
 }
 
 export function DashboardClient({ data }: DashboardClientProps) {
+  const [currentData, setCurrentData] = useState<DashboardData>(data);
   const [activeTab, setActiveTab] = useState<"campanhas" | "conjuntos" | "anuncios" | "funil">("campanhas");
   const [searchQuery, setSearchQuery] = useState("");
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isLoadingFilter, setIsLoadingFilter] = useState(false);
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
+  const [lastUpdated, setLastUpdated] = useState<string>("agora");
   const [hoveredPoint, setHoveredPoint] = useState<number | null>(null);
 
   // Filtro de data customizada
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
 
-  const { kpis, chart, campaigns, adsets, ads, funnel, currency } = data;
+  // Sincroniza se a prop inicial mudar
+  useEffect(() => {
+    setCurrentData(data);
+  }, [data]);
 
-  const handlePeriodChange = (p: string) => {
+  // Busca rápida assíncrona ao trocar período ou cliente (sem reload completo de tela)
+  const fetchLiveFilter = async (period?: string, client?: string | null) => {
+    setIsLoadingFilter(true);
     const params = new URLSearchParams(window.location.search);
-    params.set("periodo", p);
-    window.location.href = `/dashboard?${params.toString()}`;
+    if (period !== undefined) params.set("periodo", period);
+    if (client !== undefined) {
+      if (client) params.set("cliente", client);
+      else params.delete("cliente");
+    }
+    const newUrl = `/dashboard?${params.toString()}`;
+    window.history.pushState(null, "", newUrl);
+
+    try {
+      const res = await fetch(`/api/dashboard/live?${params.toString()}`, { cache: "no-store" });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.ok && json.data) {
+          setCurrentData(json.data);
+          const d = new Date();
+          setLastUpdated(`${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}:${d.getSeconds().toString().padStart(2, "0")}`);
+        }
+      }
+    } catch {
+      window.location.href = newUrl;
+    } finally {
+      setIsLoadingFilter(false);
+    }
   };
 
-  const handleClientChange = (cId: string) => {
-    const params = new URLSearchParams(window.location.search);
-    if (cId) params.set("cliente", cId);
-    else params.delete("cliente");
-    window.location.href = `/dashboard?${params.toString()}`;
-  };
+  // Polling em tempo real a cada 6 segundos
+  useEffect(() => {
+    if (!autoRefreshEnabled) return;
+    const interval = setInterval(async () => {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        if (!params.get("periodo") && currentData.filterPeriod) {
+          params.set("periodo", currentData.filterPeriod);
+        }
+        if (!params.get("cliente") && currentData.filterClient) {
+          params.set("cliente", currentData.filterClient);
+        }
+        const res = await fetch(`/api/dashboard/live?${params.toString()}`, { cache: "no-store" });
+        if (res.ok) {
+          const json = await res.json();
+          if (json.ok && json.data) {
+            setCurrentData(json.data);
+            const d = new Date();
+            setLastUpdated(`${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}:${d.getSeconds().toString().padStart(2, "0")}`);
+          }
+        }
+      } catch {
+        // silencioso
+      }
+    }, 6000);
+    return () => clearInterval(interval);
+  }, [autoRefreshEnabled, currentData.filterPeriod, currentData.filterClient]);
 
-  const handleCustomDateSubmit = (e: React.FormEvent) => {
+  const handleCustomDateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!customStart || !customEnd) return;
-    const params = new URLSearchParams(window.location.search);
-    params.set("periodo", `${customStart}_${customEnd}`);
-    window.location.href = `/dashboard?${params.toString()}`;
+    await fetchLiveFilter(`${customStart}_${customEnd}`, currentData.filterClient);
   };
 
   const handleStartSync = async () => {
     setIsSyncing(true);
     try {
-      await syncDashboardMetaAction(data.filterClient);
+      await syncDashboardMetaAction(currentData.filterClient);
+      await fetchLiveFilter(currentData.filterPeriod, currentData.filterClient);
     } catch (e) {
       console.error("Erro na sincronização:", e);
     }
@@ -76,6 +127,8 @@ export function DashboardClient({ data }: DashboardClientProps) {
     { label: "Cruzando criativos, cliques e conversões…", threshold: 85 },
     { label: "Atualizando dados reais de ROI e ROAS…", threshold: 100 },
   ];
+
+  const { kpis, chart, campaigns, adsets, ads, funnel, currency } = currentData;
 
   // Cálculo de escala do gráfico
   const maxVal = Math.max(...chart.map((c) => Math.max(c.revenue, c.spend)), 100);
@@ -102,7 +155,7 @@ export function DashboardClient({ data }: DashboardClientProps) {
         steps={syncSteps}
         onClose={() => {
           setIsSyncing(false);
-          window.location.reload();
+          fetchLiveFilter(currentData.filterPeriod, currentData.filterClient);
         }}
       />
 
@@ -138,6 +191,38 @@ export function DashboardClient({ data }: DashboardClientProps) {
               <Sparkles size={12} />
               MODELO UTMFY
             </span>
+
+            {/* Badge de Tempo Real com pulso */}
+            <div
+              onClick={() => setAutoRefreshEnabled(!autoRefreshEnabled)}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "6px",
+                padding: "3px 10px",
+                borderRadius: "999px",
+                background: autoRefreshEnabled ? "rgba(52, 199, 123, 0.12)" : "rgba(255, 255, 255, 0.05)",
+                border: autoRefreshEnabled ? "1px solid rgba(52, 199, 123, 0.35)" : "1px solid var(--border)",
+                color: autoRefreshEnabled ? "#34c77b" : "var(--text-muted)",
+                fontSize: "11px",
+                fontWeight: 700,
+                cursor: "pointer",
+                userSelect: "none",
+              }}
+              title="Clique para pausar ou retomar atualização automática em tempo real"
+            >
+              <span
+                style={{
+                  width: "7px",
+                  height: "7px",
+                  borderRadius: "50%",
+                  background: autoRefreshEnabled ? "#34c77b" : "#888",
+                  boxShadow: autoRefreshEnabled ? "0 0 10px #34c77b" : "none",
+                  display: "inline-block",
+                }}
+              />
+              {autoRefreshEnabled ? `AO VIVO (${lastUpdated})` : "PAUSADO"}
+            </div>
           </div>
           <p className="muted small" style={{ margin: "4px 0 0 0" }}>
             Métricas em tempo real de anúncios Click-to-WhatsApp, vendas rastreadas e ROAS ponta a ponta.
@@ -147,10 +232,10 @@ export function DashboardClient({ data }: DashboardClientProps) {
         {/* Controles de Filtro e Sincronização */}
         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "10px" }}>
           {/* Seletor de Cliente */}
-          {data.clients.length > 1 && (
+          {currentData.clients.length > 1 && (
             <select
-              value={data.filterClient || ""}
-              onChange={(e) => handleClientChange(e.target.value)}
+              value={currentData.filterClient || ""}
+              onChange={(e) => fetchLiveFilter(currentData.filterPeriod, e.target.value)}
               style={{
                 padding: "7px 12px",
                 borderRadius: "8px",
@@ -161,7 +246,7 @@ export function DashboardClient({ data }: DashboardClientProps) {
               }}
             >
               <option value="">Todos os Clientes</option>
-              {data.clients.map((c) => (
+              {currentData.clients.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
                 </option>
@@ -169,7 +254,7 @@ export function DashboardClient({ data }: DashboardClientProps) {
             </select>
           )}
 
-          {/* Filtros Rápidos de Período com Links Diretos */}
+          {/* Filtros Rápidos de Período com alternância instantânea */}
           <div
             style={{
               display: "flex",
@@ -189,12 +274,13 @@ export function DashboardClient({ data }: DashboardClientProps) {
               { id: "mes", label: "Este Mês" },
               { id: "todos", label: "Tudo" },
             ].map((p) => {
-              const active = data.filterPeriod === p.id;
-              const targetUrl = `/dashboard?periodo=${p.id}${data.filterClient ? `&cliente=${data.filterClient}` : ""}`;
+              const active = currentData.filterPeriod === p.id;
               return (
-                <Link
+                <button
                   key={p.id}
-                  href={targetUrl}
+                  type="button"
+                  onClick={() => fetchLiveFilter(p.id, currentData.filterClient)}
+                  disabled={isLoadingFilter}
                   style={{
                     background: active ? "var(--brand)" : "transparent",
                     color: active ? "#ffffff" : "var(--text-muted)",
@@ -202,16 +288,29 @@ export function DashboardClient({ data }: DashboardClientProps) {
                     padding: "5px 11px",
                     fontSize: "12px",
                     fontWeight: active ? 700 : 500,
-                    textDecoration: "none",
+                    border: "none",
+                    cursor: "pointer",
                     display: "inline-block",
                     transition: "all 150ms ease",
                   }}
                 >
                   {p.label}
-                </Link>
+                </button>
               );
             })}
           </div>
+
+          {/* Botão Atualizar Agora */}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => fetchLiveFilter(currentData.filterPeriod, currentData.filterClient)}
+            disabled={isLoadingFilter}
+            style={{ height: "30px", padding: "0 10px", fontSize: "12px", gap: "6px" }}
+          >
+            <RefreshCw size={13} className={isLoadingFilter ? "animate-spin" : undefined} />
+            Atualizar
+          </Button>
 
           {/* Seletor Customizado de Data (De / Até) */}
           <form

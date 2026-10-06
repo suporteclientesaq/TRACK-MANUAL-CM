@@ -70,38 +70,83 @@ export function parseEvolutionWebhook(
         ? item.verifiedName.trim()
         : null;
 
-  // Busca dados de contextInfo e anúncio (CTWA) dentro da mensagem
-  const message = (item.message || {}) as Record<string, unknown>;
+  // Unwraps wrapper message types (ephemeral, viewOnce, documentWithCaption)
+  let rawMessage = (item.message || {}) as Record<string, unknown>;
+  let depth = 0;
+  while (depth < 5) {
+    depth++;
+    const inner =
+      (rawMessage.ephemeralMessage as Record<string, unknown>)?.message ||
+      (rawMessage.viewOnceMessage as Record<string, unknown>)?.message ||
+      (rawMessage.viewOnceMessageV2 as Record<string, unknown>)?.message ||
+      (rawMessage.documentWithCaptionMessage as Record<string, unknown>)?.message;
+    if (inner && typeof inner === "object") {
+      rawMessage = inner as Record<string, unknown>;
+    } else {
+      break;
+    }
+  }
 
-  // Extrai texto da conversa
+  // Extrai texto da conversa de múltiplos formatos possíveis
+  const ext = (rawMessage.extendedTextMessage || {}) as Record<string, unknown>;
+  const img = (rawMessage.imageMessage || {}) as Record<string, unknown>;
+  const vid = (rawMessage.videoMessage || {}) as Record<string, unknown>;
+  const doc = (rawMessage.documentMessage || {}) as Record<string, unknown>;
+  const btn = (rawMessage.buttonsResponseMessage || {}) as Record<string, unknown>;
+  const tpl = (rawMessage.templateButtonReplyMessage || {}) as Record<string, unknown>;
+
   const conversation =
-    typeof message.conversation === "string"
-      ? message.conversation
-      : typeof (message.extendedTextMessage as Record<string, unknown>)?.text === "string"
-        ? String((message.extendedTextMessage as Record<string, unknown>).text)
-        : null;
+    typeof rawMessage.conversation === "string" && rawMessage.conversation.trim()
+      ? rawMessage.conversation.trim()
+      : typeof ext.text === "string" && ext.text.trim()
+        ? ext.text.trim()
+        : typeof img.caption === "string" && img.caption.trim()
+          ? img.caption.trim()
+          : typeof vid.caption === "string" && vid.caption.trim()
+            ? vid.caption.trim()
+            : typeof doc.caption === "string" && doc.caption.trim()
+              ? doc.caption.trim()
+              : typeof btn.selectedButtonText === "string" && btn.selectedButtonText.trim()
+                ? btn.selectedButtonText.trim()
+                : typeof tpl.selectedDisplayText === "string" && tpl.selectedDisplayText.trim()
+                  ? tpl.selectedDisplayText.trim()
+                  : null;
 
   // contextInfo pode estar em vários lugares dependendo do tipo da mensagem
-  const extended = (message.extendedTextMessage || {}) as Record<string, unknown>;
-  const imageMsg = (message.imageMessage || {}) as Record<string, unknown>;
-  const videoMsg = (message.videoMessage || {}) as Record<string, unknown>;
-
   const contextInfo =
-    (extended.contextInfo as Record<string, unknown>) ||
-    (imageMsg.contextInfo as Record<string, unknown>) ||
-    (videoMsg.contextInfo as Record<string, unknown>) ||
-    (message.contextInfo as Record<string, unknown>) ||
+    (ext.contextInfo as Record<string, unknown>) ||
+    (img.contextInfo as Record<string, unknown>) ||
+    (vid.contextInfo as Record<string, unknown>) ||
+    (doc.contextInfo as Record<string, unknown>) ||
+    (rawMessage.contextInfo as Record<string, unknown>) ||
     (item.contextInfo as Record<string, unknown>) ||
     {};
 
-  // CTWA Click ID
+  // CTWA Click ID com conversão de Buffer / Uint8Array (Protobuf Baileys)
   const ctwaClidRaw =
     contextInfo.ctwaClid ||
     contextInfo.conversionData ||
     contextInfo.ctwa_clid ||
+    contextInfo.conversion_data ||
     item.ctwaClid ||
+    item.ctwa_clid ||
     null;
-  const ctwa_clid = typeof ctwaClidRaw === "string" && ctwaClidRaw.trim() ? ctwaClidRaw.trim() : null;
+
+  let ctwa_clid: string | null = null;
+  if (ctwaClidRaw != null) {
+    if (typeof ctwaClidRaw === "string" && ctwaClidRaw.trim()) {
+      ctwa_clid = ctwaClidRaw.trim();
+    } else if (Buffer.isBuffer(ctwaClidRaw)) {
+      const s = ctwaClidRaw.toString("utf-8").trim();
+      if (s) ctwa_clid = s;
+    } else if (ctwaClidRaw instanceof Uint8Array) {
+      const s = Buffer.from(ctwaClidRaw).toString("utf-8").trim();
+      if (s) ctwa_clid = s;
+    } else {
+      const s = String(ctwaClidRaw).trim();
+      if (s && s !== "[object Object]") ctwa_clid = s;
+    }
+  }
 
   // Dados do anúncio (externalAdReply)
   const adReply =
@@ -109,11 +154,47 @@ export function parseEvolutionWebhook(
     (item.externalAdReply as Record<string, unknown>) ||
     {};
 
-  const sourceIdRaw = adReply.sourceId || adReply.source_id || adReply.adId || item.source_id;
-  const source_id = typeof sourceIdRaw === "string" && sourceIdRaw.trim() ? sourceIdRaw.trim() : null;
+  const sourceIdRaw =
+    adReply.sourceId ??
+    adReply.source_id ??
+    adReply.adId ??
+    adReply.ad_id ??
+    item.sourceId ??
+    item.source_id;
+
+  let source_id: string | null = null;
+  if (sourceIdRaw != null) {
+    const s = String(sourceIdRaw).trim();
+    if (s && s !== "0" && s !== "null" && s !== "undefined") {
+      source_id = s;
+    }
+  }
 
   const sourceUrlRaw = adReply.sourceUrl || adReply.source_url || item.source_url;
-  const source_url = typeof sourceUrlRaw === "string" && sourceUrlRaw.trim() ? sourceUrlRaw.trim() : null;
+  let source_url = typeof sourceUrlRaw === "string" && sourceUrlRaw.trim() ? sourceUrlRaw.trim() : null;
+
+  // Se ctwa_clid ou source_id não veio no contextInfo, tenta resgatar da URL do anúncio
+  if (source_url) {
+    try {
+      const u = new URL(source_url);
+      if (!ctwa_clid) {
+        ctwa_clid = u.searchParams.get("ctwa_clid") || u.searchParams.get("fbclid") || null;
+      }
+      if (!source_id) {
+        const urlAd = u.searchParams.get("ad_id") || u.searchParams.get("hsa_ad") || u.searchParams.get("ad");
+        if (urlAd) source_id = urlAd;
+      }
+    } catch {
+      if (!ctwa_clid) {
+        const m = source_url.match(/(?:ctwa_clid|fbclid)=([^&]+)/i);
+        if (m) ctwa_clid = decodeURIComponent(m[1]);
+      }
+      if (!source_id) {
+        const m = source_url.match(/(?:ad_id|hsa_ad)=(\d+)/i);
+        if (m) source_id = m[1];
+      }
+    }
+  }
 
   const thumbRaw = adReply.thumbnailUrl || adReply.thumbnail_url || item.thumbnail_url;
   const thumbnail_url = typeof thumbRaw === "string" && thumbRaw.trim() ? thumbRaw.trim() : null;

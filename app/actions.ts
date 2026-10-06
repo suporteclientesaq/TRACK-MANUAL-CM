@@ -628,4 +628,43 @@ export async function disconnectNativeWhatsAppAction(clientId: string): Promise<
   return disconnectNativeWhatsApp(clientId);
 }
 
+// ---------------------------------------------------------------------------
+// Importação de proposta via arquivo .TXT (arrastar e soltar na aba Eventos)
+// ---------------------------------------------------------------------------
 
+export async function importFromTxtAction(
+  clientId: string,
+  text: string
+): Promise<{
+  ok: boolean;
+  leadId?: string;
+  name?: string | null;
+  phone?: string | null;
+  error?: string;
+}> {
+  await requireAuth();
+  if (!clientId) return { ok: false, error: "Cliente não selecionado." };
+
+  const { parseTxtProposal } = await import("@/lib/parse-txt");
+  const { ingestLead } = await import("@/lib/ingest");
+
+  const parsed = parseTxtProposal(text);
+  if (!parsed.ok) return { ok: false, error: parsed.error };
+
+  const { name, phone, city, state, zip, notes } = parsed.fields;
+  if (!phone) return { ok: false, error: "Telefone não encontrado no arquivo." };
+
+  const result = await ingestLead(
+    clientId,
+    { name, phone, city, state, zip, notes },
+    "manual"
+  );
+
+  if (!result.ok) return { ok: false, error: result.error };
+
+  revalidatePath("/");
+  revalidatePath("/leads");
+  revalidatePath("/eventos");
+
+  return { ok: true, leadId: result.leadId, name, phone };
+}

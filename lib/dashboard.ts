@@ -133,18 +133,21 @@ export function getPeriodRange(period: string): { start: Date; end: Date } {
 export async function getDashboardData(filter: DashboardFilter = {}): Promise<DashboardData> {
   const period = filter.period || "30d";
   const { start, end } = getPeriodRange(period);
-  const clientsList = await listClients();
+
+  // ─── 1. Busca clientes, leads e eventos em paralelo (latência mínima) ───
+  const [clientsList, allLeads, allEvents] = await Promise.all([
+    listClients(),
+    listLeads({
+      clientId: filter.clientId || null,
+      filter: "todos",
+      offset: 0,
+      limit: 10000,
+    }),
+    listEvents({ status: "enviado", limit: 10000, offset: 0 }),
+  ]);
 
   const selectedClient = filter.clientId ? clientsList.find((c) => c.id === filter.clientId) : null;
   const currency = selectedClient?.default_currency || clientsList[0]?.default_currency || "BRL";
-
-  // ─── 1. Busca todos os leads para mapa de atribuição last-click ───
-  const allLeads = await listLeads({
-    clientId: filter.clientId || null,
-    filter: "todos",
-    offset: 0,
-    limit: 10000,
-  });
 
   const attributionMap = buildAttributionMap(allLeads, filter.clientId);
 
@@ -153,9 +156,6 @@ export async function getDashboardData(filter: DashboardFilter = {}): Promise<Da
     const d = new Date(l.first_seen_at);
     return d >= start && d <= end;
   });
-
-  // ─── 3. Busca eventos enviados ───
-  const allEvents = await listEvents({ status: "enviado", limit: 10000, offset: 0 });
 
   const periodEvents = allEvents.filter((e) => {
     if (filter.clientId && e.client_id !== filter.clientId) return false;

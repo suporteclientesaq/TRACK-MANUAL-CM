@@ -1,6 +1,7 @@
 import "server-only";
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -26,7 +27,15 @@ import type { EventRow } from "./types";
  */
 
 export function dataDir(): string {
-  const dir = process.env.TRACK_DATA_DIR?.trim() || path.join(process.cwd(), "data");
+  if (process.env.TRACK_DATA_DIR?.trim()) {
+    const dir = process.env.TRACK_DATA_DIR.trim();
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+  const isServerless =
+    Boolean(process.env.NETLIFY || process.env.AWS_LAMBDA_FUNCTION_NAME) ||
+    (typeof process.cwd === "function" && process.cwd().startsWith("/var/task"));
+  const dir = isServerless ? path.join(os.tmpdir(), "track_data") : path.join(process.cwd(), "data");
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -106,6 +115,8 @@ create table if not exists events (
 );
 create index if not exists events_lead_idx on events (lead_id, created_at desc);
 create index if not exists events_client_idx on events (client_id, created_at desc);
+create index if not exists events_status_time_idx on events (status, event_time desc);
+create index if not exists leads_phone_idx on leads (phone);
 
 create table if not exists ad_cache (
   client_id      text not null references clients(id) on delete cascade,
@@ -143,7 +154,7 @@ function db(): DatabaseSync {
   // getBuiltinModule evita que o empacotador tente resolver o módulo nativo.
   const sqlite = process.getBuiltinModule("node:sqlite") as Sqlite;
   const conn = new sqlite.DatabaseSync(file);
-  conn.exec("pragma journal_mode = wal; pragma foreign_keys = on; pragma busy_timeout = 5000;");
+  conn.exec("pragma journal_mode = wal; pragma foreign_keys = on; pragma busy_timeout = 5000; pragma synchronous = normal; pragma cache_size = -64000; pragma temp_store = memory;");
   conn.exec(SCHEMA);
   g.__trackDb = conn;
   g.__trackDbPath = file;

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ChevronLeft, ChevronRight, Plus, Search, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { LivePoller } from "@/components/LivePoller";
 import { formatDateTime, formatMoney, formatPhone } from "@/lib/format";
 import { DeleteLeadButton } from "./leads/DeleteLeadButton";
 import { adsFor, listClients, listLeads, sentForLeads } from "@/lib/store";
@@ -59,7 +60,10 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
     <>
       <div className="page-head">
         <div>
-          <h1>Leads</h1>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <h1 style={{ margin: 0 }}>Leads</h1>
+            <LivePoller intervalMs={6000} label="AO VIVO • TEMPO REAL" />
+          </div>
           <p className="muted small">Abra um lead para conferir os dados e enviar o evento ao Meta.</p>
         </div>
         <div className="actions">

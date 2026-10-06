@@ -8,9 +8,19 @@ import makeWASocket, {
 import pino from "pino";
 import QRCode from "qrcode";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { ingestLead } from "./ingest";
 import { parseEvolutionWebhook } from "./evolution";
+
+export function isServerlessEnvironment(): boolean {
+  return Boolean(
+    process.env.NETLIFY ||
+    process.env.AWS_LAMBDA_FUNCTION_NAME ||
+    process.env.VERCEL ||
+    (typeof process.cwd === "function" && process.cwd().startsWith("/var/task"))
+  );
+}
 
 interface NativeSession {
   clientId: string;
@@ -32,16 +42,24 @@ if (!g.__nativeWhatsAppSessions) {
 }
 const sessions = g.__nativeWhatsAppSessions;
 
+function getBaseSessionDir(): string {
+  if (process.env.TRACK_DATA_DIR?.trim()) return process.env.TRACK_DATA_DIR.trim();
+  if (isServerlessEnvironment()) {
+    return path.join(os.tmpdir(), "track_data");
+  }
+  return path.join(process.cwd(), "data");
+}
+
 function getSessionDir(clientId: string): string {
   const safeId = clientId.replace(/[^a-zA-Z0-9_-]/g, "_");
-  const dir = path.join(process.cwd(), "data", "whatsapp_sessions", safeId);
+  const dir = path.join(getBaseSessionDir(), "whatsapp_sessions", safeId);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
 
 function cleanSessionDir(clientId: string): void {
   const safeId = clientId.replace(/[^a-zA-Z0-9_-]/g, "_");
-  const dir = path.join(process.cwd(), "data", "whatsapp_sessions", safeId);
+  const dir = path.join(getBaseSessionDir(), "whatsapp_sessions", safeId);
   try {
     if (fs.existsSync(dir)) {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -106,6 +124,16 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
   phone?: string | null;
   error?: string;
 }> {
+  if (isServerlessEnvironment()) {
+    return {
+      ok: false,
+      state: "close",
+      qrcode: null,
+      error:
+        "O modo 'WhatsApp Direto' roda como processo contínuo no seu computador (iniciar.bat) ou VPS. Na Netlify/nuvem serverless, conexões em segundo plano não podem ficar abertas. Para usar na Netlify, utilize a aba 'Evolution API (Servidor)'.",
+    };
+  }
+
   let session = sessions.get(clientId);
 
   if (session && session.state === "open" && session.socket) {

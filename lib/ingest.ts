@@ -1,7 +1,21 @@
 import "server-only";
+import { appSecret } from "./config";
+import { decrypt } from "./crypto";
+import { metaApiVersion } from "./env";
 import { mergeLead, parseLead, type ParsedLead } from "./leona";
+import { fetchAd } from "./meta";
 import { LEAD_BULK_COLS, nowIso } from "./store-rows";
-import { findLead, findLeadsByPhones, insertLead, insertLeads, isUniqueViolation, updateLead, updateLeadsBulk } from "./store";
+import {
+  findLead,
+  findLeadsByPhones,
+  getClient,
+  insertLead,
+  insertLeads,
+  isUniqueViolation,
+  updateLead,
+  updateLeadsBulk,
+  upsertAd,
+} from "./store";
 import type { Lead } from "./types";
 
 export type IngestResult =
@@ -9,8 +23,76 @@ export type IngestResult =
   | { ok: false; error: string };
 
 /**
+ * Enriquece dados do anúncio (Campanha, Conjunto, Criativo, Gasto) em tempo real
+ * no exato momento em que o lead manda mensagem no WhatsApp ou é importado.
+ */
+export async function enrichAdInRealTime(
+  clientId: string,
+  adId: string,
+  fallback?: {
+    creative_title?: string | null;
+    creative_body?: string | null;
+    thumbnail_url?: string | null;
+  }
+): Promise<void> {
+  if (!adId || !/^\d{6,}$/.test(adId)) return;
+
+  try {
+    // 1. Salva imediatamente o que veio no WhatsApp para exibir no painel na hora
+    await upsertAd({
+      client_id: clientId,
+      ad_id: adId,
+      ...(fallback?.creative_title ? { creative_title: fallback.creative_title, ad_name: fallback.creative_title } : {}),
+      ...(fallback?.creative_body ? { creative_body: fallback.creative_body } : {}),
+      ...(fallback?.thumbnail_url ? { thumbnail_url: fallback.thumbnail_url } : {}),
+    });
+
+    // 2. Busca o cliente para pegar o token do Meta
+    const client = await getClient(clientId);
+    if (!client) return;
+
+    const tokenEnc = client.marketing_token_enc || client.capi_token_enc;
+    if (!tokenEnc) return;
+
+    const secret = await appSecret();
+    const token = decrypt(tokenEnc, secret);
+    if (!token) return;
+
+    // 3. Consulta a Graph API do Meta para extrair Campanha, Conjunto, Anúncio e Criativo
+    const res = await fetchAd({
+      apiVersion: metaApiVersion(),
+      adId,
+      accessToken: token,
+    });
+
+    if (res.ok && res.ad) {
+      await upsertAd({
+        client_id: clientId,
+        ad_id: adId,
+        ad_name: res.ad.ad_name || fallback?.creative_title || `Anúncio #${adId.slice(-6)}`,
+        ad_status: res.ad.ad_status || "ACTIVE",
+        adset_id: res.ad.adset_id,
+        adset_name: res.ad.adset_name,
+        campaign_id: res.ad.campaign_id,
+        campaign_name: res.ad.campaign_name,
+        creative_title: res.ad.creative_title || fallback?.creative_title,
+        creative_body: res.ad.creative_body || fallback?.creative_body,
+        thumbnail_url: res.ad.thumbnail_url || fallback?.thumbnail_url,
+        spend: res.ad.spend,
+        impressions: res.ad.impressions,
+        clicks: res.ad.clicks,
+        conversations: res.ad.conversations,
+      });
+      console.log(`[Track Manual] Anúncio ${adId} enriquecido em tempo real: Campanha="${res.ad.campaign_name}", Conjunto="${res.ad.adset_name}", Criativo="${res.ad.creative_title || res.ad.ad_name}"`);
+    }
+  } catch (err) {
+    console.warn(`[Track Manual] Aviso ao enriquecer anúncio ${adId} em tempo real:`, err);
+  }
+}
+
+/**
  * Cria ou atualiza um lead a partir de campos soltos (webhook da Leona,
- * formulário). Mesmo número no mesmo cliente = atualização.
+ * WhatsApp, formulário). Mesmo número no mesmo cliente = atualização.
  */
 export async function ingestLead(
   clientId: string,
@@ -21,6 +103,15 @@ export async function ingestLead(
   const parsed = parseLead(fields);
   if (!parsed.ok) return { ok: false, error: parsed.error };
   const incoming = parsed.lead;
+
+  // Dispara o enriquecimento de campanha, conjunto e criativo em tempo real
+  if (incoming.source_id) {
+    enrichAdInRealTime(clientId, incoming.source_id, {
+      creative_title: incoming.headline,
+      creative_body: incoming.ad_body,
+      thumbnail_url: incoming.thumbnail_url,
+    }).catch(() => {});
+  }
 
   const existing = await findLead(clientId, incoming.phone);
   const t = nowIso();
@@ -104,5 +195,12 @@ export async function ingestMany(clientId: string, records: Record<string, unkno
 
   if (toInsert.length) result.created = await insertLeads(toInsert);
   if (toUpdate.length) result.updated = await updateLeadsBulk(toUpdate);
+
+  // Dispara o enriquecimento de campanha, conjunto e criativo para todos os anúncios importados
+  const sourceIds = [...new Set([...byPhone.values()].map((l) => l.source_id).filter((s): s is string => Boolean(s)))];
+  for (const adId of sourceIds) {
+    enrichAdInRealTime(clientId, adId).catch(() => {});
+  }
+
   return result;
 }

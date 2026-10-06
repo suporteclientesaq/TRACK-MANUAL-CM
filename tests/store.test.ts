@@ -62,7 +62,13 @@ for (const mode of modes) {
       clientId = await store.insertClient({ name: "Continental MKT", pixel_id: "1704000000002274", page_id: "111" });
     });
 
-    afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
+    afterAll(() => {
+      try {
+        fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 3 });
+      } catch {
+        // ignora se o Windows ainda estiver liberando os handles do sqlite
+      }
+    });
 
     it("cliente ganha chave de webhook e é encontrado por ela", async () => {
       const c = (await store.getClient(clientId))!;
