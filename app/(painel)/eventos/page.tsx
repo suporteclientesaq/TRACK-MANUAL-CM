@@ -3,22 +3,20 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { LivePoller } from "@/components/LivePoller";
 import { formatDateTime, formatMoney, formatPhone } from "@/lib/format";
-import { listClients, listEvents, recentSent } from "@/lib/store";
+import { listEvents, recentSent } from "@/lib/store";
 import { eventLabel } from "@/lib/types";
-import { ClientSelectorForTxt } from "@/components/ClientSelectorForTxt";
 
 const PAGE_SIZE = 50;
 
 export default async function EventsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string; pagina?: string; cliente?: string }>;
+  searchParams: Promise<{ status?: string; pagina?: string }>;
 }) {
   const sp = await searchParams;
   const page = Math.max(1, Number(sp.pagina) || 1);
 
-  const [clients, all, recent] = await Promise.all([
-    listClients(),
+  const [all, recent] = await Promise.all([
     listEvents({ status: sp.status, offset: (page - 1) * PAGE_SIZE, limit: PAGE_SIZE + 1 }),
     recentSent(new Date(Date.now() - 30 * 86_400_000).toISOString()),
   ]);
@@ -29,16 +27,13 @@ export default async function EventsPage({
   const purchases = recent.filter((e) => e.event_name === "Purchase");
   const revenue = purchases.reduce((sum, e) => sum + (e.value || 0), 0);
 
-  const link = (p: number, status = sp.status, cliente = sp.cliente) => {
+  const link = (p: number, status = sp.status) => {
     const params = new URLSearchParams();
     if (status) params.set("status", status);
-    if (cliente) params.set("cliente", cliente);
     if (p > 1) params.set("pagina", String(p));
     const s = params.toString();
     return s ? `/eventos?${s}` : "/eventos";
   };
-
-  const defaultClientId = sp.cliente || clients[0]?.id || "";
 
   return (
     <>
@@ -66,25 +61,6 @@ export default async function EventsPage({
         </div>
       </div>
 
-      {/* ─── Importar Proposta via .TXT ─────────────────────────────────── */}
-      {clients.length > 0 && (
-        <div className="card" style={{ marginBottom: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-            <div>
-              <p style={{ margin: 0, fontWeight: 600, fontSize: 15 }}>📄 Importar Proposta</p>
-              <p className="muted small" style={{ margin: 0 }}>
-                Arraste um arquivo <strong>.txt</strong> de proposta comercial para cadastrar o lead automaticamente.
-              </p>
-            </div>
-          </div>
-          <ClientSelectorForTxt
-            clients={clients.map((c) => ({ id: c.id, name: c.name }))}
-            defaultClientId={defaultClientId}
-          />
-        </div>
-      )}
-
-      {/* ─── Tabela de Eventos ───────────────────────────────────────────── */}
       <div className="card table-wrap">
         {events.length === 0 ? (
           <p className="muted">Nenhum evento por aqui.</p>

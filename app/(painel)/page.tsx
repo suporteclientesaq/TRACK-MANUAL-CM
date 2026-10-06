@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { LivePoller } from "@/components/LivePoller";
 import { formatDateTime, formatMoney, formatPhone } from "@/lib/format";
 import { DeleteLeadButton } from "./leads/DeleteLeadButton";
+import { ClientSelectorForTxt } from "@/components/ClientSelectorForTxt";
+import { SyncMetaButton } from "@/components/SyncMetaButton";
 import { adsFor, listClients, listLeads, sentForLeads } from "@/lib/store";
 import { eventLabel } from "@/lib/types";
 
@@ -104,6 +106,27 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
           Filtrar
         </Button>
       </form>
+
+      {/* ─── Importar Proposta .TXT + Sincronizar Meta ───────────────────── */}
+      <div className="card" style={{ display: "flex", flexWrap: "wrap", gap: 24, alignItems: "flex-start" }}>
+        {/* Drop zone de proposta */}
+        <div style={{ flex: "1 1 320px", minWidth: 280 }}>
+          <p style={{ margin: "0 0 8px", fontWeight: 600, fontSize: 14 }}>📄 Importar Proposta (.txt)</p>
+          <ClientSelectorForTxt
+            clients={clients.map((c) => ({ id: c.id, name: c.name }))}
+            defaultClientId={sp.cliente || clients[0]?.id || ""}
+          />
+        </div>
+
+        {/* Sincronizar dados do Meta */}
+        <div style={{ flex: "1 1 260px", minWidth: 220 }}>
+          <p style={{ margin: "0 0 8px", fontWeight: 600, fontSize: 14 }}>📊 Dados do Meta</p>
+          <p className="muted small" style={{ margin: "0 0 10px" }}>
+            Atualiza campanha, conjunto, criativo, gasto, impressões, cliques e conversas de todos os anúncios.
+          </p>
+          <SyncMetaButton clientId={sp.cliente || null} />
+        </div>
+      </div>
 
       <div className="card table-wrap">
         {leads.length === 0 ? (
