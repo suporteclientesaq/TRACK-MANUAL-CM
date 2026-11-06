@@ -34,6 +34,8 @@ export interface EventLeadData {
   ctwa_clid: string | null;
   source_id: string | null;
   source_url: string | null;
+  /** Notas da proposta (pacote, investimento) — usado como content_name quando o campo é omitido. */
+  notes?: string | null;
 }
 
 export interface BuildEventInput {
@@ -139,10 +141,17 @@ export function buildEvent(input: BuildEventInput): BuiltEvent {
     if (!phone) errors.push("Sem ctwa_clid e sem telefone válido não há como o Meta identificar a pessoa.");
   }
 
-  // Correspondência avançada máxima (Event Match Quality):
-  // Sempre envia telefone e dados de usuário quando disponíveis para maximizar o match no Meta.
+  // Correspondência avançada máxima (Event Match Quality — EMQ):
+  // Com send_extra_data ativo (padrão) ou sem ctwa_clid, enviamos todos os sinais de
+  // identidade hasheados (telefone com variações, nome, e-mail, cidade, estado, CEP, país e ID).
+  // Isso atinge pontuação máxima no Meta (EMQ até 10/10) e vincula 100% dos dados.
   if (client.send_extra_data || !hasClid) {
-    if (phone) userData.ph = phoneVariants(phone).map(sha256Hex);
+    if (phone) {
+      userData.ph = phoneVariants(phone).map(sha256Hex);
+    }
+    userData.country = [sha256Hex(normalizeCountry(lead.country))];
+    userData.external_id = [sha256Hex(lead.id)];
+
     const email = normalizeEmail(lead.email);
     if (email) userData.em = [sha256Hex(email)];
     const { fn, ln } = splitName(lead.name);
@@ -154,8 +163,6 @@ export function buildEvent(input: BuildEventInput): BuiltEvent {
     if (st) userData.st = [sha256Hex(st)];
     const zp = normalizeZip(lead.zip);
     if (zp) userData.zp = [sha256Hex(zp)];
-    userData.country = [sha256Hex(normalizeCountry(lead.country))];
-    userData.external_id = [sha256Hex(lead.id)];
   }
 
   // ---- dados da conversão --------------------------------------------------
@@ -174,10 +181,20 @@ export function buildEvent(input: BuildEventInput): BuiltEvent {
     if (!/^[A-Z]{3}$/.test(currency)) errors.push("Moeda inválida. Use o código de 3 letras, como BRL.");
     else customData.currency = currency;
   }
+
+  // content_name: usa o campo do formulário; se vazio, usa notes do lead (ex: "Pacote: 18.000 | Investimento: R$ 247")
   const contentName = (input.contentName || "").trim();
-  if (contentName) customData.content_name = contentName;
+  if (contentName) {
+    customData.content_name = contentName;
+  } else if (lead.notes) {
+    // notes do lead (importado via .txt de proposta) — resumo do que foi vendido
+    const notes = String(lead.notes || "").trim();
+    if (notes) customData.content_name = notes.slice(0, 100); // Meta limita a 100 chars
+  }
 
   if (client.send_extra_data) {
+    // content_ids: ID do anúncio de origem — ajuda o Meta a fechar o loop de atribuição
+    if (lead.source_id) customData.content_ids = [lead.source_id];
     if (lead.source_id) customData.ctwa_source_id = lead.source_id;
     if (lead.source_url) customData.ctwa_source_url = lead.source_url;
   }
@@ -412,29 +429,34 @@ export async function fetchAd(opts: {
   const token = encodeURIComponent(opts.accessToken);
   const base = `${GRAPH}/${opts.apiVersion}/${opts.adId}`;
 
-  // Estratégia de fallback progressivo em 4 tentativas:
+  // Estratégia de fallback progressivo — do mais completo ao mais simples
   const attempts = [
-    // 1. Completa: anúncio com conjunto, campanha e criativo
+    // 1. Completa: anúncio com conjunto, campanha e criativo expandido (inclui object_story_spec para texto real)
     {
-      url: `${base}?fields=name,effective_status,adset{id,name},campaign{id,name},creative{title,body,thumbnail_url,image_url}&access_token=${token}`,
+      url: `${base}?fields=name,effective_status,adset{id,name},campaign{id,name},creative{id,title,body,thumbnail_url,image_url,object_story_spec{link_data{message,description,image_hash},video_data{message,image_url},photo_data{caption}}}&access_token=${token}`,
       type: "ad_full",
     },
-    // 2. Segura: campos padrão sem criativo aninhado
+    // 2. Criativo sem object_story_spec (compatibilidade)
+    {
+      url: `${base}?fields=name,effective_status,adset{id,name},campaign{id,name},creative{id,title,body,thumbnail_url,image_url}&access_token=${token}`,
+      type: "ad_creative",
+    },
+    // 3. Segura: campos padrão sem criativo aninhado
     {
       url: `${base}?fields=name,status,adset{id,name},campaign{id,name}&access_token=${token}`,
       type: "ad_safe",
     },
-    // 3. Básica: apenas nome
+    // 4. Básica: apenas nome
     {
       url: `${base}?fields=name&access_token=${token}`,
       type: "ad_basic",
     },
-    // 4. Caso o ID seja de um conjunto de anúncios
+    // 5. Caso o ID seja de um conjunto de anúncios
     {
       url: `${base}?fields=name,campaign{id,name}&access_token=${token}`,
       type: "adset",
     },
-    // 5. Caso o ID seja de uma campanha
+    // 6. Caso o ID seja de uma campanha
     {
       url: `${base}?fields=name&access_token=${token}`,
       type: "campaign",
@@ -458,7 +480,7 @@ export async function fetchAd(opts: {
         lastError = describeMetaError(json) || "Erro ao consultar Meta";
         const errObj = json.error as Record<string, unknown>;
         if (errObj.code === 190 || errObj.code === 102) {
-          // Token inválido/expirado não adianta tentar outros campos
+          // Token inválido/expirado — não adianta tentar outros campos
           return { ok: false, error: lastError };
         }
       }
@@ -471,11 +493,11 @@ export async function fetchAd(opts: {
     return { ok: false, error: lastError || "Não foi possível carregar os dados deste anúncio do Meta." };
   }
 
-  // Tenta buscar métricas de insights (não bloqueante)
+  // ── Insights: busca métricas completas ─────────────────────────────────────
   let insights: Record<string, unknown> | null = null;
   try {
     const insRes = await doFetch(
-      `${base}/insights?fields=spend,impressions,clicks,actions&date_preset=maximum&access_token=${token}`,
+      `${base}/insights?fields=spend,impressions,clicks,unique_clicks,reach,actions,action_values&date_preset=maximum&access_token=${token}`,
       { cache: "no-store" }
     );
     const insJson = (await insRes.json()) as { data?: Record<string, unknown>[] };
@@ -484,15 +506,72 @@ export async function fetchAd(opts: {
     insights = null;
   }
 
+  // ── Criativo expandido: se não veio thumbnail, busca o criativo separado ──
+  const creative = (adJson.creative || {}) as Record<string, unknown>;
+  let thumbnailUrl = str(creative.image_url) ?? str(creative.thumbnail_url);
+  let creativeTitle = str(creative.title);
+  let creativeBody = str(creative.body);
+
+  // Tenta extrair texto do object_story_spec (texto real do anúncio)
+  const storySpec = (creative.object_story_spec || {}) as Record<string, unknown>;
+  const linkData = (storySpec.link_data || {}) as Record<string, unknown>;
+  const videoData = (storySpec.video_data || {}) as Record<string, unknown>;
+  const photoData = (storySpec.photo_data || {}) as Record<string, unknown>;
+  const storyMessage = str(linkData.message) ?? str(videoData.message) ?? str(photoData.caption);
+  const storyDescription = str(linkData.description);
+
+  // Se o criativo tem texto real do anúncio e o body estava vazio, usa o texto real
+  if (!creativeBody && storyMessage) creativeBody = storyMessage;
+  if (!creativeTitle && storyDescription) creativeTitle = storyDescription;
+
+  // Se ainda não tem thumbnail e temos o creative_id, busca o criativo separado
+  const creativeId = str(creative.id);
+  if (!thumbnailUrl && creativeId) {
+    try {
+      const creativeRes = await doFetch(
+        `${GRAPH}/${opts.apiVersion}/${creativeId}?fields=thumbnail_url,image_url,body,title,object_story_spec{link_data{image_hash,picture,message},video_data{image_url,message}}&access_token=${token}`,
+        { cache: "no-store" }
+      );
+      const creativeJson = (await creativeRes.json()) as Record<string, unknown>;
+      if (creativeRes.ok && !creativeJson.error) {
+        thumbnailUrl = str(creativeJson.image_url) ?? str(creativeJson.thumbnail_url);
+        if (!creativeTitle) creativeTitle = str(creativeJson.title);
+        if (!creativeBody) creativeBody = str(creativeJson.body);
+        // Tenta extrair thumbnail do object_story_spec do criativo separado
+        const cs = (creativeJson.object_story_spec || {}) as Record<string, unknown>;
+        const ld = (cs.link_data || {}) as Record<string, unknown>;
+        const vd = (cs.video_data || {}) as Record<string, unknown>;
+        if (!thumbnailUrl) thumbnailUrl = str(ld.picture) ?? str(vd.image_url);
+        if (!creativeBody) creativeBody = str(ld.message) ?? str(vd.message);
+      }
+    } catch {
+      // Não bloqueia — fallback sem thumbnail
+    }
+  }
+
+  // ── Ações do Meta: identifica conversas e purchase ─────────────────────────
   const adset = (adJson.adset || {}) as Record<string, unknown>;
   const campaign = (adJson.campaign || {}) as Record<string, unknown>;
-  const creative = (adJson.creative || {}) as Record<string, unknown>;
   const actions = Array.isArray(insights?.actions)
     ? (insights!.actions as { action_type?: string; value?: string }[])
     : [];
-  const conv = actions.find((a) =>
-    (a.action_type || "").includes("messaging_conversation_started")
-  );
+
+  // Conversas iniciadas — todos os tipos que o Meta reporta
+  const CONV_ACTION_TYPES = [
+    "onsite_conversion.messaging_conversation_started_7d",
+    "messaging_conversation_started",
+    "onsite_conversion.messaging_first_reply",
+    "click_to_message_conversations_started",
+  ];
+  const convActions = actions.filter((a) => CONV_ACTION_TYPES.some((t) => (a.action_type || "").includes(t)));
+  const conversations = convActions.reduce((sum, a) => sum + (Number(a.value) || 0), 0) || null;
+
+  // Compras via action_values
+  const actionValues = Array.isArray(insights?.action_values)
+    ? (insights!.action_values as { action_type?: string; value?: string }[])
+    : [];
+  const purchaseVal = actionValues.find((a) => (a.action_type || "") === "purchase");
+  const purchaseValue = purchaseVal ? num(purchaseVal.value) : null;
 
   return {
     ok: true,
@@ -503,14 +582,109 @@ export async function fetchAd(opts: {
       adset_name: str(adset.name) || (successType === "adset" ? str(adJson.name) : null),
       campaign_id: str(campaign.id) || (successType === "campaign" ? opts.adId : null),
       campaign_name: str(campaign.name) || (successType === "campaign" ? str(adJson.name) : null),
-      creative_title: str(creative.title),
-      creative_body: str(creative.body),
-      thumbnail_url: str(creative.image_url) ?? str(creative.thumbnail_url),
+      creative_title: creativeTitle,
+      creative_body: creativeBody,
+      thumbnail_url: thumbnailUrl,
       spend: num(insights?.spend),
       impressions: num(insights?.impressions),
       clicks: num(insights?.clicks),
-      conversations: conv ? num(conv.value) : null,
-      raw: { ad: adJson, insights, successType },
+      conversations,
+      raw: { ad: adJson, insights, successType, purchaseValue },
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Consulta Completa da Conta de Anúncios (act_...) com Gastos e Campanhas
+// ---------------------------------------------------------------------------
+
+export async function fetchAdAccountAdsAndInsights(opts: {
+  apiVersion: string;
+  adAccountId?: string | null;
+  accessToken: string;
+  fetchImpl?: FetchLike;
+}): Promise<{ ok: true; ads: FetchedAd[]; accountId: string } | { ok: false; error: string }> {
+  const doFetch = opts.fetchImpl ?? fetch;
+  const token = encodeURIComponent(opts.accessToken);
+
+  let targetAccountId = (opts.adAccountId || "").trim();
+
+  // Se não foi informado ad_account_id, tenta descobrir automaticamente via /me/adaccounts
+  if (!targetAccountId) {
+    try {
+      const meRes = await doFetch(
+        `${GRAPH}/${opts.apiVersion}/me/adaccounts?fields=id,name,account_id&limit=1&access_token=${token}`,
+        { cache: "no-store" }
+      );
+      const meJson = (await meRes.json()) as { data?: { id?: string; account_id?: string }[]; error?: unknown };
+      if (meRes.ok && Array.isArray(meJson.data) && meJson.data.length > 0) {
+        targetAccountId = meJson.data[0]?.id || meJson.data[0]?.account_id || "";
+      }
+    } catch {
+      // Ignora e continua
+    }
+  }
+
+  if (!targetAccountId) {
+    return { ok: false, error: "ID da conta de anúncios (act_...) não informado e não encontrado na conta." };
+  }
+
+  const actId = targetAccountId.startsWith("act_")
+    ? targetAccountId
+    : `act_${targetAccountId.replace(/\D/g, "")}`;
+
+  // 1. Tenta buscar todos os anúncios com criativos, campanhas e insights de gasto
+  try {
+    const url = `${GRAPH}/${opts.apiVersion}/${encodeURIComponent(actId)}/ads?fields=id,name,status,effective_status,campaign{id,name},adset{id,name},creative{id,title,body,thumbnail_url,image_url},insights.date_preset(maximum){spend,impressions,clicks,actions}&limit=150&access_token=${token}`;
+    const res = await doFetch(url, { cache: "no-store" });
+    const json = (await res.json()) as { data?: Record<string, unknown>[]; error?: Record<string, unknown> };
+
+    if (!res.ok || json.error) {
+      const err = describeMetaError(json) || "Erro ao consultar conta de anúncios";
+      return { ok: false, error: err };
+    }
+
+    const list = Array.isArray(json.data) ? json.data : [];
+    const ads: FetchedAd[] = [];
+
+    for (const item of list) {
+      const adId = String(item.id || "");
+      if (!adId) continue;
+
+      const campaign = (item.campaign || {}) as Record<string, unknown>;
+      const adset = (item.adset || {}) as Record<string, unknown>;
+      const creative = (item.creative || {}) as Record<string, unknown>;
+      const insightsList = ((item.insights as Record<string, unknown>)?.data || []) as Record<string, unknown>[];
+      const insights = insightsList[0] || null;
+
+      const actions = Array.isArray(insights?.actions)
+        ? (insights!.actions as { action_type?: string; value?: string }[])
+        : [];
+      const convActions = actions.filter((a) =>
+        (a.action_type || "").includes("messaging_conversation_started")
+      );
+      const conversations = convActions.reduce((sum, a) => sum + (Number(a.value) || 0), 0) || null;
+
+      ads.push({
+        ad_name: str(item.name),
+        ad_status: str(item.effective_status) || str(item.status),
+        adset_id: str(adset.id),
+        adset_name: str(adset.name),
+        campaign_id: str(campaign.id),
+        campaign_name: str(campaign.name),
+        creative_title: str(creative.title),
+        creative_body: str(creative.body),
+        thumbnail_url: str(creative.image_url) ?? str(creative.thumbnail_url),
+        spend: num(insights?.spend),
+        impressions: num(insights?.impressions),
+        clicks: num(insights?.clicks),
+        conversations,
+        raw: { item, insights },
+      });
+    }
+
+    return { ok: true, ads, accountId: actId };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
 }

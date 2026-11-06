@@ -1,12 +1,31 @@
 "use client";
 
-import { useActionState } from "react";
-import { saveClientAction } from "@/app/actions";
+import { useActionState, useState, useTransition } from "react";
+import { saveClientAction, testMetaConnectionAction } from "@/app/actions";
 import type { Client } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 
 export function ClientForm({ client }: { client?: Client }) {
   const [state, action, pending] = useActionState(saveClientAction, { error: null });
+  const [isTesting, startTesting] = useTransition();
+  const [testResult, setTestResult] = useState<{
+    ok: boolean;
+    checks: {
+      pixel: { ok: boolean; message: string };
+      capi: { ok: boolean; message: string };
+      marketing: { ok: boolean; message: string };
+    };
+  } | null>(null);
+
+  const handleTestMeta = () => {
+    if (!client?.id) return;
+    startTesting(async () => {
+      setTestResult(null);
+      const res = await testMetaConnectionAction(client.id);
+      setTestResult(res);
+    });
+  };
+
   return (
     <form action={action}>
       {state.error && <div className="note note-err">{state.error}</div>}
@@ -100,6 +119,7 @@ export function ClientForm({ client }: { client?: Client }) {
         <div>
           <label htmlFor="ad_account_id">ID da Conta de Anúncios</label>
           <input id="ad_account_id" name="ad_account_id" defaultValue={client?.ad_account_id || ""} placeholder="act_1234567890" />
+          <div className="hint">Ex: act_1234567890. Permite puxar gastos reais de todas as campanhas.</div>
         </div>
         <div>
           <label htmlFor="marketing_token">Token de Leitura (Permissão ads_read)</label>
@@ -110,14 +130,57 @@ export function ClientForm({ client }: { client?: Client }) {
             autoComplete="off"
             placeholder={client?.marketing_token_enc ? "Salvo — deixe em branco para manter" : "Cole o token aqui"}
           />
-          <div className="hint">Token de Usuário do Sistema com acesso à conta de anúncios.</div>
+          <div className="hint">Token de Usuário do Sistema com acesso à conta de anúncios para leitura de gastos.</div>
         </div>
       </div>
 
-      <div className="actions">
+      {/* Diagnóstico em tempo real */}
+      {testResult && (
+        <div
+          style={{
+            marginTop: 18,
+            padding: "16px",
+            borderRadius: "10px",
+            background: "rgba(255, 255, 255, 0.04)",
+            border: `1px solid ${testResult.ok ? "rgba(52, 199, 123, 0.35)" : "rgba(239, 68, 68, 0.35)"}`,
+          }}
+        >
+          <h4 style={{ margin: "0 0 10px 0", fontSize: "14px", fontWeight: 700, color: "#ebe8f2" }}>
+            🔍 Diagnóstico da Conexão com o Meta
+          </h4>
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px", fontSize: "13px" }}>
+            <div>
+              {testResult.checks.pixel.ok ? "✅" : "⚠️"}{" "}
+              <strong>Pixel / Dataset:</strong> {testResult.checks.pixel.message}
+            </div>
+            <div>
+              {testResult.checks.capi.ok ? "✅" : "❌"}{" "}
+              <strong>Conversions API (CAPI):</strong> {testResult.checks.capi.message}
+            </div>
+            <div>
+              {testResult.checks.marketing.ok ? "✅" : "⚠️"}{" "}
+              <strong>Marketing API (Gastos / Anúncios):</strong> {testResult.checks.marketing.message}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="actions" style={{ marginTop: 20, display: "flex", gap: "12px", alignItems: "center" }}>
         <Button type="submit" disabled={pending}>
           {pending ? "Salvando…" : client ? "Salvar Alterações" : "Cadastrar Cliente"}
         </Button>
+
+        {client?.id && (
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleTestMeta}
+            disabled={isTesting}
+            style={{ borderColor: "rgba(123, 57, 252, 0.4)", color: "#b394ff" }}
+          >
+            {isTesting ? "Testando Conexão…" : "🔍 Testar Conexão com Meta"}
+          </Button>
+        )}
       </div>
     </form>
   );

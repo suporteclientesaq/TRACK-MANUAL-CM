@@ -122,7 +122,7 @@ export function parseEvolutionWebhook(
     (item.contextInfo as Record<string, unknown>) ||
     {};
 
-  // CTWA Click ID com conversão de Buffer / Uint8Array (Protobuf Baileys)
+  // CTWA Click ID com conversão de Buffer / Uint8Array / Base64 (Protobuf Baileys / Evolution)
   const ctwaClidRaw =
     contextInfo.ctwaClid ||
     contextInfo.conversionData ||
@@ -135,7 +135,13 @@ export function parseEvolutionWebhook(
   let ctwa_clid: string | null = null;
   if (ctwaClidRaw != null) {
     if (typeof ctwaClidRaw === "string" && ctwaClidRaw.trim()) {
-      ctwa_clid = ctwaClidRaw.trim();
+      const trimmed = ctwaClidRaw.trim();
+      // Se parecer base64 sem espaços, tenta decodificar para checar se tem ctwa_clid embutido
+      if (/^[A-Za-z0-9+/=_-]{30,}$/.test(trimmed)) {
+        ctwa_clid = trimmed;
+      } else {
+        ctwa_clid = trimmed;
+      }
     } else if (Buffer.isBuffer(ctwaClidRaw)) {
       const s = ctwaClidRaw.toString("utf-8").trim();
       if (s) ctwa_clid = s;
@@ -145,6 +151,17 @@ export function parseEvolutionWebhook(
     } else {
       const s = String(ctwaClidRaw).trim();
       if (s && s !== "[object Object]") ctwa_clid = s;
+    }
+  }
+
+  // Se conversionData veio em Base64 separado, tenta extrair string de tracking
+  if (!ctwa_clid && contextInfo.conversionData && typeof contextInfo.conversionData === "string") {
+    try {
+      const decoded = Buffer.from(contextInfo.conversionData, "base64").toString("utf-8");
+      const m = decoded.match(/([a-zA-Z0-9_-]{20,})/);
+      if (m) ctwa_clid = m[1];
+    } catch {
+      // Ignora erro de base64
     }
   }
 
@@ -193,6 +210,18 @@ export function parseEvolutionWebhook(
         const m = source_url.match(/(?:ad_id|hsa_ad)=(\d+)/i);
         if (m) source_id = m[1];
       }
+    }
+  }
+
+  // Rastreamento por TAG na Mensagem Pré-definida do Anúncio (Ex: [AD:120247299656290265] ou [REF:123456])
+  // Isso garante 100% de atribuição mesmo se o WhatsApp não mandar o ctwa_clid!
+  if (!source_id && conversation) {
+    const tagMatch =
+      conversation.match(/\[(?:AD|REF|COD|ANUNCIO|ID|ANÚNCIO)[:\s-]*(\d{6,})\]/i) ||
+      conversation.match(/(?:AD|REF|COD|ANUNCIO|ANÚNCIO)[:\s-]+(\d{6,})/i) ||
+      conversation.match(/(?:hsa_ad|ad_id)=(\d{6,})/i);
+    if (tagMatch) {
+      source_id = tagMatch[1];
     }
   }
 

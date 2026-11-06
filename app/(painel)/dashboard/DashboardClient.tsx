@@ -42,6 +42,38 @@ export function DashboardClient({ data }: DashboardClientProps) {
   // Filtro de data customizada
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
+  const [copiedReport, setCopiedReport] = useState(false);
+
+  const handleCopyReport = () => {
+    const periodLabels: Record<string, string> = {
+      hoje: "Hoje",
+      ontem: "Ontem",
+      "7d": "Últimos 7 Dias",
+      "30d": "Últimos 30 Dias",
+      mes: "Este Mês",
+      todos: "Histórico Completo",
+    };
+    const periodLabel = periodLabels[currentData.filterPeriod] || currentData.filterPeriod;
+    const clientObj = currentData.clients.find((c) => c.id === currentData.filterClient);
+    const clientName = clientObj ? clientObj.name : "Todos os Clientes";
+
+    const text = `📊 *RELATÓRIO DE DESEMPENHO — ${clientName.toUpperCase()}*
+📅 *Período:* ${periodLabel}
+
+📲 *Leads Recebidos (WhatsApp):* ${formatNumber(kpis.leads)}
+💰 *Vendas Aprovadas:* ${kpis.purchases}
+💵 *Faturamento Total:* ${formatMoney(kpis.revenue, currency)}
+🎯 *Investimento Meta Ads:* ${formatMoney(kpis.spend, currency)}
+📈 *ROAS Real:* ${kpis.spend > 0 ? `${kpis.roas.toFixed(2)}x` : "100% orgânico"}
+🎟️ *Ticket Médio:* ${formatMoney(kpis.averageTicket, currency)}
+⚡ *Taxa de Conversão:* ${kpis.conversionRate}%
+
+✨ *Continental MKT — Track Manual*`;
+
+    navigator.clipboard.writeText(text);
+    setCopiedReport(true);
+    setTimeout(() => setCopiedReport(false), 3000);
+  };
 
   // Sincroniza se a prop inicial mudar
   useEffect(() => {
@@ -375,6 +407,31 @@ export function DashboardClient({ data }: DashboardClientProps) {
           >
             <RefreshCw size={14} className={isSyncing ? "animate-spin" : undefined} />
             Sincronizar com Meta
+          </Button>
+
+          {/* Botão Copiar Relatório WhatsApp */}
+          <Button
+            size="sm"
+            onClick={handleCopyReport}
+            style={{
+              background: copiedReport ? "rgba(52, 199, 123, 0.25)" : "rgba(37, 211, 102, 0.15)",
+              color: copiedReport ? "#34c77b" : "#25d366",
+              border: "1px solid rgba(37, 211, 102, 0.4)",
+              fontWeight: 600,
+            }}
+            title="Copiar relatório formatado para colar no WhatsApp do cliente"
+          >
+            {copiedReport ? (
+              <>
+                <CheckCircle2 size={14} />
+                Copiado com Sucesso!
+              </>
+            ) : (
+              <>
+                <span>📋</span>
+                Relatório WhatsApp
+              </>
+            )}
           </Button>
         </div>
       </div>

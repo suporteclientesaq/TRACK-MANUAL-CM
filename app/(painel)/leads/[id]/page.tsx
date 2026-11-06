@@ -8,6 +8,7 @@ import { contentNames, findLeadsByPhones, getAd, getClient, getLead, listClients
 import { eventLabel } from "@/lib/types";
 import { attributeLead, resolveWinningLead } from "@/lib/attribution";
 import { LeadForm } from "../LeadForm";
+import { AssignAdForm } from "@/components/AssignAdForm";
 import { RefreshAdButton } from "./RefreshAdButton";
 import { SendEventForm } from "./SendEventForm";
 
@@ -195,8 +196,9 @@ export default async function LeadPage({
             {lead.source_id ? (
               <RefreshAdButton leadId={lead.id} hasData={!!ad} />
             ) : (
-              <p className="muted small">Este lead não tem ID de origem.</p>
+              <p className="muted small">Este lead não tem ID de anúncio vinculado.</p>
             )}
+            <AssignAdForm leadId={lead.id} currentSourceId={lead.source_id} />
           </div>
         </div>
 

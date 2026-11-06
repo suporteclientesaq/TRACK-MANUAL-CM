@@ -15,12 +15,15 @@ interface ImportResult {
   leadId?: string;
   name?: string | null;
   phone?: string | null;
+  purchaseSent?: boolean;
+  value?: number | null;
   error?: string;
 }
 
 export function TxtDropZone({ clientId, onImported }: TxtDropZoneProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
+  const [autoPurchase, setAutoPurchase] = useState(true);
   const [result, setResult] = useState<ImportResult | null>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -34,7 +37,7 @@ export function TxtDropZone({ clientId, onImported }: TxtDropZoneProps) {
     reader.onload = (e) => {
       const text = e.target?.result as string;
       startTransition(async () => {
-        const res = await importFromTxtAction(clientId, text);
+        const res = await importFromTxtAction(clientId, text, autoPurchase);
         setResult(res);
         if (res.ok && res.leadId) onImported?.(res.leadId);
       });
@@ -62,7 +65,24 @@ export function TxtDropZone({ clientId, onImported }: TxtDropZoneProps) {
   }
 
   return (
-    <div style={{ marginBottom: 24 }}>
+    <div style={{ marginBottom: 16 }}>
+      {/* Opção de Auto-Conversão no Meta */}
+      <div style={{ marginBottom: 10, display: "flex", alignItems: "center", gap: 8 }}>
+        <input
+          type="checkbox"
+          id="auto-purchase-check"
+          checked={autoPurchase}
+          onChange={(e) => setAutoPurchase(e.target.checked)}
+          style={{ cursor: "pointer", width: 16, height: 16 }}
+        />
+        <label
+          htmlFor="auto-purchase-check"
+          style={{ fontSize: 13, color: "var(--text, #333)", cursor: "pointer", userSelect: "none" }}
+        >
+          💰 <strong>Registrar Compra (Purchase) automaticamente no Meta</strong> com o valor da proposta
+        </label>
+      </div>
+
       <div
         onClick={() => inputRef.current?.click()}
         onDragOver={onDragOver}
@@ -74,7 +94,7 @@ export function TxtDropZone({ clientId, onImported }: TxtDropZoneProps) {
         style={{
           border: `2px dashed ${dragging ? "#4f46e5" : "#6b7280"}`,
           borderRadius: 12,
-          padding: "28px 20px",
+          padding: "24px 20px",
           textAlign: "center",
           cursor: isPending ? "wait" : "pointer",
           background: dragging ? "rgba(79,70,229,0.06)" : "transparent",
@@ -89,7 +109,7 @@ export function TxtDropZone({ clientId, onImported }: TxtDropZoneProps) {
           style={{ display: "none" }}
           onChange={onInputChange}
         />
-        <div style={{ fontSize: 36, marginBottom: 8 }}>📄</div>
+        <div style={{ fontSize: 32, marginBottom: 6 }}>📄</div>
         {isPending ? (
           <p style={{ margin: 0, color: "#6b7280" }}>
             <span
@@ -105,14 +125,14 @@ export function TxtDropZone({ clientId, onImported }: TxtDropZoneProps) {
                 verticalAlign: "middle",
               }}
             />
-            Importando proposta…
+            Processando proposta e enviando ao Meta…
           </p>
         ) : (
           <>
-            <p style={{ margin: 0, fontWeight: 600, fontSize: 15 }}>
+            <p style={{ margin: 0, fontWeight: 600, fontSize: 14 }}>
               Arrastar e soltar proposta (.txt)
             </p>
-            <p style={{ margin: "4px 0 0", color: "#6b7280", fontSize: 13 }}>
+            <p style={{ margin: "4px 0 0", color: "#6b7280", fontSize: 12 }}>
               ou clique para selecionar o arquivo
             </p>
           </>
@@ -122,20 +142,26 @@ export function TxtDropZone({ clientId, onImported }: TxtDropZoneProps) {
       {result && (
         <div
           style={{
-            marginTop: 12,
-            padding: "12px 16px",
+            marginTop: 10,
+            padding: "10px 14px",
             borderRadius: 8,
             background: result.ok ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)",
             border: `1px solid ${result.ok ? "#22c55e" : "#ef4444"}`,
-            fontSize: 14,
+            fontSize: 13,
           }}
         >
           {result.ok ? (
-            <span style={{ color: "#16a34a" }}>
-              ✅ Lead importado com sucesso!{" "}
-              {result.name && <strong>{result.name}</strong>}
-              {result.phone && <> · {result.phone}</>}
-            </span>
+            <div style={{ color: "#16a34a" }}>
+              <div>
+                ✅ <strong>Lead importado:</strong> {result.name || "Sem Nome"}{" "}
+                {result.phone && `(${result.phone})`}
+              </div>
+              {result.purchaseSent && (
+                <div style={{ marginTop: 4, fontWeight: 600, color: "#059669" }}>
+                  🚀 Venda de R$ {Number(result.value || 0).toFixed(2).replace(".", ",")} enviada ao Meta com sucesso via CAPI!
+                </div>
+              )}
+            </div>
           ) : (
             <span style={{ color: "#dc2626" }}>❌ {result.error}</span>
           )}

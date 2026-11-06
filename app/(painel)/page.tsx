@@ -5,6 +5,7 @@ import { LivePoller } from "@/components/LivePoller";
 import { formatDateTime, formatMoney, formatPhone } from "@/lib/format";
 import { DeleteLeadButton } from "./leads/DeleteLeadButton";
 import { ClientSelectorForTxt } from "@/components/ClientSelectorForTxt";
+import { QuickSaleButton } from "@/components/QuickSaleButton";
 import { SyncMetaButton } from "@/components/SyncMetaButton";
 import { adsFor, listClients, listLeads, sentForLeads } from "@/lib/store";
 import { eventLabel } from "@/lib/types";
@@ -204,7 +205,15 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                     </td>
                     <td className="small muted nowrap">{formatDateTime(lead.first_seen_at)}</td>
                     <td className="row-actions">
-                      <DeleteLeadButton id={lead.id} name={lead.name || formatPhone(lead.phone)} back={pageLink(page)} />
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <QuickSaleButton
+                          leadId={lead.id}
+                          leadName={lead.name}
+                          leadPhone={formatPhone(lead.phone)}
+                          notes={lead.notes}
+                        />
+                        <DeleteLeadButton id={lead.id} name={lead.name || formatPhone(lead.phone)} back={pageLink(page)} />
+                      </div>
                     </td>
                   </tr>
                 );

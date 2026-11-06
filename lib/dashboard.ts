@@ -232,10 +232,11 @@ export async function getDashboardData(filter: DashboardFilter = {}): Promise<Da
     const revData = adRevenueMap.get(adId) || { revenue: 0, sales: 0 };
     const adInfo = adById.get(adId);
 
-    const campId = adInfo?.campaign_id || `camp_${adId.slice(-8)}`;
-    const campName = adInfo?.campaign_name || "Campanha Meta";
-    const adsetId = adInfo?.adset_id || `adset_${adId.slice(-8)}`;
-    const adsetName = adInfo?.adset_name || "Conjunto de Anúncios";
+    // Agrupamento robusto de campanha: se o Meta não devolveu campaign_id, agrupa por nome ou identifica pelo anúncio
+    const campId = adInfo?.campaign_id || (adInfo?.campaign_name ? `camp_${adInfo.campaign_name}` : `camp_${adId.slice(-8)}`);
+    const campName = adInfo?.campaign_name || (adInfo?.ad_name ? `Campanha (${adInfo.ad_name})` : `Anúncio #${adId.slice(-6)}`);
+    const adsetId = adInfo?.adset_id || (adInfo?.adset_name ? `adset_${adInfo.adset_name}` : `adset_${adId.slice(-8)}`);
+    const adsetName = adInfo?.adset_name || (adInfo?.ad_name ? `Conjunto (${adInfo.ad_name})` : "Conjunto de Anúncios");
     const adName = adInfo?.ad_name || `Anúncio #${adId.slice(-6)}`;
     const spend = Number(adInfo?.spend) || 0;
     totalSpend += spend;
@@ -303,7 +304,13 @@ export async function getDashboardData(filter: DashboardFilter = {}): Promise<Da
   const averageTicket = totalPurchases > 0 ? Number((totalRevenue / totalPurchases).toFixed(2)) : 0;
   const costPerLead = totalLeads > 0 && totalSpend > 0 ? Number((totalSpend / totalLeads).toFixed(2)) : 0;
   const cpa = totalPurchases > 0 && totalSpend > 0 ? Number((totalSpend / totalPurchases).toFixed(2)) : 0;
-  const conversionRate = totalLeads > 0 ? Number(((totalPurchases / totalLeads) * 100).toFixed(1)) : 0;
+
+  // Taxa de conversão real de leads em compradores únicos (nunca > 100%)
+  const buyerLeadIds = new Set(salesEvents.map((e) => e.lead_id));
+  const convertedUniqueLeads = periodLeads.filter((l) => buyerLeadIds.has(l.id)).length;
+  const conversionRate = totalLeads > 0
+    ? Math.min(100, Number(((convertedUniqueLeads / totalLeads) * 100).toFixed(1)))
+    : (totalPurchases > 0 ? 100 : 0);
 
   // ─── 8. Gráfico Diário (limitado no máximo aos últimos 60 dias para velocidade) ───
   const chartDaysMap = new Map<string, { spend: number; revenue: number; sales: number; leads: number }>();

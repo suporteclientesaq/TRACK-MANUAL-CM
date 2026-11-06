@@ -95,9 +95,15 @@ export function getNativeWhatsAppStatus(clientId: string): {
       const creds = JSON.parse(fs.readFileSync(credsFile, "utf-8"));
       if (creds?.me?.id) {
         const phone = creds.me.id.split(":")[0].replace(/\D/g, "");
+        // Auto-reconecta automaticamente a sessão salva se estiver em ambiente contínuo
+        if (!isServerlessEnvironment()) {
+          setTimeout(() => {
+            connectNativeWhatsApp(clientId).catch(() => {});
+          }, 100);
+        }
         return {
           ok: true,
-          state: "close", // Arquivo existe mas precisa iniciar socket
+          state: "connecting",
           qrcode: null,
           phone,
           name: creds.me.name || null,
@@ -234,6 +240,13 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
         cleanSessionDir(clientId);
         session!.phone = null;
         session!.name = null;
+      } else if (!isServerlessEnvironment()) {
+        console.log(`[Track Manual] WhatsApp temporariamente desconectado. Reconectando em 3s...`);
+        setTimeout(() => {
+          connectNativeWhatsApp(clientId).catch((err) =>
+            console.warn("[Track Manual] Erro na auto-reconexão Baileys:", err)
+          );
+        }, 3000);
       }
     }
   });

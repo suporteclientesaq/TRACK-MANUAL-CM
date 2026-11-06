@@ -10,8 +10,8 @@ import { decrypt, encrypt } from "@/lib/crypto";
 import { decodeCsv, parseCsv, rowsToRecords } from "@/lib/csv";
 import { metaApiVersion } from "@/lib/env";
 import { evolutionCreateOrConnect, evolutionGetState, evolutionLogout } from "@/lib/evolution";
-import { ingestMany } from "@/lib/ingest";
-import { buildEvent, fetchAd, sendEvent } from "@/lib/meta";
+import { enrichAdInRealTime, ingestMany } from "@/lib/ingest";
+import { buildEvent, fetchAd, fetchAdAccountAdsAndInsights, sendEvent } from "@/lib/meta";
 import { normalizePhone, parseMoney, ufFromPhone } from "@/lib/normalize";
 import {
   countSent,
@@ -490,19 +490,62 @@ export async function syncDashboardMetaAction(clientId?: string | null): Promise
   }
 
   let synced = 0;
+  let lastError = "";
+
   for (const client of targetClients) {
     const tokenEnc = client.marketing_token_enc || client.capi_token_enc;
-    if (!tokenEnc) continue;
+    if (!tokenEnc) {
+      lastError = `Cliente "${client.name}" não possui token cadastrado.`;
+      continue;
+    }
 
     let token: string;
     try {
       token = decrypt(tokenEnc, await appSecret());
     } catch {
+      lastError = `Não foi possível descriptografar o token do cliente "${client.name}".`;
       continue;
     }
 
+    const syncedAdIds = new Set<string>();
+
+    // 1. Tenta sincronizar todos os anúncios da Conta de Anúncios de uma vez (com gastos e nomes reais)
+    try {
+      const acctRes = await fetchAdAccountAdsAndInsights({
+        apiVersion: metaApiVersion(),
+        adAccountId: client.ad_account_id,
+        accessToken: token,
+      });
+
+      if (acctRes.ok && acctRes.ads.length > 0) {
+        for (const ad of acctRes.ads) {
+          const adId = (ad.raw as { item?: { id?: string } })?.item?.id || "";
+          if (adId) {
+            await upsertAd({
+              client_id: client.id,
+              ad_id: adId,
+              ...ad,
+            });
+            syncedAdIds.add(adId);
+            synced++;
+          }
+        }
+        // Se descobriu ou confirmou a conta, salva no cliente se não estava preenchido
+        if (!client.ad_account_id && acctRes.accountId) {
+          await updateClient(client.id, { ad_account_id: acctRes.accountId });
+        }
+      } else if (!acctRes.ok) {
+        lastError = acctRes.error;
+      }
+    } catch (e) {
+      lastError = e instanceof Error ? e.message : String(e);
+    }
+
+    // 2. Busca anúncios individuais dos leads que ainda não foram sincronizados
     const leads = await listLeads({ clientId: client.id, filter: "todos", offset: 0, limit: 5000 });
-    const uniqueSourceIds = [...new Set(leads.map((l) => l.source_id).filter((s): s is string => Boolean(s)))];
+    const uniqueSourceIds = [
+      ...new Set(leads.map((l) => l.source_id).filter((s): s is string => Boolean(s))),
+    ].filter((adId) => !syncedAdIds.has(adId));
 
     for (const adId of uniqueSourceIds) {
       try {
@@ -518,9 +561,11 @@ export async function syncDashboardMetaAction(clientId?: string | null): Promise
             ...res.ad,
           });
           synced++;
+        } else {
+          lastError = res.error;
         }
-      } catch {
-        // Segue para os próximos anúncios
+      } catch (e) {
+        lastError = e instanceof Error ? e.message : String(e);
       }
     }
   }
@@ -528,11 +573,12 @@ export async function syncDashboardMetaAction(clientId?: string | null): Promise
   revalidatePath("/dashboard");
   revalidatePath("/");
   return {
-    ok: true,
+    ok: synced > 0,
     syncedCount: synced,
-    message: synced > 0
-      ? `${synced} anúncio(s) sincronizado(s) com o Meta com sucesso!`
-      : "Nenhum anúncio precisou de atualização.",
+    message:
+      synced > 0
+        ? `${synced} anúncio(s), criativos e gastos sincronizados do Meta com sucesso!`
+        : `Nenhum anúncio foi atualizado. ${lastError ? `Motivo: ${lastError}` : "Cadastre o Token com permissão 'ads_read' no cliente."}`,
   };
 }
 
@@ -629,17 +675,20 @@ export async function disconnectNativeWhatsAppAction(clientId: string): Promise<
 }
 
 // ---------------------------------------------------------------------------
-// Importação de proposta via arquivo .TXT (arrastar e soltar na aba Eventos)
+// Importação de proposta via arquivo .TXT com Auto-Disparo de Compra
 // ---------------------------------------------------------------------------
 
 export async function importFromTxtAction(
   clientId: string,
-  text: string
+  text: string,
+  autoPurchase: boolean = true
 ): Promise<{
   ok: boolean;
   leadId?: string;
   name?: string | null;
   phone?: string | null;
+  purchaseSent?: boolean;
+  value?: number | null;
   error?: string;
 }> {
   await requireAuth();
@@ -651,7 +700,7 @@ export async function importFromTxtAction(
   const parsed = parseTxtProposal(text);
   if (!parsed.ok) return { ok: false, error: parsed.error };
 
-  const { name, phone, city, state, zip, notes } = parsed.fields;
+  const { name, phone, city, state, zip, notes, value } = parsed.fields;
   if (!phone) return { ok: false, error: "Telefone não encontrado no arquivo." };
 
   const result = await ingestLead(
@@ -662,9 +711,174 @@ export async function importFromTxtAction(
 
   if (!result.ok) return { ok: false, error: result.error };
 
+  let purchaseSent = false;
+  if (autoPurchase && value && value > 0) {
+    try {
+      const sendRes = await sendEventAction({
+        leadId: result.leadId,
+        eventName: "Purchase",
+        eventTimeIso: new Date().toISOString(),
+        value: String(value),
+        currency: "BRL",
+        contentName: notes ? notes.slice(0, 100) : "Proposta Comercial",
+      });
+      purchaseSent = sendRes.sent;
+    } catch (e) {
+      console.warn("Aviso ao auto-disparar compra da proposta:", e);
+    }
+  }
+
   revalidatePath("/");
   revalidatePath("/leads");
   revalidatePath("/eventos");
+  revalidatePath("/dashboard");
 
-  return { ok: true, leadId: result.leadId, name, phone };
+  return { ok: true, leadId: result.leadId, name, phone, purchaseSent, value };
+}
+
+// ---------------------------------------------------------------------------
+// Teste de Conexão com o Meta (Pixel, CAPI, Token de Leitura)
+// ---------------------------------------------------------------------------
+
+export async function testMetaConnectionAction(clientId: string): Promise<{
+  ok: boolean;
+  checks: {
+    pixel: { ok: boolean; message: string };
+    capi: { ok: boolean; message: string };
+    marketing: { ok: boolean; message: string };
+  };
+}> {
+  await requireAuth();
+  const client = await getClient(clientId);
+  if (!client) {
+    return {
+      ok: false,
+      checks: {
+        pixel: { ok: false, message: "Cliente não encontrado." },
+        capi: { ok: false, message: "Cliente não encontrado." },
+        marketing: { ok: false, message: "Cliente não encontrado." },
+      },
+    };
+  }
+
+  const secret = await appSecret();
+  const capiToken = client.capi_token_enc ? decrypt(client.capi_token_enc, secret) : null;
+  const mktToken = client.marketing_token_enc ? decrypt(client.marketing_token_enc, secret) : null;
+
+  let capiOk = false;
+  let capiMsg = "";
+
+  if (!client.pixel_id) {
+    capiMsg = "ID do Pixel/Dataset não preenchido.";
+  } else if (!capiToken) {
+    capiMsg = "Token da API de Conversões não preenchido.";
+  } else {
+    try {
+      const testRes = await sendEvent({
+        apiVersion: metaApiVersion(),
+        pixelId: client.pixel_id,
+        accessToken: capiToken,
+        testEventCode: client.test_event_code || "TEST_PING",
+        event: {
+          event_name: "TestPing",
+          event_time: Math.floor(Date.now() / 1000),
+          event_id: `ping-${Date.now()}`,
+          action_source: "chat",
+          user_data: {
+            ph: ["0000000000000000000000000000000000000000000000000000000000000000"],
+          },
+        },
+      });
+      if (testRes.ok) {
+        capiOk = true;
+        capiMsg = `Conectado com sucesso! Pixel/Dataset ${client.pixel_id} recebeu o evento de teste.`;
+      } else {
+        capiMsg = testRes.errorMessage || "Meta respondeu com erro ao testar envio.";
+      }
+    } catch (e) {
+      capiMsg = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  let mktOk = false;
+  let mktMsg = "";
+  const tokenForRead = mktToken || capiToken;
+
+  if (!tokenForRead) {
+    mktMsg = "Nenhum token disponível para teste.";
+  } else {
+    try {
+      const meRes = await fetch(
+        `https://graph.facebook.com/${metaApiVersion()}/me?fields=id,name&access_token=${encodeURIComponent(tokenForRead)}`
+      );
+      const meJson = (await meRes.json()) as { id?: string; name?: string; error?: { message?: string } };
+      if (meRes.ok && meJson.id) {
+        mktOk = true;
+        mktMsg = `Token autenticado com sucesso como "${meJson.name || meJson.id}".`;
+      } else {
+        mktMsg = meJson.error?.message || "Token inválido ou expirado.";
+      }
+    } catch (e) {
+      mktMsg = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  return {
+    ok: capiOk && mktOk,
+    checks: {
+      pixel: {
+        ok: Boolean(client.pixel_id),
+        message: client.pixel_id ? `Pixel/Dataset ID: ${client.pixel_id}` : "Não preenchido",
+      },
+      capi: { ok: capiOk, message: capiMsg },
+      marketing: { ok: mktOk, message: mktMsg },
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Ajuste Manual de Gasto de Anúncio / Campanha
+// ---------------------------------------------------------------------------
+
+export async function setAdSpendAction(
+  clientId: string,
+  adId: string,
+  spend: number
+): Promise<{ ok: boolean }> {
+  await requireAuth();
+  await upsertAd({
+    client_id: clientId,
+    ad_id: adId,
+    spend,
+  });
+  revalidatePath("/dashboard");
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Vinculação Manual de Anúncio ao Lead (Solução definitiva para Sem ctwa_clid)
+// ---------------------------------------------------------------------------
+
+export async function assignLeadAdAction(
+  leadId: string,
+  adId: string
+): Promise<{ ok: boolean; message: string }> {
+  await requireAuth();
+  const lead = await getLead(leadId);
+  if (!lead) return { ok: false, message: "Lead não encontrado." };
+
+  const cleanAdId = adId.trim().replace(/\D/g, "");
+  if (!cleanAdId) return { ok: false, message: "ID de anúncio inválido." };
+
+  await updateLead(leadId, {
+    source_id: cleanAdId,
+  });
+
+  await enrichAdInRealTime(lead.client_id, cleanAdId);
+
+  revalidatePath(`/leads/${leadId}`);
+  revalidatePath("/");
+  revalidatePath("/dashboard");
+
+  return { ok: true, message: `Anúncio #${cleanAdId} vinculado ao lead com sucesso!` };
 }

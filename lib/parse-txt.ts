@@ -10,7 +10,7 @@
  *   💰 Investimento: R$ 247,00
  */
 
-import { normalizePhone } from "./normalize";
+import { normalizePhone, parseMoney } from "./normalize";
 
 export interface TxtProposalResult {
   ok: true;
@@ -21,6 +21,7 @@ export interface TxtProposalResult {
     state: string | null;
     zip: string | null;
     notes: string | null;
+    value: number | null;
   };
 }
 
@@ -142,6 +143,7 @@ export function parseTxtProposal(text: string): TxtProposalResult | TxtProposalE
   if (rawInstagram) noteParts.push(`Instagram: ${rawInstagram}`);
 
   const notes = noteParts.length > 0 ? noteParts.join(" | ") : null;
+  const value = rawInvestimento ? parseMoney(rawInvestimento) : null;
 
   return {
     ok: true,
@@ -152,6 +154,7 @@ export function parseTxtProposal(text: string): TxtProposalResult | TxtProposalE
       state,
       zip,
       notes,
+      value,
     },
   };
 }
