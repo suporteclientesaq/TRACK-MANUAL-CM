@@ -67,21 +67,31 @@ export default async function ClientPage({
 
       {client && (
         <div className="card">
-          <h2>Como os Leads Entram Automaticamente</h2>
+          <h2>Como os Leads Entram Automaticamente na Nuvem (Netlify)</h2>
 
           <div style={{ marginBottom: "20px" }}>
             <h3 style={{ fontSize: "15px", margin: "0 0 6px 0", color: "#34c77b" }}>
-              Opção 1: Webhook Evolution API (WhatsApp Direto)
+              Opção 1: Webhook Evolution API
             </h3>
             <p className="muted small" style={{ margin: "0 0 10px 0" }}>
               Conecte sua instância da Evolution API (v1 ou v2). No painel da Evolution, configure este webhook ativando o evento <strong>MESSAGES_UPSERT</strong>. O Track Manual puxará automaticamente o telefone, nome, anúncio e o código <strong>ctwa_clid</strong> a cada nova conversa!
             </p>
-            <CopyBox label="URL do Webhook Evolution API — Trate Como Senha" value={evolutionWebhookUrl} />
+            <CopyBox label="URL do Webhook Evolution API" value={evolutionWebhookUrl} />
+          </div>
+
+          <div style={{ borderTop: "1px solid var(--border)", paddingTop: "16px", marginBottom: "20px" }}>
+            <h3 style={{ fontSize: "15px", margin: "0 0 6px 0", color: "#7b39fc" }}>
+              Opção 2: Webhook WAHA (WhatsApp HTTP API via Docker)
+            </h3>
+            <p className="muted small" style={{ margin: "0 0 10px 0" }}>
+              Se você roda o WAHA em uma VPS ou Docker próprio, adicione esta URL no campo de Webhook do WAHA marcando o evento <strong>message</strong>. O Track Manual receberá cliques de anúncios e mensagens instantaneamente na Netlify!
+            </p>
+            <CopyBox label="URL do Webhook WAHA" value={proto + "://" + host + "/api/webhook/waha/" + client.webhook_key} />
           </div>
 
           <div style={{ borderTop: "1px solid var(--border)", paddingTop: "16px" }}>
             <h3 style={{ fontSize: "15px", margin: "0 0 6px 0", color: "#b394ff" }}>
-              Opção 2: Webhook Leona (Fluxo de Chatbot)
+              Opção 3: Webhook Leona (Fluxo de Chatbot)
             </h3>
             <p className="muted small" style={{ margin: "0 0 10px 0" }}>
               Para receber contatos pelo fluxo da Leona, adicione um bloco de <strong>Integração HTTP (POST)</strong> com cabeçalho <span className="mono">Content-Type: application/json</span>.
