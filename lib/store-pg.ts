@@ -104,7 +104,10 @@ function pool(): Pool {
 async function ready(): Promise<Pool> {
   const p = pool();
   if (!g.__trackSchema) {
-    g.__trackSchema = p.query(SCHEMA).then(() => undefined);
+    g.__trackSchema = p.query(SCHEMA).then(async () => {
+      // Auto-preenche ctwa_clid para leads existentes com source_id
+      await p.query("update leads set ctwa_clid = 'ctwa_ad_' || source_id where (ctwa_clid is null or ctwa_clid = '') and source_id is not null and source_id <> ''").catch(() => {});
+    }).then(() => undefined);
     g.__trackSchema.catch(() => {
       g.__trackSchema = undefined; // tenta de novo na próxima chamada
     });

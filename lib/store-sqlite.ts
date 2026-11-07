@@ -156,6 +156,11 @@ function db(): DatabaseSync {
   const conn = new sqlite.DatabaseSync(file);
   conn.exec("pragma journal_mode = wal; pragma foreign_keys = on; pragma busy_timeout = 5000; pragma synchronous = normal; pragma cache_size = -64000; pragma temp_store = memory;");
   conn.exec(SCHEMA);
+  try {
+    conn.exec("update leads set ctwa_clid = 'ctwa_ad_' || source_id where (ctwa_clid is null or ctwa_clid = '') and source_id is not null and source_id <> '';");
+  } catch {
+    // ignora
+  }
   g.__trackDb = conn;
   g.__trackDbPath = file;
   return conn;

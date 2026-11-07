@@ -519,6 +519,8 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
             message_text: parsed.lead.message_text,
             fromMe: Boolean(msg.key.fromMe),
             ctwa_clid: finalCtwa,
+            source_id: finalAdId,
+            contextInfo: (msg.message?.extendedTextMessage?.contextInfo || msg.message?.contextInfo || {}) as Record<string, unknown>,
           }
         );
       } catch (err) {

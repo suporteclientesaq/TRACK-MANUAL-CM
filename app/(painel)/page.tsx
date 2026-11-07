@@ -187,10 +187,27 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                       )}
                     </td>
                     <td>
-                      {lead.ctwa_clid ? (
-                        <span className="badge badge-ok">Com ctwa_clid</span>
+                      {lead.ctwa_clid && !lead.ctwa_clid.startsWith("ctwa_ad_") ? (
+                        <span className="badge badge-ok" title={`Token CTWA: ${lead.ctwa_clid}`}>
+                          🎯 CTWA ✓
+                        </span>
+                      ) : lead.source_id || (lead.ctwa_clid && lead.ctwa_clid.startsWith("ctwa_ad_")) ? (
+                        <span
+                          className="badge badge-ok"
+                          style={{
+                            background: "rgba(52, 199, 123, 0.15)",
+                            color: "#34c77b",
+                            border: "1px solid rgba(52, 199, 123, 0.4)",
+                            fontWeight: 700,
+                          }}
+                          title={`Atribuído ao Anúncio #${lead.source_id || lead.ctwa_clid?.replace("ctwa_ad_", "")}`}
+                        >
+                          🎯 CTWA (AD) ✓
+                        </span>
                       ) : (
-                        <span className="badge badge-warn">Sem ctwa_clid</span>
+                        <span className="badge badge-muted" style={{ opacity: 0.65 }}>
+                          Orgânico
+                        </span>
                       )}
                     </td>
                     <td>

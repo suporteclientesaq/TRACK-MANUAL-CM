@@ -169,7 +169,15 @@ export default async function LeadPage({
             )}
             <dl className="data">
               <dt>CTWA Click ID</dt>
-              <dd className="mono">{lead.ctwa_clid || "—"}</dd>
+              <dd className="mono">
+                {lead.ctwa_clid ? (
+                  <span style={{ color: "#34c77b", fontWeight: 700 }}>
+                    {lead.ctwa_clid} {lead.ctwa_clid.startsWith("ctwa_ad_") ? "(Atribuído por Anúncio ✓)" : "(Token Meta ✓)"}
+                  </span>
+                ) : (
+                  "—"
+                )}
+              </dd>
               <dt>ID de Origem</dt>
               <dd className="mono">{lead.source_id || "—"}</dd>
               <dt>URL de Origem</dt>

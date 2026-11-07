@@ -113,10 +113,18 @@ export async function ingestLead(
     }).catch(() => {});
   }
 
+  // Se veio anúncio (source_id) mas sem token avulso, garante o ctwa_clid vinculado ao ID do anúncio
+  if (incoming.source_id && !incoming.ctwa_clid) {
+    incoming.ctwa_clid = `ctwa_ad_${incoming.source_id}`;
+  }
+
   const existing = await findLead(clientId, incoming.phone);
   const t = nowIso();
   const merged = mergeLead(existing, incoming);
-  const clidChanged = !!incoming.ctwa_clid && incoming.ctwa_clid !== existing?.ctwa_clid;
+  if (merged.source_id && !merged.ctwa_clid) {
+    merged.ctwa_clid = `ctwa_ad_${merged.source_id}`;
+  }
+  const clidChanged = !!merged.ctwa_clid && merged.ctwa_clid !== existing?.ctwa_clid;
 
   // Preserva e acumula o histórico de mensagens trocadas na conversa
   let existingRaw = existing?.raw as Record<string, unknown> | null;

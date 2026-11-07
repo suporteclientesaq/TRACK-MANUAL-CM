@@ -1254,9 +1254,16 @@ export function ConversasClient({
                         fontFamily: "monospace",
                       }}
                     >
-                      {selectedLead.ctwa_clid || (
+                      {selectedLead.ctwa_clid ? (
+                        <span>
+                          {selectedLead.ctwa_clid}{" "}
+                          <span style={{ fontSize: 9, opacity: 0.85 }}>
+                            {selectedLead.ctwa_clid.startsWith("ctwa_ad_") ? "(Atribuído por Anúncio ✓)" : "(Token Meta ✓)"}
+                          </span>
+                        </span>
+                      ) : (
                         <span style={{ color: TEXT_MUTED, fontFamily: "inherit" }}>
-                          Não capturado — {selectedLead.source_id ? "Rastreado por AD_ID" : "Lead orgânico"}
+                          {selectedLead.source_id ? `Atribuído ao Anúncio #${selectedLead.source_id} ✓` : "Lead Orgânico"}
                         </span>
                       )}
                     </div>

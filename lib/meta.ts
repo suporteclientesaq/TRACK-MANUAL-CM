@@ -82,7 +82,8 @@ export function buildEvent(input: BuildEventInput): BuiltEvent {
   const hasPageOrWaba = Boolean(page || waba);
 
   // Define se vai como business_messaging ou chat
-  let hasClid = clid.length > 0 && !forceChat;
+  const isSyntheticClid = clid.startsWith("ctwa_ad_") || clid.startsWith("ad_");
+  let hasClid = clid.length > 0 && !forceChat && !isSyntheticClid;
   let actionSource: "business_messaging" | "chat" = hasClid ? "business_messaging" : "chat";
 
   // Se tem ctwa_clid mas não tem ID de Página/WABA:

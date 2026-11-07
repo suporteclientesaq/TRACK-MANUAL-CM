@@ -56,7 +56,7 @@ export function toLead(r: Row): Lead {
     state: str(r.state),
     zip: str(r.zip),
     country: String(r.country || "br"),
-    ctwa_clid: str(r.ctwa_clid),
+    ctwa_clid: str(r.ctwa_clid) || (r.source_id ? `ctwa_ad_${r.source_id}` : null),
     source_id: str(r.source_id),
     source_url: str(r.source_url),
     source_type: str(r.source_type),
