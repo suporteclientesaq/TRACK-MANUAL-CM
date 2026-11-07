@@ -227,6 +227,20 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
         qrcode: session.qrcode,
       };
     }
+    // Aguarda o QR ser gerado pelo socket que já está em conexão ativa
+    const qrPromise = new Promise<string>((resolve) => {
+      session!.qrWaiters.push(resolve);
+    });
+    const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 8_000));
+    const generatedQr = await Promise.race([qrPromise, timeoutPromise]);
+    if (session.state === "open") {
+      return { ok: true, state: "open", qrcode: null, phone: session.phone };
+    }
+    return {
+      ok: true,
+      state: "connecting",
+      qrcode: generatedQr || session.qrcode || null,
+    };
   }
 
   // Se já existia um socket antigo fechado, encerra limpo antes de abrir um novo

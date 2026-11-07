@@ -120,10 +120,12 @@ export function WahaDashboard({
         const data = await res.json();
         setSession(data);
 
-        // Busca QR se em modo de scan
-        if (data.status === "SCAN_QR_CODE") {
+        // Busca QR se em modo de scan ou starting
+        if (data.qrcode) {
+          setQrCode(data.qrcode);
+        } else if (data.status === "SCAN_QR_CODE" || data.status === "STARTING") {
           fetchQr();
-        } else {
+        } else if (data.status === "WORKING") {
           setQrCode(null);
         }
       }
@@ -201,8 +203,14 @@ export function WahaDashboard({
         body: JSON.stringify({ name: wahaSessionName }),
       });
       if (!res.ok) throw new Error(await res.text());
-      await new Promise((r) => setTimeout(r, 1500));
+      const data = await res.json();
+      if (data) {
+        setSession(data);
+        if (data.qrcode) setQrCode(data.qrcode);
+      }
+      await new Promise((r) => setTimeout(r, 1000));
       await fetchSession();
+      await fetchQr();
     } catch (e) {
       setError("Erro ao iniciar sessão: " + String(e));
     } finally {
@@ -648,15 +656,23 @@ export function WahaDashboard({
             </div>
           )}
 
-          {noSession && !loading && (
+          {(noSession || session?.status === "STOPPED" || session?.status === "FAILED") && !actionLoading && !loading && (
             <div style={{ textAlign: "center", color: "var(--text-muted)", display: "flex", flexDirection: "column", alignItems: "center", gap: "10px" }}>
               <WifiOff size={36} style={{ opacity: 0.3 }} />
-              <div style={{ fontSize: "13px" }}>Nenhuma sessão ativa</div>
-              <div style={{ fontSize: "11px" }}>Clique em &quot;Iniciar Sessão&quot; para conectar</div>
+              <div style={{ fontSize: "14px", fontWeight: 700, color: "var(--text)" }}>Sessão Desconectada</div>
+              <div style={{ fontSize: "12px", maxWidth: "260px" }}>Clique no botão <strong>&quot;Iniciar Sessão&quot;</strong> ao lado para gerar o QR Code e conectar.</div>
             </div>
           )}
 
-          {loading && !session && (
+          {actionLoading === "start" && (
+            <div style={{ textAlign: "center", color: "var(--text-muted)", display: "flex", flexDirection: "column", alignItems: "center", gap: "12px" }}>
+              <Loader2 size={36} className="spin" style={{ color: "#7b39fc" }} />
+              <div style={{ fontSize: "14px", fontWeight: 700, color: "#b394ff" }}>Iniciando Sessão WhatsApp...</div>
+              <div style={{ fontSize: "11px", maxWidth: "240px" }}>Conectando aos servidores do WhatsApp para gerar o QR Code, aguarde…</div>
+            </div>
+          )}
+
+          {loading && !session && !actionLoading && (
             <div style={{ textAlign: "center", color: "var(--text-muted)", display: "flex", flexDirection: "column", alignItems: "center", gap: "10px" }}>
               <Loader2 size={28} className="spin" />
               <div style={{ fontSize: "12px" }}>Verificando sessão...</div>

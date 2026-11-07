@@ -28,7 +28,10 @@ export async function GET(
     }
 
     if (!status.qrcode) {
-      return NextResponse.json({ message: "QR not ready or already connected" }, { status: 404 });
+      if (status.state === "open" || status.phone) {
+        return NextResponse.json({ message: "Already connected", status: "WORKING", qr: null }, { status: 200 });
+      }
+      return NextResponse.json({ message: "Starting", status: "STARTING", qr: null }, { status: 200 });
     }
 
     const accept = req.headers.get("accept") || "";

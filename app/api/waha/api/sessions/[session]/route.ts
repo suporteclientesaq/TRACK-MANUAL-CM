@@ -5,7 +5,7 @@ import { listClients } from "@/lib/store";
 export const dynamic = "force-dynamic";
 
 /**
- * Roteador compatível com a API do WAHA (GET /api/sessions/{session})
+ * Roteador compatível com a API oficial do WAHA (GET /api/sessions/{session})
  * Traduz chamadas do formato WAHA diretamente para o motor nativo do Track Manual!
  */
 export async function GET(
@@ -25,12 +25,16 @@ export async function GET(
 
     // Mapeia status do Baileys para o formato oficial do WAHA
     let wahaStatus = "STOPPED";
-    if (st.state === "open") wahaStatus = "WORKING";
-    else if (st.state === "connecting") wahaStatus = st.qrcode ? "SCAN_QR_CODE" : "STARTING";
+    if (st.state === "open" || (st.phone && !st.qrcode)) {
+      wahaStatus = "WORKING";
+    } else if (st.state === "connecting") {
+      wahaStatus = st.qrcode ? "SCAN_QR_CODE" : "STARTING";
+    }
 
     return NextResponse.json({
       name: session,
       status: wahaStatus,
+      qrcode: st.qrcode || null,
       config: {},
       me: st.phone ? { id: `${st.phone}@c.us`, pushName: st.name || "WhatsApp" } : null,
     });
@@ -40,14 +44,23 @@ export async function GET(
 }
 
 /**
- * POST /api/sessions/{session}/start ou DELETE /api/sessions/{session}
+ * POST /api/sessions/{session} ou POST /api/sessions/start
  */
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   ctx: { params: Promise<{ session: string }> }
 ) {
   try {
-    const { session } = await ctx.params;
+    let { session } = await ctx.params;
+    let body: any = null;
+    try {
+      body = await req.json();
+    } catch {}
+
+    if ((session === "start" || session === "stop") && body?.name) {
+      session = String(body.name);
+    }
+
     const clients = await listClients();
     const client = clients.find((c) => c.name.toLowerCase().replace(/\W+/g, "_") === session || c.id === session) || clients[0];
 
@@ -56,21 +69,37 @@ export async function POST(
     }
 
     const res = await connectNativeWhatsApp(client.id);
+    const status = res.state === "open" ? "WORKING" : "SCAN_QR_CODE";
+
     return NextResponse.json({
       name: session,
-      status: res.state === "open" ? "WORKING" : "SCAN_QR_CODE",
+      status,
+      qrcode: res.qrcode || null,
+      me: res.phone ? { id: `${res.phone}@c.us`, pushName: "WhatsApp" } : null,
     });
   } catch (err) {
     return NextResponse.json({ message: String(err) }, { status: 500 });
   }
 }
 
+/**
+ * DELETE /api/sessions/{session}
+ */
 export async function DELETE(
-  _req: NextRequest,
+  req: NextRequest,
   ctx: { params: Promise<{ session: string }> }
 ) {
   try {
-    const { session } = await ctx.params;
+    let { session } = await ctx.params;
+    let body: any = null;
+    try {
+      body = await req.json();
+    } catch {}
+
+    if (session === "stop" && body?.name) {
+      session = String(body.name);
+    }
+
     const clients = await listClients();
     const client = clients.find((c) => c.name.toLowerCase().replace(/\W+/g, "_") === session || c.id === session) || clients[0];
 
