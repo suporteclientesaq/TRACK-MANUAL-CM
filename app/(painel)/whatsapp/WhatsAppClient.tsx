@@ -22,6 +22,9 @@ import {
   connectEvolutionAction,
   disconnectEvolutionAction,
   getEvolutionStatusAction,
+  connectWahaAction,
+  disconnectWahaAction,
+  getWahaStatusAction,
 } from "@/app/actions";
 import { Button } from "@/components/ui/button";
 import type { Client } from "@/lib/types";
@@ -62,12 +65,17 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
   const [selectedClientId, setSelectedClientId] = useState(clients[0]?.id || "");
   const [connectionMode, setConnectionMode] = useState<"native" | "waha" | "evolution">("native");
 
-  // Configurações do modo Evolution API externa
+  // Configurações do modo Evolution API
   const [serverUrl, setServerUrl] = useState("http://localhost:8080");
   const [apiKey, setApiKey] = useState("429683C4C977415CAAFCCE10F7D57E11");
   const [instanceName, setInstanceName] = useState(
     clients[0] ? `track_${clients[0].name.toLowerCase().replace(/\W+/g, "_")}` : "track_whats"
   );
+
+  // Configurações do modo WAHA (WhatsApp HTTP API)
+  const [wahaServerUrl, setWahaServerUrl] = useState("http://localhost:3000");
+  const [wahaApiKey, setWahaApiKey] = useState("");
+  const [wahaSessionName, setWahaSessionName] = useState("default");
 
   const [loading, setLoading] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -107,7 +115,7 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
       const res = await fetch(`/api/webhook/waha/${currentClient.webhook_key}`);
       const data = await res.json();
       if (data.ok) {
-        setWahaTestResult("✅ Webhook WAHA ativo e respondendo perfeitamente!");
+        setWahaTestResult("✅ Endpoint do Webhook WAHA ativo e respondendo com sucesso!");
       } else {
         setWahaTestResult("⚠️ Erro: " + (data.error || "Resposta inesperada"));
       }
@@ -129,7 +137,7 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
     }
   };
 
-  // Checa status da conexão (Nativo ou Evolution)
+  // Checa status da conexão (Nativo, WAHA ou Evolution)
   const checkStatus = async () => {
     if (!selectedClientId) return;
     setChecking(true);
@@ -142,28 +150,62 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
           if (res.phone) setConnectedPhone(res.phone);
           if (res.qrcode && res.state === "connecting") setQrCodeData(res.qrcode);
           else if (res.state === "open") setQrCodeData(null);
-        }
-      } else if (connectionMode === "waha") {
-        if (currentClient?.webhook_key) {
-          const res = await fetch(`/api/webhook/waha/${currentClient.webhook_key}`);
-          const data = await res.json();
-          if (data.ok) {
-            setConnectionState("open");
-          }
-        }
-      } else {
-        if (!serverUrl || !apiKey || !instanceName) return;
-        const res = await getEvolutionStatusAction({ serverUrl, apiKey, instanceName });
-        if (res.ok) {
-          if (res.state === "open") { setConnectionState("open"); setQrCodeData(null); }
-          else if (res.state === "connecting") setConnectionState("connecting");
-          else setConnectionState("close");
         } else {
           setConnectionState("close");
         }
+      } else if (connectionMode === "waha") {
+        if (!wahaServerUrl.trim()) {
+          setConnectionState("close");
+          return;
+        }
+        const res = await getWahaStatusAction({
+          serverUrl: wahaServerUrl,
+          apiKey: wahaApiKey,
+          sessionName: wahaSessionName,
+        });
+        if (res.ok) {
+          if (res.state === "open") {
+            setConnectionState("open");
+            setQrCodeData(null);
+            if (res.phone) setConnectedPhone(res.phone);
+          } else if (res.state === "connecting") {
+            setConnectionState("connecting");
+            if (res.qrcode) setQrCodeData(res.qrcode);
+          } else {
+            setConnectionState("close");
+          }
+        } else {
+          setConnectionState("close");
+          if (res.error && !res.error.includes("404")) {
+            setErrorMessage(res.error);
+          }
+        }
+      } else {
+        if (!serverUrl.trim() || !apiKey.trim() || !instanceName.trim()) {
+          setConnectionState("close");
+          return;
+        }
+        const res = await getEvolutionStatusAction({ serverUrl, apiKey, instanceName });
+        if (res.ok) {
+          if (res.state === "open") {
+            setConnectionState("open");
+            setQrCodeData(null);
+            if (res.phone) setConnectedPhone(res.phone);
+          } else if (res.state === "connecting") {
+            setConnectionState("connecting");
+          } else {
+            setConnectionState("close");
+          }
+        } else {
+          setConnectionState("close");
+          if (res.error && !res.error.includes("404")) {
+            setErrorMessage(res.error);
+          }
+        }
       }
-    } catch {
+    } catch (e) {
       setConnectionState("close");
+      setErrorMessage("Erro ao verificar status: " + (e instanceof Error ? e.message : String(e)));
     } finally {
       setChecking(false);
     }
@@ -194,28 +236,60 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
         } else {
           setErrorMessage(res.error || "Não foi possível iniciar o WhatsApp nativo.");
         }
-      } else if (connectionMode === "evolution") {
-        const res = await connectEvolutionAction({ serverUrl, apiKey, instanceName, clientId: selectedClientId });
+      } else if (connectionMode === "waha") {
+        if (!wahaServerUrl.trim()) {
+          setErrorMessage("Informe o endereço da API do WAHA (ex: http://seu-ip:3000 ou https://waha.seudominio.com).");
+          setLoading(false);
+          return;
+        }
+        const res = await connectWahaAction({
+          serverUrl: wahaServerUrl,
+          apiKey: wahaApiKey,
+          sessionName: wahaSessionName,
+          clientId: selectedClientId,
+        });
         if (res.ok) {
           if (res.state === "open") {
             setConnectionState("open");
             setQrCodeData(null);
+            if (res.phone) setConnectedPhone(res.phone);
+            setSuccessNotice("WhatsApp conectado com sucesso via WAHA!");
+          } else {
+            setConnectionState("connecting");
+            if (res.qrcode) setQrCodeData(res.qrcode);
+          }
+        } else {
+          setErrorMessage(res.error || "Não foi possível conectar ao WAHA.");
+        }
+      } else if (connectionMode === "evolution") {
+        if (!serverUrl.trim() || !apiKey.trim() || !instanceName.trim()) {
+          setErrorMessage("Preencha o Nome da Instância, Endereço e Chave da Evolution API.");
+          setLoading(false);
+          return;
+        }
+        const res = await connectEvolutionAction({
+          serverUrl,
+          apiKey,
+          instanceName,
+          clientId: selectedClientId,
+        });
+        if (res.ok) {
+          if (res.state === "open") {
+            setConnectionState("open");
+            setQrCodeData(null);
+            if (res.phone) setConnectedPhone(res.phone);
             setSuccessNotice("WhatsApp já está conectado e pronto para rastreamento!");
           } else {
             setConnectionState("connecting");
             if (res.qrcode) setQrCodeData(res.qrcode);
           }
         } else {
-          setErrorMessage(res.error || "Não foi possível conectar à Evolution API. Verifique se o servidor está rodando em " + serverUrl);
+          setErrorMessage(res.error || "Não foi possível conectar à Evolution API.");
         }
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes("fetch failed") || msg.includes("ECONNREFUSED")) {
-        setErrorMessage(`Não foi possível alcançar o servidor (${serverUrl}). Verifique se a Evolution API está em execução. Para conectar sem servidor externo, utilize "WhatsApp Direto (Integrado)".`);
-      } else {
-        setErrorMessage("Erro ao conectar: " + msg);
-      }
+      setErrorMessage("Erro ao conectar: " + msg);
     } finally {
       setLoading(false);
     }
@@ -229,6 +303,12 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
     try {
       if (connectionMode === "native") {
         await nativeDisconnect(selectedClientId);
+      } else if (connectionMode === "waha") {
+        await disconnectWahaAction({
+          serverUrl: wahaServerUrl,
+          apiKey: wahaApiKey,
+          sessionName: wahaSessionName,
+        });
       } else if (connectionMode === "evolution") {
         await disconnectEvolutionAction({ serverUrl, apiKey, instanceName });
       }
@@ -243,10 +323,10 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
     }
   };
 
-  // Polling automático enquanto aguarda leitura do QR Code (apenas nos modos que geram QR no painel)
+  // Polling automático enquanto aguarda leitura do QR Code
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
-    if (connectionState === "connecting" && connectionMode !== "waha") {
+    if (connectionState === "connecting") {
       interval = setInterval(async () => {
         try {
           if (connectionMode === "native") {
@@ -259,12 +339,27 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
             } else if (res.ok && res.qrcode) {
               setQrCodeData(res.qrcode);
             }
+          } else if (connectionMode === "waha") {
+            const res = await getWahaStatusAction({
+              serverUrl: wahaServerUrl,
+              apiKey: wahaApiKey,
+              sessionName: wahaSessionName,
+            });
+            if (res.ok && res.state === "open") {
+              setConnectionState("open");
+              setQrCodeData(null);
+              if (res.phone) setConnectedPhone(res.phone);
+              setSuccessNotice("🎉 WhatsApp Conectado com Sucesso via WAHA!");
+            } else if (res.ok && res.qrcode) {
+              setQrCodeData(res.qrcode);
+            }
           } else if (connectionMode === "evolution") {
             const res = await getEvolutionStatusAction({ serverUrl, apiKey, instanceName });
             if (res.ok && res.state === "open") {
               setConnectionState("open");
               setQrCodeData(null);
-              setSuccessNotice("🎉 WhatsApp Conectado com Sucesso!");
+              if (res.phone) setConnectedPhone(res.phone);
+              setSuccessNotice("🎉 WhatsApp Conectado com Sucesso via Evolution API!");
             }
           }
         } catch {
@@ -272,11 +367,15 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
         }
       }, 3000);
     }
-    return () => { if (interval) clearInterval(interval); };
-  }, [connectionState, connectionMode, selectedClientId, serverUrl, apiKey, instanceName]);
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [connectionState, connectionMode, selectedClientId, serverUrl, apiKey, instanceName, wahaServerUrl, wahaApiKey, wahaSessionName]);
 
   // Checa status inicial ao trocar cliente ou modo
-  useEffect(() => { checkStatus(); }, [selectedClientId, connectionMode]);
+  useEffect(() => {
+    checkStatus();
+  }, [selectedClientId, connectionMode]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "24px", maxWidth: "1020px" }}>
@@ -285,7 +384,20 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
             <h1 style={{ margin: 0, fontSize: "26px", fontWeight: 800 }}>Conectar WhatsApp</h1>
-            <span style={{ fontSize: "11px", fontWeight: 700, padding: "3px 9px", borderRadius: "999px", background: "linear-gradient(90deg, rgba(52, 199, 123, 0.2), rgba(0, 242, 254, 0.2))", color: "#34c77b", border: "1px solid rgba(52, 199, 123, 0.4)", display: "inline-flex", alignItems: "center", gap: "4px" }}>
+            <span
+              style={{
+                fontSize: "11px",
+                fontWeight: 700,
+                padding: "3px 9px",
+                borderRadius: "999px",
+                background: "linear-gradient(90deg, rgba(52, 199, 123, 0.2), rgba(0, 242, 254, 0.2))",
+                color: "#34c77b",
+                border: "1px solid rgba(52, 199, 123, 0.4)",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "4px",
+              }}
+            >
               <Zap size={12} />
               BAILEYS NATIVO + WAHA + EVOLUTION
             </span>
@@ -300,14 +412,26 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "10px" }}>
         <button
           type="button"
-          onClick={() => { setConnectionMode("native"); setQrCodeData(null); setErrorMessage(null); setConnectionState("unknown"); }}
+          onClick={() => {
+            setConnectionMode("native");
+            setQrCodeData(null);
+            setErrorMessage(null);
+            setConnectionState("unknown");
+          }}
           style={{
-            padding: "14px 16px", borderRadius: "10px",
+            padding: "14px 16px",
+            borderRadius: "10px",
             border: connectionMode === "native" ? "2px solid #34c77b" : "2px solid var(--border)",
             background: connectionMode === "native" ? "rgba(52, 199, 123, 0.12)" : "var(--surface)",
             color: connectionMode === "native" ? "#34c77b" : "var(--text-muted)",
-            cursor: "pointer", fontWeight: 600, fontSize: "13px",
-            display: "flex", alignItems: "center", gap: "10px", transition: "all 0.2s", textAlign: "left",
+            cursor: "pointer",
+            fontWeight: 600,
+            fontSize: "13px",
+            display: "flex",
+            alignItems: "center",
+            gap: "10px",
+            transition: "all 0.2s",
+            textAlign: "left",
           }}
         >
           <Radio size={18} />
@@ -323,37 +447,61 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
 
         <button
           type="button"
-          onClick={() => { setConnectionMode("waha"); setQrCodeData(null); setErrorMessage(null); setConnectionState("unknown"); }}
+          onClick={() => {
+            setConnectionMode("waha");
+            setQrCodeData(null);
+            setErrorMessage(null);
+            setConnectionState("unknown");
+          }}
           style={{
-            padding: "14px 16px", borderRadius: "10px",
+            padding: "14px 16px",
+            borderRadius: "10px",
             border: connectionMode === "waha" ? "2px solid #7b39fc" : "2px solid var(--border)",
             background: connectionMode === "waha" ? "rgba(123, 57, 252, 0.12)" : "var(--surface)",
             color: connectionMode === "waha" ? "#b394ff" : "var(--text-muted)",
-            cursor: "pointer", fontWeight: 600, fontSize: "13px",
-            display: "flex", alignItems: "center", gap: "10px", transition: "all 0.2s", textAlign: "left",
+            cursor: "pointer",
+            fontWeight: 600,
+            fontSize: "13px",
+            display: "flex",
+            alignItems: "center",
+            gap: "10px",
+            transition: "all 0.2s",
+            textAlign: "left",
           }}
         >
           <Box size={18} />
           <div>
             <div style={{ fontWeight: 700, color: connectionMode === "waha" ? "#ffffff" : "var(--text)" }}>
-              WAHA (Docker / Webhook)
+              WAHA (Docker / VPS)
             </div>
             <div style={{ fontSize: "11px", fontWeight: 400, opacity: 0.85, marginTop: "2px" }}>
-              WhatsApp HTTP API leve em Docker. Painel visual e Swagger integrados.
+              WhatsApp HTTP API. Conexão direta via REST com QR Code e Webhook.
             </div>
           </div>
         </button>
 
         <button
           type="button"
-          onClick={() => { setConnectionMode("evolution"); setQrCodeData(null); setErrorMessage(null); setConnectionState("unknown"); }}
+          onClick={() => {
+            setConnectionMode("evolution");
+            setQrCodeData(null);
+            setErrorMessage(null);
+            setConnectionState("unknown");
+          }}
           style={{
-            padding: "14px 16px", borderRadius: "10px",
+            padding: "14px 16px",
+            borderRadius: "10px",
             border: connectionMode === "evolution" ? "2px solid #38bdf8" : "2px solid var(--border)",
             background: connectionMode === "evolution" ? "rgba(56, 189, 248, 0.12)" : "var(--surface)",
             color: connectionMode === "evolution" ? "#38bdf8" : "var(--text-muted)",
-            cursor: "pointer", fontWeight: 600, fontSize: "13px",
-            display: "flex", alignItems: "center", gap: "10px", transition: "all 0.2s", textAlign: "left",
+            cursor: "pointer",
+            fontWeight: 600,
+            fontSize: "13px",
+            display: "flex",
+            alignItems: "center",
+            gap: "10px",
+            transition: "all 0.2s",
+            textAlign: "left",
           }}
         >
           <Server size={18} />
@@ -362,7 +510,7 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
               Evolution API (Servidor)
             </div>
             <div style={{ fontSize: "11px", fontWeight: 400, opacity: 0.85, marginTop: "2px" }}>
-              Para quem já possui Evolution API rodando em servidor ou VPS própria.
+              Para instâncias da Evolution API v1 ou v2 rodando em VPS.
             </div>
           </div>
         </button>
@@ -387,8 +535,8 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
         <div className="card" style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
           <h2 style={{ fontSize: "16px", margin: "0 0 4px 0" }}>
             {connectionMode === "native" && "Configuração Nativa (Sem Servidor)"}
-            {connectionMode === "waha" && "Configuração WAHA (Docker)"}
-            {connectionMode === "evolution" && "Dados da Instância Evolution"}
+            {connectionMode === "waha" && "Configuração WAHA (Docker / VPS)"}
+            {connectionMode === "evolution" && "Dados da Instância Evolution API"}
           </h2>
 
           <div>
@@ -399,21 +547,45 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
               id="client_id"
               value={selectedClientId}
               onChange={(e) => handleClientSelect(e.target.value)}
-              style={{ width: "100%", padding: "8px 12px", borderRadius: "8px", background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text)", fontSize: "13px" }}
+              style={{
+                width: "100%",
+                padding: "8px 12px",
+                borderRadius: "8px",
+                background: "var(--surface)",
+                border: "1px solid var(--border)",
+                color: "var(--text)",
+                fontSize: "13px",
+              }}
             >
               {clients.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
               ))}
             </select>
-            <div className="hint" style={{ marginTop: "4px" }}>Os leads que chegarem neste WhatsApp serão vinculados a este cliente.</div>
+            <div className="hint" style={{ marginTop: "4px" }}>
+              Os leads que chegarem neste WhatsApp serão vinculados a este cliente.
+            </div>
           </div>
 
           {/* MODO NATIVO */}
           {connectionMode === "native" && (
-            <div style={{ padding: "14px", borderRadius: "10px", background: "rgba(52, 199, 123, 0.06)", border: "1px solid rgba(52, 199, 123, 0.2)", fontSize: "12px", color: "var(--text-muted)", display: "flex", flexDirection: "column", gap: "8px" }}>
+            <div
+              style={{
+                padding: "14px",
+                borderRadius: "10px",
+                background: "rgba(52, 199, 123, 0.06)",
+                border: "1px solid rgba(52, 199, 123, 0.2)",
+                fontSize: "12px",
+                color: "var(--text-muted)",
+                display: "flex",
+                flexDirection: "column",
+                gap: "8px",
+              }}
+            >
               <div style={{ display: "flex", alignItems: "center", gap: "6px", color: "#34c77b", fontWeight: 600 }}>
                 <Zap size={14} />
-                <span>Baileys Nativo Integrado</span>
+                <span>Baileys Nativo Integrado (Ativo na VPS)</span>
               </div>
               <p style={{ margin: 0, lineHeight: "1.5" }}>
                 O Track Manual executa a conexão WhatsApp diretamente no seu sistema. Não é necessário Docker nem servidores extras.
@@ -436,41 +608,94 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
           {connectionMode === "waha" && (
             <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
               <div>
-                <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: 600 }}>
-                  1. Comando para Rodar o WAHA (Docker)
+                <label htmlFor="waha_server_url" style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: 600 }}>
+                  Endereço da API do WAHA
                 </label>
-                <div style={{ display: "flex", gap: "6px" }}>
-                  <input
-                    type="text"
-                    readOnly
-                    value={dockerCommand}
-                    style={{ flex: 1, padding: "8px 12px", borderRadius: "8px", background: "var(--surface)", border: "1px solid var(--border)", color: "#a5b4fc", fontSize: "11px", fontFamily: "monospace" }}
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => copyToClipboard(dockerCommand, "docker")}
-                  >
-                    {copiedField === "docker" ? <CheckCircle2 size={14} /> : <Copy size={14} />}
-                    {copiedField === "docker" ? "Copiado!" : "Copiar"}
-                  </Button>
-                </div>
+                <input
+                  id="waha_server_url"
+                  type="text"
+                  value={wahaServerUrl}
+                  onChange={(e) => setWahaServerUrl(e.target.value)}
+                  placeholder="Ex: http://seu-ip:3000 ou https://waha.seudominio.com"
+                  style={{
+                    width: "100%",
+                    padding: "8px 12px",
+                    borderRadius: "8px",
+                    background: "var(--surface)",
+                    border: "1px solid var(--border)",
+                    color: "var(--text)",
+                    fontSize: "13px",
+                  }}
+                />
                 <div className="hint" style={{ marginTop: "4px" }}>
-                  Roda na porta 3008 para não conflitar com o Track Manual (porta 3000).
+                  URL pública ou interna do WAHA na VPS.
+                </div>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                <div>
+                  <label htmlFor="waha_session_name" style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: 600 }}>
+                    Nome da Sessão
+                  </label>
+                  <input
+                    id="waha_session_name"
+                    type="text"
+                    value={wahaSessionName}
+                    onChange={(e) => setWahaSessionName(e.target.value)}
+                    placeholder="default"
+                    style={{
+                      width: "100%",
+                      padding: "8px 12px",
+                      borderRadius: "8px",
+                      background: "var(--surface)",
+                      border: "1px solid var(--border)",
+                      color: "var(--text)",
+                      fontSize: "13px",
+                    }}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="waha_api_key" style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: 600 }}>
+                    Chave API (Opcional)
+                  </label>
+                  <input
+                    id="waha_api_key"
+                    type="password"
+                    value={wahaApiKey}
+                    onChange={(e) => setWahaApiKey(e.target.value)}
+                    placeholder="WAHA_API_KEY do .env"
+                    style={{
+                      width: "100%",
+                      padding: "8px 12px",
+                      borderRadius: "8px",
+                      background: "var(--surface)",
+                      border: "1px solid var(--border)",
+                      color: "var(--text)",
+                      fontSize: "13px",
+                    }}
+                  />
                 </div>
               </div>
 
               <div>
                 <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: 600 }}>
-                  2. Webhook URL no WAHA (Evento <code>message</code>)
+                  Webhook URL do Track Manual no WAHA (Evento <code>message</code>)
                 </label>
                 <div style={{ display: "flex", gap: "6px" }}>
                   <input
                     type="text"
                     readOnly
                     value={wahaWebhookUrl}
-                    style={{ flex: 1, padding: "8px 12px", borderRadius: "8px", background: "var(--surface)", border: "1px solid var(--border)", color: "#34c77b", fontSize: "11px", fontFamily: "monospace" }}
+                    style={{
+                      flex: 1,
+                      padding: "8px 12px",
+                      borderRadius: "8px",
+                      background: "var(--surface)",
+                      border: "1px solid var(--border)",
+                      color: "#34c77b",
+                      fontSize: "11px",
+                      fontFamily: "monospace",
+                    }}
                   />
                   <Button
                     type="button"
@@ -483,22 +708,11 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
                   </Button>
                 </div>
                 <div className="hint" style={{ marginTop: "4px" }}>
-                  Insira esta URL nas configurações de Webhook do WAHA e marque o evento <strong>message</strong>.
+                  Ao clicar em <strong>Gerar QR Code</strong>, o Track Manual registra esse webhook automaticamente no WAHA!
                 </div>
               </div>
 
               <div style={{ display: "flex", gap: "8px", marginTop: "4px" }}>
-                <a
-                  href="http://localhost:3008/dashboard"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{ textDecoration: "none", flex: 1 }}
-                >
-                  <Button type="button" variant="outline" size="sm" style={{ width: "100%", display: "flex", gap: "6px" }}>
-                    <ExternalLink size={14} />
-                    Abrir Painel WAHA (:3008)
-                  </Button>
-                </a>
                 <Button
                   type="button"
                   variant="outline"
@@ -508,7 +722,7 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
                   style={{ flex: 1 }}
                 >
                   {wahaTesting ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                  Testar Endpoint
+                  Testar Endpoint do Webhook
                 </Button>
               </div>
 
@@ -522,30 +736,92 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
 
           {/* MODO EVOLUTION */}
           {connectionMode === "evolution" && (
-            <>
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
               <div>
-                <label htmlFor="instance_name" style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: 600 }}>Nome da Instância</label>
-                <input id="instance_name" type="text" value={instanceName} onChange={(e) => setInstanceName(e.target.value)}
-                  style={{ width: "100%", padding: "8px 12px", borderRadius: "8px", background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text)", fontSize: "13px" }} />
-                <div className="hint" style={{ marginTop: "4px" }}>Identificador único da sessão na Evolution API.</div>
+                <label htmlFor="instance_name" style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: 600 }}>
+                  Nome da Instância
+                </label>
+                <input
+                  id="instance_name"
+                  type="text"
+                  value={instanceName}
+                  onChange={(e) => setInstanceName(e.target.value)}
+                  style={{
+                    width: "100%",
+                    padding: "8px 12px",
+                    borderRadius: "8px",
+                    background: "var(--surface)",
+                    border: "1px solid var(--border)",
+                    color: "var(--text)",
+                    fontSize: "13px",
+                  }}
+                />
+                <div className="hint" style={{ marginTop: "4px" }}>
+                  Identificador único da sessão na Evolution API.
+                </div>
               </div>
+
               <div>
-                <label htmlFor="server_url" style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: 600 }}>Endereço da Evolution API</label>
-                <input id="server_url" type="text" value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} placeholder="http://localhost:8080"
-                  style={{ width: "100%", padding: "8px 12px", borderRadius: "8px", background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text)", fontSize: "13px" }} />
-                <div className="hint" style={{ marginTop: "4px" }}>Porta padrão: 8080. Se estiver em uma VPS, coloque a URL completa.</div>
+                <label htmlFor="server_url" style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: 600 }}>
+                  Endereço da Evolution API
+                </label>
+                <input
+                  id="server_url"
+                  type="text"
+                  value={serverUrl}
+                  onChange={(e) => setServerUrl(e.target.value)}
+                  placeholder="Ex: http://seu-ip:8080 ou https://evolution.seudominio.com"
+                  style={{
+                    width: "100%",
+                    padding: "8px 12px",
+                    borderRadius: "8px",
+                    background: "var(--surface)",
+                    border: "1px solid var(--border)",
+                    color: "var(--text)",
+                    fontSize: "13px",
+                  }}
+                />
+                <div className="hint" style={{ marginTop: "4px" }}>
+                  Endereço completo da VPS onde a Evolution API está em execução.
+                </div>
               </div>
+
               <div>
-                <label htmlFor="api_key" style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: 600 }}>Chave Global da Evolution (API Key)</label>
-                <input id="api_key" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="AUTHENTICATION_API_KEY do .env"
-                  style={{ width: "100%", padding: "8px 12px", borderRadius: "8px", background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text)", fontSize: "13px" }} />
-                <div className="hint" style={{ marginTop: "4px" }}>Definida na variável AUTHENTICATION_API_KEY no .env da Evolution API.</div>
+                <label htmlFor="api_key" style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: 600 }}>
+                  Chave Global da Evolution (API Key)
+                </label>
+                <input
+                  id="api_key"
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder="AUTHENTICATION_API_KEY do .env"
+                  style={{
+                    width: "100%",
+                    padding: "8px 12px",
+                    borderRadius: "8px",
+                    background: "var(--surface)",
+                    border: "1px solid var(--border)",
+                    color: "var(--text)",
+                    fontSize: "13px",
+                  }}
+                />
+                <div className="hint" style={{ marginTop: "4px" }}>
+                  Definida na variável AUTHENTICATION_API_KEY no .env da Evolution API.
+                </div>
               </div>
-            </>
+            </div>
           )}
 
           <div style={{ display: "flex", gap: "10px", marginTop: "8px" }}>
-            <Button type="button" variant="outline" size="sm" onClick={checkStatus} disabled={checking || loading} style={{ flex: 1 }}>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={checkStatus}
+              disabled={checking || loading}
+              style={{ flex: 1 }}
+            >
               <RefreshCw size={14} className={checking ? "animate-spin" : undefined} />
               Verificar Conexão
             </Button>
@@ -556,62 +832,87 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
         <div
           className="card"
           style={{
-            display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-            padding: "32px 24px", textAlign: "center", minHeight: "380px",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "32px 24px",
+            textAlign: "center",
+            minHeight: "380px",
             border: connectionState === "open" ? "1px solid rgba(52, 199, 123, 0.4)" : undefined,
-            background: connectionState === "open" ? "linear-gradient(145deg, rgba(52, 199, 123, 0.08), rgba(21, 18, 29, 0.95))" : undefined,
+            background:
+              connectionState === "open"
+                ? "linear-gradient(145deg, rgba(52, 199, 123, 0.08), rgba(21, 18, 29, 0.95))"
+                : undefined,
           }}
         >
-          {/* MODO WAHA: Guia Visual Passo a Passo */}
-          {connectionMode === "waha" ? (
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "16px", maxWidth: "380px" }}>
-              <div style={{ width: "70px", height: "70px", borderRadius: "50%", background: "rgba(123, 57, 252, 0.15)", color: "#b394ff", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 0 20px rgba(123, 57, 252, 0.25)" }}>
-                <Box size={38} />
-              </div>
-              <div>
-                <h3 style={{ margin: "0 0 6px 0", fontSize: "18px", fontWeight: 800, color: "#b394ff" }}>Integração WAHA Pronta</h3>
-                <p className="muted small" style={{ margin: 0 }}>
-                  O WAHA gerencia a sessão no container Docker e envia os leads em tempo real para o Track Manual via Webhook.
-                </p>
-              </div>
-
-              <div style={{ textAlign: "left", width: "100%", padding: "14px", borderRadius: "10px", background: "var(--surface)", border: "1px solid var(--border)", fontSize: "12px", lineHeight: "1.7" }}>
-                <div style={{ fontWeight: 700, color: "#ffffff", marginBottom: "4px" }}>Como ativar em 3 passos:</div>
-                <div>1. Execute o comando <code>docker run</code> (ao lado)</div>
-                <div>2. Acesse <a href="http://localhost:3008/dashboard" target="_blank" rel="noopener noreferrer" style={{ color: "#34c77b" }}>localhost:3008/dashboard</a> e escaneie o QR</div>
-                <div>3. Em <strong>Webhooks</strong>, cole a URL acima e selecione o evento <code>message</code></div>
-              </div>
-
-              <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 16px", borderRadius: "8px", background: "rgba(52, 199, 123, 0.1)", fontSize: "12px", color: "#34c77b", fontWeight: 600 }}>
-                <ShieldCheck size={16} />
-                <span>Extrator de CTWA CLID Ativo no Endpoint</span>
-              </div>
-            </div>
-          ) : connectionState === "open" ? (
-            /* ESTADO: Conectado (Nativo ou Evolution) */
+          {/* ESTADO 1: Conectado (Nativo, WAHA ou Evolution) */}
+          {connectionState === "open" && (
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "14px" }}>
-              <div style={{ width: "72px", height: "72px", borderRadius: "50%", background: "rgba(52, 199, 123, 0.15)", color: "#34c77b", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 0 25px rgba(52, 199, 123, 0.3)" }}>
+              <div
+                style={{
+                  width: "72px",
+                  height: "72px",
+                  borderRadius: "50%",
+                  background: "rgba(52, 199, 123, 0.15)",
+                  color: "#34c77b",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  boxShadow: "0 0 25px rgba(52, 199, 123, 0.3)",
+                }}
+              >
                 <CheckCircle2 size={40} />
               </div>
               <div>
-                <h3 style={{ margin: "0 0 6px 0", fontSize: "18px", color: "#34c77b", fontWeight: 800 }}>WhatsApp Conectado!</h3>
+                <h3 style={{ margin: "0 0 6px 0", fontSize: "18px", color: "#34c77b", fontWeight: 800 }}>
+                  WhatsApp Conectado!
+                </h3>
                 <p className="muted small" style={{ margin: 0, maxWidth: "340px" }}>
                   {connectedPhone ? `Número +${connectedPhone} conectado.` : "WhatsApp ativo."} Todos os cliques em anúncios e conversas são capturados com <code>ctwa_clid</code> automaticamente.
                 </p>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 16px", borderRadius: "8px", background: "rgba(52, 199, 123, 0.1)", fontSize: "12px", color: "#34c77b", fontWeight: 600, marginTop: "6px" }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  padding: "8px 16px",
+                  borderRadius: "8px",
+                  background: "rgba(52, 199, 123, 0.1)",
+                  fontSize: "12px",
+                  color: "#34c77b",
+                  fontWeight: 600,
+                  marginTop: "6px",
+                }}
+              >
                 <ShieldCheck size={16} />
-                <span>Receptor Inteligente Ativo</span>
+                <span>Receptor Inteligente Ativo ({connectionMode.toUpperCase()})</span>
               </div>
-              <Button variant="destructive" size="sm" onClick={handleDisconnect} disabled={loading} style={{ marginTop: "14px" }}>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={handleDisconnect}
+                disabled={loading}
+                style={{ marginTop: "14px" }}
+              >
                 <LogOut size={14} />
                 Desconectar WhatsApp
               </Button>
             </div>
-          ) : (connectionState === "connecting" && qrCodeData) ? (
-            /* ESTADO: Aguardando Escaneamento (QR Code) */
+          )}
+
+          {/* ESTADO 2: Aguardando Escaneamento (QR Code) */}
+          {connectionState === "connecting" && qrCodeData && (
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "16px" }}>
-              <div style={{ padding: "16px", background: "#ffffff", borderRadius: "12px", boxShadow: "0 10px 30px rgba(0, 0, 0, 0.5)" }}>
+              <div
+                style={{
+                  padding: "16px",
+                  background: "#ffffff",
+                  borderRadius: "12px",
+                  boxShadow: "0 10px 30px rgba(0, 0, 0, 0.5)",
+                }}
+              >
                 <img
                   src={qrCodeData.startsWith("data:") ? qrCodeData : `data:image/png;base64,${qrCodeData}`}
                   alt="QR Code WhatsApp"
@@ -619,11 +920,26 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
                 />
               </div>
               <div>
-                <h3 style={{ margin: "0 0 6px 0", fontSize: "16px", fontWeight: 700 }}>Escaneie o QR Code no seu WhatsApp</h3>
-                <ol style={{ textAlign: "left", fontSize: "12px", color: "var(--text-muted)", paddingLeft: "20px", margin: "0 0 10px 0", lineHeight: "1.6" }}>
+                <h3 style={{ margin: "0 0 6px 0", fontSize: "16px", fontWeight: 700 }}>
+                  Escaneie o QR Code no seu WhatsApp
+                </h3>
+                <ol
+                  style={{
+                    textAlign: "left",
+                    fontSize: "12px",
+                    color: "var(--text-muted)",
+                    paddingLeft: "20px",
+                    margin: "0 0 10px 0",
+                    lineHeight: "1.6",
+                  }}
+                >
                   <li>Abra o WhatsApp no celular</li>
-                  <li>Toque em <strong>Configurações</strong> &gt; <strong>Aparelhos Conectados</strong></li>
-                  <li>Toque em <strong>Conectar um Aparelho</strong> e aponte para a tela</li>
+                  <li>
+                    Toque em <strong>Configurações</strong> &gt; <strong>Aparelhos Conectados</strong>
+                  </li>
+                  <li>
+                    Toque em <strong>Conectar um Aparelho</strong> e aponte para a tela
+                  </li>
                 </ol>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: "#b394ff" }}>
@@ -631,31 +947,73 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
                 <span>Aguardando leitura do QR Code pelo celular…</span>
               </div>
             </div>
-          ) : (connectionState === "connecting" && !qrCodeData) ? (
-            /* ESTADO: Carregando */
+          )}
+
+          {/* ESTADO 3: Carregando QR Code */}
+          {connectionState === "connecting" && !qrCodeData && (
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "14px" }}>
               <Loader2 size={36} className="animate-spin" style={{ color: "#b394ff" }} />
-              <p className="muted small">Gerando QR Code, aguarde…</p>
+              <p className="muted small">Gerando QR Code na VPS, aguarde…</p>
             </div>
-          ) : (
-            /* ESTADO: Desconectado / Inicial */
+          )}
+
+          {/* ESTADO 4: Desconectado / Inicial */}
+          {connectionState !== "open" && connectionState !== "connecting" && (
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "16px" }}>
-              <div style={{ width: "68px", height: "68px", borderRadius: "50%", background: "rgba(123, 57, 252, 0.15)", color: "#b394ff", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <Smartphone size={34} />
+              <div
+                style={{
+                  width: "68px",
+                  height: "68px",
+                  borderRadius: "50%",
+                  background:
+                    connectionMode === "native"
+                      ? "rgba(52, 199, 123, 0.15)"
+                      : connectionMode === "waha"
+                        ? "rgba(123, 57, 252, 0.15)"
+                        : "rgba(56, 189, 248, 0.15)",
+                  color:
+                    connectionMode === "native"
+                      ? "#34c77b"
+                      : connectionMode === "waha"
+                        ? "#b394ff"
+                        : "#38bdf8",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                {connectionMode === "native" && <Smartphone size={34} />}
+                {connectionMode === "waha" && <Box size={34} />}
+                {connectionMode === "evolution" && <Server size={34} />}
               </div>
               <div>
-                <h3 style={{ margin: "0 0 6px 0", fontSize: "17px", fontWeight: 700 }}>Nenhum WhatsApp Conectado</h3>
+                <h3 style={{ margin: "0 0 6px 0", fontSize: "17px", fontWeight: 700 }}>
+                  Nenhum WhatsApp Conectado
+                </h3>
                 <p className="muted small" style={{ margin: 0, maxWidth: "340px" }}>
                   {connectionMode === "native"
                     ? "Gere o QR Code para conectar seu número de WhatsApp diretamente ao Track Manual."
-                    : "Gere o QR Code para conectar a instância Evolution ao seu WhatsApp."}
+                    : connectionMode === "waha"
+                      ? "Gere o QR Code para conectar a sessão WAHA ao seu WhatsApp."
+                      : "Gere o QR Code para conectar a instância Evolution API ao seu WhatsApp."}
                 </p>
               </div>
               <Button
                 size="default"
                 onClick={handleConnect}
                 disabled={loading}
-                style={{ background: "linear-gradient(90deg, #7b39fc 0%, #34c77b 100%)", color: "#ffffff", fontWeight: 700, boxShadow: "0 4px 15px rgba(123, 57, 252, 0.4)", padding: "10px 24px" }}
+                style={{
+                  background:
+                    connectionMode === "native"
+                      ? "linear-gradient(90deg, #34c77b 0%, #00f2fe 100%)"
+                      : connectionMode === "waha"
+                        ? "linear-gradient(90deg, #7b39fc 0%, #34c77b 100%)"
+                        : "linear-gradient(90deg, #38bdf8 0%, #7b39fc 100%)",
+                  color: "#ffffff",
+                  fontWeight: 700,
+                  boxShadow: "0 4px 15px rgba(0, 0, 0, 0.3)",
+                  padding: "10px 24px",
+                }}
               >
                 {loading ? (
                   <>
@@ -682,13 +1040,32 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
         </h3>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "14px" }}>
           {[
-            { n: "1", title: "Clique no Anúncio (Meta)", text: "O cliente clica no anúncio no Instagram ou Facebook e o Meta anexa o ctwa_clid e o ID do anúncio.", color: "#ebe8f2" },
-            { n: "2", title: "Chegada no WhatsApp", text: "O Track Manual (Nativo, WAHA ou Evolution) recebe a mensagem com os dados do criativo e clid automaticamente.", color: "#ebe8f2" },
-            { n: "3", title: "Venda e Atribuição Perfeita", text: "O lead é enriquecido na hora. Ao comprar, a conversão é enviada para a campanha exata do anúncio!", color: "#34c77b" },
+            {
+              n: "1",
+              title: "Clique no Anúncio (Meta)",
+              text: "O cliente clica no anúncio no Instagram ou Facebook e o Meta anexa o ctwa_clid e o ID do anúncio.",
+              color: "#ebe8f2",
+            },
+            {
+              n: "2",
+              title: "Chegada no WhatsApp (VPS)",
+              text: "O Track Manual (Nativo, WAHA ou Evolution) recebe a mensagem com os dados do criativo e clid automaticamente.",
+              color: "#ebe8f2",
+            },
+            {
+              n: "3",
+              title: "Venda e Atribuição Perfeita",
+              text: "O lead é enriquecido na hora. Ao comprar, a conversão é enviada para a campanha exata do anúncio!",
+              color: "#34c77b",
+            },
           ].map(({ n, title, text, color }) => (
             <div key={n} style={{ padding: "12px", borderRadius: "8px", background: "var(--surface)", border: "1px solid var(--border)" }}>
-              <strong style={{ color, fontSize: "13px", display: "block", marginBottom: "4px" }}>{n}. {title}</strong>
-              <p className="muted small" style={{ margin: 0 }}>{text}</p>
+              <strong style={{ color, fontSize: "13px", display: "block", marginBottom: "4px" }}>
+                {n}. {title}
+              </strong>
+              <p className="muted small" style={{ margin: 0 }}>
+                {text}
+              </p>
             </div>
           ))}
         </div>

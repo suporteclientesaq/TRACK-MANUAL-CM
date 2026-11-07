@@ -10,6 +10,7 @@ import { decrypt, encrypt } from "@/lib/crypto";
 import { decodeCsv, parseCsv, rowsToRecords } from "@/lib/csv";
 import { metaApiVersion } from "@/lib/env";
 import { evolutionCreateOrConnect, evolutionGetState, evolutionLogout } from "@/lib/evolution";
+import { wahaCreateOrConnect, wahaGetState, wahaLogout, wahaGetQrCode } from "@/lib/waha";
 import { enrichAdInRealTime, ingestMany } from "@/lib/ingest";
 import { buildEvent, fetchAd, fetchAdAccountAdsAndInsights, sendEvent } from "@/lib/meta";
 import { normalizePhone, parseMoney, ufFromPhone } from "@/lib/normalize";
@@ -590,7 +591,7 @@ export async function getEvolutionStatusAction(opts: {
   serverUrl: string;
   apiKey: string;
   instanceName: string;
-}): Promise<{ ok: boolean; state: string; error?: string }> {
+}): Promise<{ ok: boolean; state: string; phone?: string | null; error?: string }> {
   await requireAuth();
   return evolutionGetState(opts);
 }
@@ -604,6 +605,7 @@ export async function connectEvolutionAction(opts: {
   ok: boolean;
   state: "open" | "connecting" | "close";
   qrcode: string | null;
+  phone?: string | null;
   error?: string;
 }> {
   await requireAuth();
@@ -632,6 +634,64 @@ export async function disconnectEvolutionAction(opts: {
 }): Promise<{ ok: boolean; error?: string }> {
   await requireAuth();
   return evolutionLogout(opts);
+}
+
+// ---------------------------------------------------------------------------
+// Conexão WhatsApp via WAHA (WhatsApp HTTP API - Docker / VPS)
+// ---------------------------------------------------------------------------
+
+export async function getWahaStatusAction(opts: {
+  serverUrl: string;
+  apiKey?: string;
+  sessionName: string;
+}): Promise<{ ok: boolean; state: string; phone?: string | null; qrcode?: string | null; error?: string }> {
+  await requireAuth();
+  const state = await wahaGetState(opts);
+  let qrcode: string | null = null;
+  if (state.ok && state.state === "connecting") {
+    qrcode = await wahaGetQrCode(opts);
+  }
+  return { ...state, qrcode };
+}
+
+export async function connectWahaAction(opts: {
+  serverUrl: string;
+  apiKey?: string;
+  sessionName: string;
+  clientId: string;
+}): Promise<{
+  ok: boolean;
+  state: "open" | "connecting" | "close";
+  qrcode: string | null;
+  phone?: string | null;
+  error?: string;
+}> {
+  await requireAuth();
+  const client = await getClient(opts.clientId);
+  if (!client) return { ok: false, state: "close", qrcode: null, error: "Cliente não encontrado." };
+
+  const h = await headers();
+  const host = h.get("x-forwarded-host") || h.get("host") || "localhost:3000";
+  const proto = h.get("x-forwarded-proto") || "http";
+  const webhookUrl = `${proto}://${host}/api/webhook/waha/${client.webhook_key}`;
+
+  return wahaCreateOrConnect(
+    {
+      serverUrl: opts.serverUrl,
+      apiKey: opts.apiKey,
+      sessionName: opts.sessionName,
+    },
+    webhookUrl
+  );
+}
+
+export async function disconnectWahaAction(opts: {
+  serverUrl: string;
+  apiKey?: string;
+  sessionName: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  await requireAuth();
+  return wahaLogout(opts);
 }
 
 // ---------------------------------------------------------------------------

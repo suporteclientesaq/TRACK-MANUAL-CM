@@ -265,63 +265,155 @@ export interface EvolutionConfig {
   instanceName: string;
 }
 
-function formatFetchError(err: unknown, url: string): string {
-  const msg = err instanceof Error ? err.message : String(err || "");
-  if (msg.includes("fetch failed") || msg.includes("ECONNREFUSED") || msg.includes("Failed to fetch") || msg.includes("ENOTFOUND")) {
-    return `Não foi possível conectar ao servidor da Evolution API (${url}). O servidor está desligado ou o endereço está incorreto. Se você não tem a Evolution API rodando em servidor ou Docker, utilize a opção "WhatsApp Direto (Integrado)".`;
+export function normalizeBaseUrl(url: string): string {
+  let u = (url || "").trim().replace(/\/+$/, "");
+  if (!u) return "http://localhost:8080";
+  if (!/^https?:\/\//i.test(u)) {
+    u = `http://${u}`;
   }
-  return msg;
+  return u;
+}
+
+export async function safeFetchJson<T = any>(
+  url: string,
+  options: RequestInit = {}
+): Promise<{ ok: boolean; status: number; data: T | null; error?: string }> {
+  let res: Response;
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+    res = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+      cache: "no-store",
+    });
+    clearTimeout(timeout);
+  } catch (err: any) {
+    const msg = err instanceof Error ? err.message : String(err || "");
+    if (msg.includes("abort") || err.name === "AbortError") {
+      return {
+        ok: false,
+        status: 408,
+        data: null,
+        error: `Tempo limite esgotado ao conectar a ${url} (12s). Verifique se o servidor está ativo e a porta aberta no firewall.`,
+      };
+    }
+    if (msg.includes("fetch failed") || msg.includes("ECONNREFUSED") || msg.includes("ENOTFOUND")) {
+      return {
+        ok: false,
+        status: 503,
+        data: null,
+        error: `Não foi possível conectar ao servidor (${url}). Verifique se a Evolution API está em execução no endereço e porta informados.`,
+      };
+    }
+    return { ok: false, status: 500, data: null, error: `Erro de conexão: ${msg}` };
+  }
+
+  const rawText = await res.text();
+  let data: T | null = null;
+  try {
+    data = JSON.parse(rawText) as T;
+  } catch {
+    const isHtml =
+      rawText.includes("<!DOCTYPE") ||
+      rawText.includes("<html") ||
+      rawText.includes("<body") ||
+      rawText.includes("<head");
+    if (isHtml) {
+      if (res.status === 404) {
+        return {
+          ok: false,
+          status: 404,
+          data: null,
+          error: `O endereço '${url}' retornou erro 404 (Página não encontrada). Verifique se a URL e a porta da Evolution API estão corretas.`,
+        };
+      }
+      if (res.status === 502 || res.status === 503 || res.status === 504) {
+        return {
+          ok: false,
+          status: res.status,
+          data: null,
+          error: `O servidor proxy retornou erro ${res.status} ao acessar '${url}'. A Evolution API pode estar desligada ou reiniciando.`,
+        };
+      }
+      return {
+        ok: false,
+        status: res.status,
+        data: null,
+        error: `O endereço '${url}' retornou uma página HTML (Status ${res.status}) em vez de JSON da Evolution API. Verifique se o endereço está correto (ex: http://seu-ip:8080 ou https://evolution.seudominio.com).`,
+      };
+    }
+    return {
+      ok: false,
+      status: res.status,
+      data: null,
+      error: `Resposta inesperada (não JSON): ${rawText.slice(0, 150)}`,
+    };
+  }
+
+  const jsonError =
+    (data as any)?.message ||
+    (data as any)?.error ||
+    (data as any)?.response?.message ||
+    (res.ok ? undefined : `Erro HTTP ${res.status}`);
+
+  return {
+    ok: res.ok,
+    status: res.status,
+    data,
+    error: jsonError,
+  };
 }
 
 export async function evolutionGetState(config: EvolutionConfig): Promise<{
   ok: boolean;
   state: "open" | "connecting" | "close" | "not_found";
+  phone?: string | null;
   error?: string;
 }> {
-  const base = config.serverUrl.replace(/\/+$/, "");
-  try {
-    const res = await fetch(`${base}/instance/connectionState/${encodeURIComponent(config.instanceName)}`, {
-      headers: { apikey: config.apiKey },
-      cache: "no-store",
-    });
-    const json = (await res.json()) as any;
-    if (!res.ok) {
-      if (res.status === 404 || json?.error?.includes?.("not found") || json?.response?.message?.includes?.("not found")) {
-        return { ok: true, state: "not_found" };
-      }
-      return { ok: false, state: "close", error: json?.message || `Erro ${res.status}` };
+  const base = normalizeBaseUrl(config.serverUrl);
+  const targetUrl = `${base}/instance/connectionState/${encodeURIComponent(config.instanceName)}`;
+  const res = await safeFetchJson(targetUrl, {
+    headers: { apikey: config.apiKey },
+  });
+
+  if (!res.ok) {
+    if (
+      res.status === 404 ||
+      res.error?.includes("not found") ||
+      res.error?.includes("não encontrada") ||
+      (res.data as any)?.response?.message?.includes("not found")
+    ) {
+      return { ok: true, state: "not_found" };
     }
-    const state = json?.instance?.state || json?.state || "close";
-    return { ok: true, state };
-  } catch (e) {
-    return { ok: false, state: "close", error: formatFetchError(e, base) };
+    return { ok: false, state: "close", error: res.error };
   }
+
+  const json = res.data as any;
+  const state = json?.instance?.state || json?.state || "close";
+  const phone = json?.instance?.ownerJid || json?.ownerJid || null;
+  return { ok: true, state, phone: phone ? String(phone).replace(/\D/g, "") : null };
 }
 
 export async function evolutionSetWebhook(
   config: EvolutionConfig,
   webhookUrl: string
 ): Promise<{ ok: boolean; error?: string }> {
-  const base = config.serverUrl.replace(/\/+$/, "");
-  try {
-    const res = await fetch(`${base}/webhook/set/${encodeURIComponent(config.instanceName)}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        apikey: config.apiKey,
-      },
-      body: JSON.stringify({
-        enabled: true,
-        url: webhookUrl,
-        webhookByEvents: false,
-        events: ["MESSAGES_UPSERT"],
-      }),
-      cache: "no-store",
-    });
-    return { ok: res.ok };
-  } catch (e) {
-    return { ok: false, error: formatFetchError(e, base) };
-  }
+  const base = normalizeBaseUrl(config.serverUrl);
+  const res = await safeFetchJson(`${base}/webhook/set/${encodeURIComponent(config.instanceName)}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      apikey: config.apiKey,
+    },
+    body: JSON.stringify({
+      enabled: true,
+      url: webhookUrl,
+      webhookByEvents: false,
+      events: ["MESSAGES_UPSERT"],
+    }),
+  });
+  return { ok: res.ok, error: res.error };
 }
 
 export async function evolutionCreateOrConnect(
@@ -331,81 +423,74 @@ export async function evolutionCreateOrConnect(
   ok: boolean;
   state: "open" | "connecting" | "close";
   qrcode: string | null;
+  phone?: string | null;
   error?: string;
 }> {
-  const base = config.serverUrl.replace(/\/+$/, "");
+  const base = normalizeBaseUrl(config.serverUrl);
 
   // 1. Verifica estado atual
   const current = await evolutionGetState(config);
   if (current.ok && current.state === "open") {
     if (webhookUrl) await evolutionSetWebhook(config, webhookUrl);
-    return { ok: true, state: "open", qrcode: null };
+    return { ok: true, state: "open", qrcode: null, phone: current.phone };
   }
 
-  // Se falhou ao alcançar o servidor, aborta e avisa claramente o usuário
   if (!current.ok && current.state !== "not_found") {
     return {
       ok: false,
       state: "close",
       qrcode: null,
-      error: current.error || formatFetchError(new Error("fetch failed"), base),
+      error: current.error || "Não foi possível verificar a instância da Evolution API.",
     };
   }
 
   // 2. Se a instância não existe, cria
   if (current.state === "not_found") {
-    try {
-      const createRes = await fetch(`${base}/instance/create`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          apikey: config.apiKey,
-        },
-        body: JSON.stringify({
-          instanceName: config.instanceName,
-          qrcode: true,
-          integration: "WHATSAPP-BAILEYS",
-        }),
-        cache: "no-store",
-      });
-      const json = (await createRes.json()) as any;
-      if (createRes.ok) {
-        if (webhookUrl) await evolutionSetWebhook(config, webhookUrl);
-        const qr = json?.qrcode?.base64 || json?.base64 || null;
-        return { ok: true, state: "connecting", qrcode: qr };
-      }
-    } catch (e) {
-      return { ok: false, state: "close", qrcode: null, error: formatFetchError(e, base) };
+    const createRes = await safeFetchJson(`${base}/instance/create`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        apikey: config.apiKey,
+      },
+      body: JSON.stringify({
+        instanceName: config.instanceName,
+        qrcode: true,
+        integration: "WHATSAPP-BAILEYS",
+      }),
+    });
+
+    if (!createRes.ok) {
+      return { ok: false, state: "close", qrcode: null, error: createRes.error };
     }
+
+    if (webhookUrl) await evolutionSetWebhook(config, webhookUrl);
+    const json = createRes.data as any;
+    const qr = json?.qrcode?.base64 || json?.base64 || json?.code || null;
+    return { ok: true, state: "connecting", qrcode: qr };
   }
 
   // 3. Se já existe mas está desconectada, chama connect para obter novo QR Code
-  try {
-    const connRes = await fetch(`${base}/instance/connect/${encodeURIComponent(config.instanceName)}`, {
-      headers: { apikey: config.apiKey },
-      cache: "no-store",
-    });
-    const json = (await connRes.json()) as any;
-    if (webhookUrl) await evolutionSetWebhook(config, webhookUrl);
-    const qr = json?.base64 || json?.qrcode?.base64 || null;
-    return { ok: true, state: "connecting", qrcode: qr };
-  } catch (e) {
-    return { ok: false, state: "close", qrcode: null, error: formatFetchError(e, base) };
+  const connRes = await safeFetchJson(`${base}/instance/connect/${encodeURIComponent(config.instanceName)}`, {
+    headers: { apikey: config.apiKey },
+  });
+
+  if (!connRes.ok) {
+    return { ok: false, state: "close", qrcode: null, error: connRes.error };
   }
+
+  if (webhookUrl) await evolutionSetWebhook(config, webhookUrl);
+  const json = connRes.data as any;
+  const qr = json?.base64 || json?.qrcode?.base64 || json?.code || null;
+  return { ok: true, state: "connecting", qrcode: qr };
 }
 
 export async function evolutionLogout(config: EvolutionConfig): Promise<{ ok: boolean; error?: string }> {
-  const base = config.serverUrl.replace(/\/+$/, "");
-  try {
-    const res = await fetch(`${base}/instance/logout/${encodeURIComponent(config.instanceName)}`, {
-      method: "DELETE",
-      headers: { apikey: config.apiKey },
-      cache: "no-store",
-    });
-    return { ok: res.ok };
-  } catch (e) {
-    return { ok: false, error: formatFetchError(e, base) };
-  }
+  const base = normalizeBaseUrl(config.serverUrl);
+  const res = await safeFetchJson(`${base}/instance/logout/${encodeURIComponent(config.instanceName)}`, {
+    method: "DELETE",
+    headers: { apikey: config.apiKey },
+  });
+  return { ok: res.ok, error: res.error };
 }
 
 
