@@ -12,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { ingestLead } from "./ingest";
 import { parseEvolutionWebhook } from "./evolution";
+import { getSetting, setSettings } from "./store";
 
 export function isServerlessEnvironment(): boolean {
   return Boolean(
@@ -57,6 +58,54 @@ function getSessionDir(clientId: string): string {
   return dir;
 }
 
+/** Salva todos os arquivos da sessão do Baileys no banco de dados Postgres permanentemente */
+async function backupSessionToDb(clientId: string): Promise<void> {
+  try {
+    const sessionDir = getSessionDir(clientId);
+    if (!fs.existsSync(sessionDir)) return;
+    const files = fs.readdirSync(sessionDir);
+    const bundle: Record<string, string> = {};
+    for (const f of files) {
+      const fullPath = path.join(sessionDir, f);
+      try {
+        if (fs.statSync(fullPath).isFile()) {
+          bundle[f] = fs.readFileSync(fullPath, "utf-8");
+        }
+      } catch {
+        // ignora arquivo temporário ou travado
+      }
+    }
+    if (Object.keys(bundle).length > 0) {
+      await setSettings({ [`wa_session_${clientId}`]: JSON.stringify(bundle) });
+    }
+  } catch (err) {
+    console.warn("[Track Manual] Aviso ao salvar backup de sessão do WhatsApp no banco:", err);
+  }
+}
+
+/** Restaura a sessão do WhatsApp do banco de dados Postgres se o container reiniciou e o disco local estiver vazio */
+async function restoreSessionFromDb(clientId: string): Promise<boolean> {
+  try {
+    const sessionDir = getSessionDir(clientId);
+    const credsFile = path.join(sessionDir, "creds.json");
+    if (fs.existsSync(credsFile)) return true;
+
+    const data = await getSetting(`wa_session_${clientId}`);
+    if (!data) return false;
+
+    const bundle = JSON.parse(data) as Record<string, string>;
+    for (const [filename, content] of Object.entries(bundle)) {
+      const fullPath = path.join(sessionDir, filename);
+      fs.writeFileSync(fullPath, content, "utf-8");
+    }
+    console.log(`[Track Manual] Sessão do WhatsApp do cliente ${clientId} restaurada com sucesso do Banco Postgres!`);
+    return true;
+  } catch (err) {
+    console.warn("[Track Manual] Erro ao restaurar sessão do WhatsApp do banco:", err);
+    return false;
+  }
+}
+
 function cleanSessionDir(clientId: string): void {
   const safeId = clientId.replace(/[^a-zA-Z0-9_-]/g, "_");
   const dir = path.join(getBaseSessionDir(), "whatsapp_sessions", safeId);
@@ -67,6 +116,8 @@ function cleanSessionDir(clientId: string): void {
   } catch {
     // ignora erros de limpeza de arquivo bloqueado
   }
+  // Remove do banco também ao desconectar manualmente
+  setSettings({ [`wa_session_${clientId}`]: "" }).catch(() => {});
 }
 
 export function getNativeWhatsAppStatus(clientId: string): {
@@ -87,9 +138,22 @@ export function getNativeWhatsAppStatus(clientId: string): {
     };
   }
 
-  // Se não está em memória, verifica se já existe uma sessão salva em disco
+  // Se não está em memória, verifica se já existe uma sessão salva em disco ou no banco
   const sessionDir = getSessionDir(clientId);
   const credsFile = path.join(sessionDir, "creds.json");
+
+  // Se o arquivo creds.json não existe no disco local, tenta restaurar imediatamente do banco
+  if (!fs.existsSync(credsFile)) {
+    restoreSessionFromDb(clientId).then((restored) => {
+      if (restored && !isServerlessEnvironment()) {
+        const current = sessions.get(clientId);
+        if (!current || (!current.socket && !current.isConnecting)) {
+          connectNativeWhatsApp(clientId).catch(() => {});
+        }
+      }
+    }).catch(() => {});
+  }
+
   if (fs.existsSync(credsFile)) {
     try {
       const creds = JSON.parse(fs.readFileSync(credsFile, "utf-8"));
@@ -189,6 +253,7 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
   }
 
   const sessionDir = getSessionDir(clientId);
+  await restoreSessionFromDb(clientId);
   const { state: authState, saveCreds } = await useMultiFileAuthState(sessionDir);
 
   const sock = makeWASocket({
@@ -203,7 +268,10 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
   session.socket = sock;
   session.isConnecting = true;
 
-  sock.ev.on("creds.update", saveCreds);
+  sock.ev.on("creds.update", async () => {
+    await saveCreds();
+    await backupSessionToDb(clientId);
+  });
 
   // Monitora alterações de conexão e QR Code
   sock.ev.on("connection.update", async (update: Partial<ConnectionState>) => {
@@ -239,6 +307,7 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
       session!.phone = sock.user?.id ? sock.user.id.split(":")[0].replace(/\D/g, "") : null;
       session!.name = sock.user?.name || null;
       console.log(`[Track Manual] WhatsApp Conectado com sucesso para cliente ${clientId}! Número: ${session!.phone}`);
+      backupSessionToDb(clientId).catch(() => {});
     }
 
     if (connection === "close") {
