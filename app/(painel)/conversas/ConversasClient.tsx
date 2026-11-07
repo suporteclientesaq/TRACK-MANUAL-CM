@@ -585,30 +585,63 @@ export function ConversasClient({
                   </div>
                 )}
 
-                {/* 2. Balão da Mensagem do Lead */}
-                <div
-                  style={{
-                    maxWidth: "500px",
-                    borderRadius: "12px 12px 12px 2px",
-                    background: "rgba(35, 29, 53, 0.95)",
-                    border: "1px solid rgba(255, 255, 255, 0.08)",
-                    padding: "12px 16px",
-                    color: "#ffffff",
-                    fontSize: "13px",
-                    lineHeight: "1.5",
-                    alignSelf: "flex-start",
-                    boxShadow: "0 4px 15px rgba(0,0,0,0.3)",
-                  }}
-                >
-                  <div style={{ fontWeight: 600, color: "#34c77b", fontSize: "11px", marginBottom: "4px" }}>
-                    {selectedLead.name || "Lead"} (WhatsApp)
-                  </div>
-                  <div>{extractMessageText(selectedLead)}</div>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "4px", fontSize: "10px", color: "var(--text-muted)", marginTop: "6px" }}>
-                    <span>{formatDateTime(selectedLead.first_seen_at).split(" ")[1] || "12:00"}</span>
-                    <CheckCheck size={13} style={{ color: "#38bdf8" }} />
-                  </div>
-                </div>
+                {/* 2. Lista de Mensagens da Conversa (Histórico Completo WhatsApp) */}
+                {(() => {
+                  const rawObj = (selectedLead.raw && typeof selectedLead.raw === "object") ? (selectedLead.raw as Record<string, any>) : {};
+                  const messagesList: Array<{ text: string; at: string; fromMe?: boolean }> = Array.isArray(rawObj.messages) && rawObj.messages.length > 0
+                    ? rawObj.messages
+                    : [{ text: extractMessageText(selectedLead), at: selectedLead.first_seen_at, fromMe: false }];
+
+                  return messagesList.map((m, idx) => {
+                    const isFromMe = Boolean(m.fromMe);
+                    const timeStr = m.at ? formatDateTime(m.at).split(" ")[1] || "12:00" : "12:00";
+
+                    return (
+                      <div
+                        key={idx}
+                        style={{
+                          maxWidth: "520px",
+                          borderRadius: isFromMe ? "14px 14px 2px 14px" : "14px 14px 14px 2px",
+                          background: isFromMe
+                            ? "linear-gradient(135deg, #005c4b 0%, #007a63 100%)"
+                            : "linear-gradient(135deg, rgba(32, 44, 51, 0.95) 0%, rgba(26, 36, 42, 0.95) 100%)",
+                          border: isFromMe
+                            ? "1px solid rgba(52, 199, 123, 0.3)"
+                            : "1px solid rgba(255, 255, 255, 0.1)",
+                          padding: "10px 14px",
+                          color: "#ffffff",
+                          fontSize: "13px",
+                          lineHeight: "1.5",
+                          alignSelf: isFromMe ? "flex-end" : "flex-start",
+                          boxShadow: "0 4px 14px rgba(0,0,0,0.35)",
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: "4px",
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px" }}>
+                          <span style={{ fontWeight: 700, color: isFromMe ? "#34c77b" : "#60a5fa", fontSize: "11px" }}>
+                            {isFromMe ? "Você (Atendente)" : (selectedLead.name || "Lead")}
+                          </span>
+                          {selectedLead.ctwa_clid && !isFromMe && idx === 0 && (
+                            <span style={{ fontSize: "9px", padding: "1px 6px", borderRadius: "4px", background: "rgba(52, 199, 123, 0.2)", color: "#34c77b", fontWeight: 700 }}>
+                              CTWA Meta ✓
+                            </span>
+                          )}
+                        </div>
+
+                        <div style={{ wordBreak: "break-word", whiteSpace: "pre-wrap" }}>
+                          {m.text}
+                        </div>
+
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "4px", fontSize: "10px", color: isFromMe ? "#a7f3d0" : "#94a3b8", marginTop: "2px" }}>
+                          <span>{timeStr}</span>
+                          <CheckCheck size={13} style={{ color: isFromMe ? "#38bdf8" : "#94a3b8" }} />
+                        </div>
+                      </div>
+                    );
+                  });
+                })()}
 
                 {/* 3. Balões de Linha do Tempo / Eventos CAPI */}
                 {selectedEvents.map((ev) => (

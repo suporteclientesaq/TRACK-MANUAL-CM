@@ -117,9 +117,39 @@ export async function ingestLead(
   const t = nowIso();
   const merged = mergeLead(existing, incoming);
   const clidChanged = !!incoming.ctwa_clid && incoming.ctwa_clid !== existing?.ctwa_clid;
+
+  // Preserva e acumula o histórico de mensagens trocadas na conversa
+  let existingRaw = existing?.raw as Record<string, unknown> | null;
+  let messagesHistory: Array<{ text: string; at: string; fromMe?: boolean }> = [];
+
+  if (existingRaw && Array.isArray(existingRaw.messages)) {
+    messagesHistory = [...existingRaw.messages];
+  } else if (existingRaw?.message_text) {
+    messagesHistory = [{ text: String(existingRaw.message_text), at: String(existing?.first_seen_at || t), fromMe: false }];
+  }
+
+  const newRawObj = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const incomingMsg = typeof newRawObj.message_text === "string" ? newRawObj.message_text.trim() : null;
+
+  if (incomingMsg) {
+    const isDuplicate = messagesHistory.some((m) => m.text === incomingMsg && Math.abs(new Date(m.at).getTime() - new Date(t).getTime()) < 5000);
+    if (!isDuplicate) {
+      messagesHistory.push({
+        text: incomingMsg,
+        at: t,
+        fromMe: Boolean(newRawObj.fromMe),
+      });
+    }
+  }
+
   const row: Record<string, unknown> = {
     ...merged,
-    ...(raw !== undefined ? { raw } : {}),
+    raw: {
+      ...(existingRaw || {}),
+      ...(newRawObj || {}),
+      messages: messagesHistory,
+      message_text: incomingMsg || existingRaw?.message_text || null,
+    },
     ...(clidChanged ? { clid_seen_at: t } : {}),
   };
 

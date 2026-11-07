@@ -257,7 +257,7 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
 
     for (const msg of messages) {
       try {
-        if (!msg.message || msg.key.fromMe) continue;
+        if (!msg.message) continue;
         const remoteJid = msg.key.remoteJid || "";
         if (remoteJid.includes("@g.us") || remoteJid.includes("@broadcast")) continue;
 
@@ -269,7 +269,7 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
 
         if (!parsed.ok) continue;
 
-        console.log(`[Track Manual] Nova mensagem WhatsApp recebida de ${parsed.lead.phone}! ctwa_clid: ${parsed.lead.ctwa_clid || "nenhum"}, adId: ${parsed.lead.source_id || "nenhum"}`);
+        console.log(`[Track Manual] Mensagem WhatsApp (${msg.key.fromMe ? "enviada" : "recebida"}) de ${parsed.lead.phone}! ctwa_clid: ${parsed.lead.ctwa_clid || "nenhum"}, adId: ${parsed.lead.source_id || "nenhum"}`);
 
         await ingestLead(
           clientId,
@@ -291,6 +291,7 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
             received_at: new Date().toISOString(),
             instance: "baileys_nativo",
             message_text: parsed.lead.message_text,
+            fromMe: Boolean(msg.key.fromMe),
           }
         );
       } catch (err) {
