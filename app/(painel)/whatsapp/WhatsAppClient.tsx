@@ -641,15 +641,33 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
           {connectionMode === "waha" && (
             <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
               <div>
-                <label htmlFor="waha_server_url" style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: 600 }}>
-                  Endereço da API do WAHA
-                </label>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
+                  <label htmlFor="waha_server_url" style={{ fontSize: "13px", fontWeight: 600 }}>
+                    Endereço da API do WAHA
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setWahaServerUrl(`${origin}/api/waha`)}
+                    style={{
+                      background: "rgba(123, 57, 252, 0.15)",
+                      border: "1px solid rgba(123, 57, 252, 0.4)",
+                      color: "#b394ff",
+                      fontSize: "11px",
+                      fontWeight: 700,
+                      padding: "2px 8px",
+                      borderRadius: "6px",
+                      cursor: "pointer",
+                    }}
+                  >
+                    ⚡ Usar WAHA Embutido no Sistema
+                  </button>
+                </div>
                 <input
                   id="waha_server_url"
                   type="text"
                   value={wahaServerUrl}
                   onChange={(e) => setWahaServerUrl(e.target.value)}
-                  placeholder="Ex: http://seu-ip:3000 ou https://waha.seudominio.com"
+                  placeholder={`Ex: ${origin}/api/waha ou http://seu-ip:3000`}
                   style={{
                     width: "100%",
                     padding: "8px 12px",
@@ -661,7 +679,7 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
                   }}
                 />
                 <div className="hint" style={{ marginTop: "4px" }}>
-                  URL pública ou interna do WAHA na VPS.
+                  Clique no botão <strong>"Usar WAHA Embutido"</strong> acima para rodar sem precisar de Docker ou VPS externa!
                 </div>
               </div>
 
