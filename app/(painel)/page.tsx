@@ -206,6 +206,11 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                     <td className="small muted nowrap">{formatDateTime(lead.first_seen_at)}</td>
                     <td className="row-actions">
                       <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <Button asChild size="sm" variant="outline" title="Ver Conversa e Detalhes" style={{ padding: "4px 8px", height: "28px" }}>
+                          <Link href={`/conversas?lead=${lead.id}`}>
+                            💬 Conversa
+                          </Link>
+                        </Button>
                         <QuickSaleButton
                           leadId={lead.id}
                           leadName={lead.name}

@@ -52,12 +52,29 @@ export default async function LeadPage({
             {lead.origin === "leona" ? "pela Leona" : "(importado ou adicionado à mão)"}
           </p>
         </div>
-        <Button asChild variant="outline">
-          <Link href="/">
-            <ChevronLeft />
-            Voltar aos Leads
-          </Link>
-        </Button>
+        <div className="actions" style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+          <Button asChild size="sm" style={{ background: "linear-gradient(90deg, #7b39fc, #34c77b)", color: "#ffffff", fontWeight: 700 }}>
+            <Link href={`/conversas?lead=${lead.id}`}>
+              💬 Ver no Inbox de Conversas
+            </Link>
+          </Button>
+          <a
+            href={`https://wa.me/${lead.phone.replace(/\D/g, "")}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ textDecoration: "none" }}
+          >
+            <Button size="sm" variant="outline" style={{ borderColor: "#25D366", color: "#25D366" }}>
+              Abrir WhatsApp Web
+            </Button>
+          </a>
+          <Button asChild variant="outline" size="sm">
+            <Link href="/">
+              <ChevronLeft />
+              Voltar aos Leads
+            </Link>
+          </Button>
+        </div>
       </div>
 
       {salvo && <div className="note note-ok">Alterações salvas.</div>}
