@@ -99,8 +99,10 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
         )}
         <select name="filtro" defaultValue={filtro}>
           <option value="todos">Todos os Leads</option>
-          <option value="com-ctwa">Só Com ctwa_clid</option>
-          <option value="sem-ctwa">Só Sem ctwa_clid</option>
+          <option value="com-ctwa">✅ Com ctwa_clid</option>
+          <option value="sem-ctwa">⚠️ Sem ctwa_clid</option>
+          <option value="com-venda">💰 Com Venda Enviada</option>
+          <option value="sem-venda">📭 Sem Venda Enviada</option>
         </select>
         <Button variant="secondary" type="submit">
           <Search />

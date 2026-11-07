@@ -18,6 +18,7 @@ import {
   countSent,
   deleteLead,
   findLead,
+  findLeadsByPhones,
   getClient,
   getEvent,
   getLead,
@@ -941,4 +942,59 @@ export async function assignLeadAdAction(
   revalidatePath("/dashboard");
 
   return { ok: true, message: `Anúncio #${cleanAdId} vinculado ao lead com sucesso!` };
+}
+
+// ---------------------------------------------------------------------------
+// Puxar CTWA pelo número de telefone (busca nas mensagens recebidas e outros leads)
+// ---------------------------------------------------------------------------
+
+export async function pullCtwaFromPhoneAction(
+  leadId: string
+): Promise<{ ok: boolean; message: string; ctwa_clid?: string | null }> {
+  "use server";
+  await requireAuth();
+  const lead = await getLead(leadId);
+  if (!lead) return { ok: false, message: "Lead não encontrado." };
+
+  // Já tem ctwa_clid — nada a fazer
+  if (lead.ctwa_clid) {
+    return { ok: true, message: `ctwa_clid já registrado: ${lead.ctwa_clid.slice(0, 24)}…`, ctwa_clid: lead.ctwa_clid };
+  }
+
+  // Busca outros leads do mesmo telefone que possam ter ctwa_clid
+  const siblings = await findLeadsByPhones(lead.client_id, [lead.phone]);
+  const withClid = siblings.find((l) => l.id !== leadId && l.ctwa_clid);
+  if (withClid?.ctwa_clid) {
+    await updateLead(leadId, { ctwa_clid: withClid.ctwa_clid });
+    revalidatePath(`/leads/${leadId}`);
+    revalidatePath("/");
+    revalidatePath("/dashboard");
+    return {
+      ok: true,
+      message: `✅ ctwa_clid copiado de outro lead do mesmo número e salvo com sucesso!`,
+      ctwa_clid: withClid.ctwa_clid,
+    };
+  }
+
+  // Tenta puxar do raw do próprio lead (pode estar no raw.ctwa_clid)
+  const rawData = lead.raw as Record<string, unknown> | null;
+  const rawClid =
+    typeof rawData?.ctwa_clid === "string" && rawData.ctwa_clid.trim()
+      ? rawData.ctwa_clid.trim()
+      : typeof rawData?.ctwaClid === "string" && rawData.ctwaClid.trim()
+        ? rawData.ctwaClid.trim()
+        : null;
+  if (rawClid) {
+    await updateLead(leadId, { ctwa_clid: rawClid });
+    revalidatePath(`/leads/${leadId}`);
+    revalidatePath("/");
+    revalidatePath("/dashboard");
+    return { ok: true, message: `✅ ctwa_clid extraído dos dados brutos do lead e salvo!`, ctwa_clid: rawClid };
+  }
+
+  return {
+    ok: false,
+    message:
+      "Nenhum ctwa_clid encontrado para este número. O ctwa_clid só é capturado quando o lead clica em um anúncio Click-to-WhatsApp no Meta. Se o lead não veio de anúncio ou o WhatsApp não estava conectado no momento, não há dados para recuperar.",
+  };
 }

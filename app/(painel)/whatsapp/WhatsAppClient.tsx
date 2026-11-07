@@ -66,14 +66,14 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
   const [connectionMode, setConnectionMode] = useState<"native" | "waha" | "evolution">("native");
 
   // Configurações do modo Evolution API
-  const [serverUrl, setServerUrl] = useState("http://localhost:8080");
-  const [apiKey, setApiKey] = useState("429683C4C977415CAAFCCE10F7D57E11");
+  const [serverUrl, setServerUrl] = useState("");
+  const [apiKey, setApiKey] = useState("");
   const [instanceName, setInstanceName] = useState(
     clients[0] ? `track_${clients[0].name.toLowerCase().replace(/\W+/g, "_")}` : "track_whats"
   );
 
   // Configurações do modo WAHA (WhatsApp HTTP API)
-  const [wahaServerUrl, setWahaServerUrl] = useState("http://localhost:3000");
+  const [wahaServerUrl, setWahaServerUrl] = useState("");
   const [wahaApiKey, setWahaApiKey] = useState("");
   const [wahaSessionName, setWahaSessionName] = useState("default");
 
@@ -140,6 +140,10 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
   // Checa status da conexão (Nativo, WAHA ou Evolution)
   const checkStatus = async () => {
     if (!selectedClientId) return;
+    // Não verifica WAHA/Evolution sem URL configurada
+    if (connectionMode === "waha" && !wahaServerUrl.trim()) return;
+    if (connectionMode === "evolution" && !serverUrl.trim()) return;
+
     setChecking(true);
     setErrorMessage(null);
     try {
@@ -154,10 +158,6 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
           setConnectionState("close");
         }
       } else if (connectionMode === "waha") {
-        if (!wahaServerUrl.trim()) {
-          setConnectionState("close");
-          return;
-        }
         const res = await getWahaStatusAction({
           serverUrl: wahaServerUrl,
           apiKey: wahaApiKey,
@@ -171,12 +171,13 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
           } else if (res.state === "connecting") {
             setConnectionState("connecting");
             if (res.qrcode) setQrCodeData(res.qrcode);
+            // Se connecting mas sem QR ainda, não muda estado
           } else {
             setConnectionState("close");
           }
         } else {
           setConnectionState("close");
-          if (res.error && !res.error.includes("404")) {
+          if (res.error && !res.error.includes("404") && !res.error.includes("not_found")) {
             setErrorMessage(res.error);
           }
         }
@@ -198,7 +199,7 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
           }
         } else {
           setConnectionState("close");
-          if (res.error && !res.error.includes("404")) {
+          if (res.error && !res.error.includes("404") && !res.error.includes("not_found")) {
             setErrorMessage(res.error);
           }
         }
@@ -326,8 +327,20 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
   // Polling automático enquanto aguarda leitura do QR Code
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
+    let retries = 0;
+    const MAX_RETRIES = 20; // para após 60s (20 × 3s)
+
     if (connectionState === "connecting") {
       interval = setInterval(async () => {
+        retries++;
+        if (retries > MAX_RETRIES) {
+          if (interval) clearInterval(interval);
+          setConnectionState("close");
+          setQrCodeData(null);
+          setErrorMessage("Tempo esgotado aguardando QR Code. Tente novamente.");
+          return;
+        }
+
         try {
           if (connectionMode === "native") {
             const res = await nativeStatus(selectedClientId);
@@ -340,6 +353,7 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
               setQrCodeData(res.qrcode);
             }
           } else if (connectionMode === "waha") {
+            if (!wahaServerUrl.trim()) return;
             const res = await getWahaStatusAction({
               serverUrl: wahaServerUrl,
               apiKey: wahaApiKey,
@@ -352,8 +366,16 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
               setSuccessNotice("🎉 WhatsApp Conectado com Sucesso via WAHA!");
             } else if (res.ok && res.qrcode) {
               setQrCodeData(res.qrcode);
+              retries = 0; // tem QR, zera o contador
+            } else if (!res.ok) {
+              // erro real, para o polling
+              if (interval) clearInterval(interval);
+              setConnectionState("close");
+              setQrCodeData(null);
+              if (res.error) setErrorMessage(res.error);
             }
           } else if (connectionMode === "evolution") {
+            if (!serverUrl.trim()) return;
             const res = await getEvolutionStatusAction({ serverUrl, apiKey, instanceName });
             if (res.ok && res.state === "open") {
               setConnectionState("open");

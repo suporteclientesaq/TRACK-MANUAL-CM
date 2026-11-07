@@ -222,6 +222,8 @@ export const pgStore: StoreImpl = {
     if (f.clientId) where.push(`client_id = ${add(f.clientId)}`);
     if (f.filter === "com-ctwa") where.push("ctwa_clid is not null and ctwa_clid <> ''");
     if (f.filter === "sem-ctwa") where.push("(ctwa_clid is null or ctwa_clid = '')");
+    if (f.filter === "com-venda") where.push("exists (select 1 from events where events.lead_id = leads.id and events.status = 'enviado')");
+    if (f.filter === "sem-venda") where.push("not exists (select 1 from events where events.lead_id = leads.id and events.status = 'enviado')");
     const text = (f.q || "").trim();
     if (text) {
       const digits = text.replace(/\D/g, "");

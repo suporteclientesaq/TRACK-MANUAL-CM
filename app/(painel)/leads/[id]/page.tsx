@@ -11,6 +11,7 @@ import { LeadForm } from "../LeadForm";
 import { AssignAdForm } from "@/components/AssignAdForm";
 import { RefreshAdButton } from "./RefreshAdButton";
 import { SendEventForm } from "./SendEventForm";
+import { PullCtwaButton } from "./PullCtwaButton";
 
 export default async function LeadPage({
   params,
@@ -147,6 +148,7 @@ export default async function LeadPage({
                 atribuir ao anúncio.
               </div>
             )}
+            <PullCtwaButton leadId={lead.id} hasCtwa={!!lead.ctwa_clid} />
             {clidAge !== null && clidAge > 7 && (
               <div className="note note-warn">
                 O clique tem mais de 7 dias. A janela padrão de atribuição do Meta é de 7 dias após o clique: o evento é

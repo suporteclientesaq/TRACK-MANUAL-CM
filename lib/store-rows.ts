@@ -148,7 +148,7 @@ export const nowIso = () => new Date().toISOString();
 
 export interface LeadFilter {
   clientId?: string | null;
-  filter?: string; // todos | com-ctwa | sem-ctwa
+  filter?: string; // todos | com-ctwa | sem-ctwa | com-venda | sem-venda
   q?: string;
   offset: number;
   limit: number;
