@@ -384,6 +384,50 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
     }
   });
 
+  // Sincronização automática do histórico completo de conversas anteriores do celular
+  sock.ev.on("messaging-history.set", async ({ chats, contacts, messages, isLatest }) => {
+    console.log(`[Track Manual] Sincronizando histórico do WhatsApp: ${chats.length} chats, ${messages.length} mensagens.`);
+    try {
+      for (const msg of messages) {
+        if (!msg.message) continue;
+        const remoteJid = msg.key.remoteJid || "";
+        if (remoteJid.includes("@g.us") || remoteJid.includes("@broadcast")) continue;
+
+        const parsed = parseEvolutionWebhook({
+          event: "messages.upsert",
+          data: msg as unknown as Record<string, unknown>,
+        });
+        if (!parsed.ok) continue;
+
+        await ingestLead(
+          clientId,
+          {
+            name: parsed.lead.name,
+            phone: parsed.lead.phone,
+            ctwa_clid: parsed.lead.ctwa_clid,
+            source_id: parsed.lead.source_id,
+            source_url: parsed.lead.source_url,
+            thumbnail_url: parsed.lead.thumbnail_url,
+            media_url: parsed.lead.media_url,
+            headline: parsed.lead.headline,
+            ad_body: parsed.lead.ad_body,
+            notes: parsed.lead.message_text ? `WhatsApp: "${parsed.lead.message_text}"` : null,
+          },
+          "manual",
+          {
+            origin: "whatsapp-direto",
+            received_at: new Date(Number(msg.messageTimestamp || 0) * 1000 || Date.now()).toISOString(),
+            instance: "baileys_nativo",
+            message_text: parsed.lead.message_text,
+            fromMe: Boolean(msg.key.fromMe),
+          }
+        );
+      }
+    } catch (err) {
+      console.warn("[Track Manual] Aviso ao sincronizar histórico:", err);
+    }
+  });
+
   // Aguarda até 10 segundos pelo primeiro QR code ou confirmação de conexão
   if (session.state === "open") {
     return { ok: true, state: "open", qrcode: null, phone: session.phone };
@@ -415,6 +459,42 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
     state: session.state,
     qrcode: session.qrcode,
   };
+}
+
+/** Envia mensagem de texto diretamente pelo WhatsApp nativo do Track Manual */
+export async function sendNativeWhatsAppMessage(
+  clientId: string,
+  phone: string,
+  text: string
+): Promise<{ ok: boolean; error?: string }> {
+  const session = sessions.get(clientId);
+  if (!session || !session.socket || session.state !== "open") {
+    return { ok: false, error: "WhatsApp não está conectado para este cliente." };
+  }
+
+  try {
+    const cleanPhone = phone.replace(/\D/g, "");
+    const jid = `${cleanPhone}@s.whatsapp.net`;
+    await session.socket.sendMessage(jid, { text });
+
+    // Grava no histórico da conversa do lead
+    await ingestLead(
+      clientId,
+      { phone: cleanPhone },
+      "manual",
+      {
+        origin: "whatsapp-direto",
+        received_at: new Date().toISOString(),
+        instance: "baileys_nativo",
+        message_text: text,
+        fromMe: true,
+      }
+    );
+
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 export async function disconnectNativeWhatsApp(clientId: string): Promise<{ ok: boolean; error?: string }> {

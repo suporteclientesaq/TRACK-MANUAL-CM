@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import Link from "next/link";
 import {
   AlertCircle,
@@ -32,7 +32,7 @@ import {
   User,
   Zap,
 } from "lucide-react";
-import { sendEventAction } from "@/app/actions";
+import { sendEventAction, sendWhatsAppMessageAction } from "@/app/actions";
 import { Button } from "@/components/ui/button";
 import { formatDateTime, formatMoney, formatPhone } from "@/lib/format";
 import type { Lead } from "@/lib/types";
@@ -64,10 +64,19 @@ export function ConversasClient({
   initialClientId,
   initialSearchQuery,
 }: ConversasClientProps) {
+  const [currentLeads, setCurrentLeads] = useState<Lead[]>(initialLeads);
+  const [currentAdsData, setCurrentAdsData] = useState<Record<string, any>>(adsData);
+  const [currentEventsData, setCurrentEventsData] = useState<Record<string, any[]>>(eventsData);
+
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(initialSelectedLeadId);
   const [clientFilter, setClientFilter] = useState<string>(initialClientId);
   const [searchQuery, setSearchQuery] = useState<string>(initialSearchQuery);
   const [activeTab, setActiveTab] = useState<"todos" | "com-anuncio" | "com-venda" | "sem-venda">("todos");
+
+  // Estado para envio de mensagem no WhatsApp pelo painel
+  const [replyText, setReplyText] = useState("");
+  const [sendingReply, setSendingReply] = useState(false);
+  const [replyError, setReplyError] = useState<string | null>(null);
 
   // Estado para envio rápido de conversão CAPI
   const [saleValue, setSaleValue] = useState<string>("197,00");
@@ -75,6 +84,35 @@ export function ConversasClient({
   const [saleNotice, setSaleNotice] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [showRightPanel, setShowRightPanel] = useState(true);
+
+  // Polling em tempo real (atualiza a lista de conversas e mensagens a cada 4 segundos)
+  useEffect(() => {
+    let active = true;
+    const fetchLive = async () => {
+      try {
+        const params = new URLSearchParams();
+        if (clientFilter) params.set("cliente", clientFilter);
+        if (searchQuery) params.set("q", searchQuery);
+        const res = await fetch(`/api/conversas/live?${params.toString()}`, { cache: "no-store" });
+        if (res.ok && active) {
+          const json = await res.json();
+          if (json.ok && Array.isArray(json.leads)) {
+            setCurrentLeads(json.leads);
+            if (json.adsData) setCurrentAdsData(json.adsData);
+            if (json.eventsData) setCurrentEventsData(json.eventsData);
+          }
+        }
+      } catch {
+        // silencioso
+      }
+    };
+
+    const interval = setInterval(fetchLive, 4000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [clientFilter, searchQuery]);
 
   const copyToClipboard = (text: string, key: string) => {
     navigator.clipboard.writeText(text);
@@ -84,7 +122,7 @@ export function ConversasClient({
 
   // Filtra os leads em memória para resposta instantânea
   const filteredLeads = useMemo(() => {
-    return initialLeads.filter((lead) => {
+    return currentLeads.filter((lead) => {
       // Filtro de cliente
       if (clientFilter && lead.client_id !== clientFilter) return false;
 
@@ -99,7 +137,7 @@ export function ConversasClient({
       }
 
       // Filtro de abas
-      const hasPurchased = (eventsData[lead.id] || []).some((e) => e.event_name === "Purchase");
+      const hasPurchased = (currentEventsData[lead.id] || []).some((e) => e.event_name === "Purchase");
       const hasAd = Boolean(lead.ctwa_clid || lead.source_id);
 
       if (activeTab === "com-anuncio" && !hasAd) return false;
@@ -108,25 +146,25 @@ export function ConversasClient({
 
       return true;
     });
-  }, [initialLeads, clientFilter, searchQuery, activeTab, eventsData]);
+  }, [currentLeads, clientFilter, searchQuery, activeTab, currentEventsData]);
 
   // Lead selecionado atual
   const selectedLead = useMemo(() => {
-    if (!selectedLeadId) return filteredLeads[0] || initialLeads[0] || null;
-    return initialLeads.find((l) => l.id === selectedLeadId) || filteredLeads[0] || null;
-  }, [selectedLeadId, initialLeads, filteredLeads]);
+    if (!selectedLeadId) return filteredLeads[0] || currentLeads[0] || null;
+    return currentLeads.find((l) => l.id === selectedLeadId) || filteredLeads[0] || null;
+  }, [selectedLeadId, currentLeads, filteredLeads]);
 
   // Dados do anúncio do lead ativo
   const selectedAd = useMemo(() => {
     if (!selectedLead || !selectedLead.source_id) return null;
-    return adsData[`${selectedLead.client_id}:${selectedLead.source_id}`] || null;
-  }, [selectedLead, adsData]);
+    return currentAdsData[`${selectedLead.client_id}:${selectedLead.source_id}`] || null;
+  }, [selectedLead, currentAdsData]);
 
   // Eventos enviados do lead ativo
   const selectedEvents = useMemo(() => {
     if (!selectedLead) return [];
-    return eventsData[selectedLead.id] || [];
-  }, [selectedLead, eventsData]);
+    return currentEventsData[selectedLead.id] || [];
+  }, [selectedLead, currentEventsData]);
 
   // Extrai mensagem real de texto do WhatsApp
   const extractMessageText = (lead: Lead): string => {
@@ -142,6 +180,46 @@ export function ConversasClient({
       if (!lead.notes.includes("PROPOSTA")) return lead.notes.trim();
     }
     return "Olá! Vi seu anúncio e gostaria de saber mais informações.";
+  };
+
+  // Envio direto de mensagem para o cliente pelo WhatsApp Nativo
+  const handleSendMessage = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!selectedLead || !replyText.trim() || sendingReply) return;
+    setSendingReply(true);
+    setReplyError(null);
+
+    const msgToSend = replyText.trim();
+    try {
+      const res = await sendWhatsAppMessageAction(selectedLead.client_id, selectedLead.phone, msgToSend);
+      if (res.ok) {
+        setReplyText("");
+        // Adiciona otimisticamente na conversa em memória
+        setCurrentLeads((prev) =>
+          prev.map((l) => {
+            if (l.id !== selectedLead.id) return l;
+            const rawObj = (l.raw && typeof l.raw === "object") ? (l.raw as Record<string, any>) : {};
+            const existingMessages = Array.isArray(rawObj.messages) ? rawObj.messages : [];
+            return {
+              ...l,
+              raw: {
+                ...rawObj,
+                messages: [
+                  ...existingMessages,
+                  { text: msgToSend, at: new Date().toISOString(), fromMe: true },
+                ],
+              },
+            };
+          })
+        );
+      } else {
+        setReplyError(res.error || "Não foi possível enviar a mensagem. Verifique a conexão do WhatsApp.");
+      }
+    } catch (err) {
+      setReplyError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSendingReply(false);
+    }
   };
 
   // Disparo rápido de Compra (CAPI) para o Meta
@@ -680,78 +758,131 @@ export function ConversasClient({
                 ))}
               </div>
 
-              {/* Rodapé de Ações do Chat */}
+              {/* Rodapé de Envio de Mensagem Direta pelo WhatsApp */}
               <div
                 style={{
                   display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  padding: "14px 20px",
+                  flexDirection: "column",
                   background: "var(--surface)",
                   borderTop: "1px solid var(--border)",
-                  gap: "12px",
+                  padding: "12px 18px",
+                  gap: "10px",
                 }}
               >
-                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                  <a
-                    href={`https://wa.me/${selectedLead.phone.replace(/\D/g, "")}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ textDecoration: "none" }}
-                  >
-                    <Button
-                      size="sm"
-                      style={{
-                        background: "#25D366",
-                        color: "#ffffff",
-                        fontWeight: 700,
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "6px",
-                      }}
-                    >
-                      <MessageCircle size={15} />
-                      Conversar no WhatsApp Web
-                    </Button>
-                  </a>
-                </div>
-
-                {/* Formulário Rápido de Compra */}
-                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                  <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>Marcar Venda: R$</span>
+                {/* Input de Mensagem Real-Time */}
+                <form
+                  onSubmit={handleSendMessage}
+                  style={{ display: "flex", alignItems: "center", gap: "8px", width: "100%" }}
+                >
                   <input
                     type="text"
-                    value={saleValue}
-                    onChange={(e) => setSaleValue(e.target.value)}
-                    placeholder="197,00"
+                    value={replyText}
+                    onChange={(e) => setReplyText(e.target.value)}
+                    placeholder={`Responder para ${selectedLead.name || selectedLead.phone} no WhatsApp...`}
+                    disabled={sendingReply}
                     style={{
-                      width: "80px",
-                      padding: "5px 8px",
-                      borderRadius: "6px",
-                      background: "var(--background)",
+                      flex: 1,
+                      padding: "9px 14px",
+                      borderRadius: "20px",
+                      background: "rgba(255, 255, 255, 0.05)",
                       border: "1px solid var(--border)",
-                      color: "#ffd700",
-                      fontWeight: 700,
-                      fontSize: "12px",
-                      textAlign: "center",
+                      color: "#ffffff",
+                      fontSize: "13px",
+                      outline: "none",
                     }}
                   />
                   <Button
-                    size="sm"
-                    onClick={handleSendQuickSale}
-                    disabled={sendingSale}
+                    type="submit"
+                    disabled={sendingReply || !replyText.trim()}
                     style={{
-                      background: "linear-gradient(90deg, #ffd700, #ffaa00)",
-                      color: "#000000",
-                      fontWeight: 800,
+                      borderRadius: "50%",
+                      width: "38px",
+                      height: "38px",
+                      padding: 0,
+                      background: "#25D366",
+                      color: "#ffffff",
                       display: "flex",
                       alignItems: "center",
-                      gap: "4px",
+                      justifyContent: "center",
+                      flexShrink: 0,
                     }}
+                    title="Enviar mensagem via WhatsApp"
                   >
-                    {sendingSale ? <Loader2 size={13} className="animate-spin" /> : <DollarSign size={13} />}
-                    Enviar CAPI
+                    {sendingReply ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
                   </Button>
+                </form>
+
+                {replyError && (
+                  <div style={{ fontSize: "11px", color: "#ef4444", padding: "0 6px" }}>
+                    ⚠️ {replyError}
+                  </div>
+                )}
+
+                {/* Linha de Ações Auxiliares: WhatsApp Web + Envio Rápido de Venda */}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "10px", paddingTop: "4px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <a
+                      href={`https://wa.me/${selectedLead.phone.replace(/\D/g, "")}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ textDecoration: "none" }}
+                    >
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        style={{
+                          fontSize: "11px",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "5px",
+                          borderColor: "rgba(37, 211, 102, 0.4)",
+                          color: "#25D366",
+                        }}
+                      >
+                        <MessageCircle size={13} />
+                        Abrir WhatsApp Web
+                      </Button>
+                    </a>
+                  </div>
+
+                  {/* Formulário Rápido de Compra */}
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>Marcar Venda: R$</span>
+                    <input
+                      type="text"
+                      value={saleValue}
+                      onChange={(e) => setSaleValue(e.target.value)}
+                      placeholder="197,00"
+                      style={{
+                        width: "70px",
+                        padding: "4px 6px",
+                        borderRadius: "6px",
+                        background: "var(--background)",
+                        border: "1px solid var(--border)",
+                        color: "#ffd700",
+                        fontWeight: 700,
+                        fontSize: "12px",
+                        textAlign: "center",
+                      }}
+                    />
+                    <Button
+                      size="sm"
+                      onClick={handleSendQuickSale}
+                      disabled={sendingSale}
+                      style={{
+                        background: "linear-gradient(90deg, #ffd700, #ffaa00)",
+                        color: "#000000",
+                        fontWeight: 800,
+                        fontSize: "11px",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "4px",
+                      }}
+                    >
+                      {sendingSale ? <Loader2 size={12} className="animate-spin" /> : <DollarSign size={12} />}
+                      Enviar CAPI
+                    </Button>
+                  </div>
                 </div>
               </div>
 

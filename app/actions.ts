@@ -735,6 +735,18 @@ export async function disconnectNativeWhatsAppAction(clientId: string): Promise<
   return disconnectNativeWhatsApp(clientId);
 }
 
+export async function sendWhatsAppMessageAction(
+  clientId: string,
+  phone: string,
+  text: string
+): Promise<{ ok: boolean; error?: string }> {
+  await requireAuth();
+  const { sendNativeWhatsAppMessage } = await import("@/lib/whatsapp-baileys");
+  const res = await sendNativeWhatsAppMessage(clientId, phone, text);
+  revalidatePath("/conversas");
+  return res;
+}
+
 // ---------------------------------------------------------------------------
 // Importação de proposta via arquivo .TXT com Auto-Disparo de Compra
 // ---------------------------------------------------------------------------
