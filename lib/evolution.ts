@@ -43,9 +43,6 @@ export function parseEvolutionWebhook(
   // Verifica chave da mensagem (remoteJid, fromMe)
   const key = (item.key || {}) as Record<string, unknown>;
   const fromMe = Boolean(key.fromMe || item.fromMe);
-  if (fromMe) {
-    return { ok: false, ignored: true, error: "Mensagem enviada pelo próprio número (fromMe: true)." };
-  }
 
   const rawJid = String(key.remoteJid || item.remoteJid || item.phone || "");
   if (!rawJid) {

@@ -260,9 +260,10 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
     auth: authState,
     logger: pino({ level: "silent" }),
     printQRInTerminal: false,
-    connectTimeoutMs: 30_000,
+    syncFullHistory: true,
+    connectTimeoutMs: 45_000,
     keepAliveIntervalMs: 25_000,
-    browser: ["Track Manual", "Chrome", "1.0.0"],
+    browser: ["Windows", "Chrome", "122.0.0.0"],
   });
 
   session.socket = sock;
@@ -386,8 +387,31 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
 
   // Sincronização automática do histórico completo de conversas anteriores do celular
   sock.ev.on("messaging-history.set", async ({ chats, contacts, messages, isLatest }) => {
-    console.log(`[Track Manual] Sincronizando histórico do WhatsApp: ${chats.length} chats, ${messages.length} mensagens.`);
+    console.log(`[Track Manual] Sincronizando histórico do WhatsApp: ${chats.length} chats, ${contacts.length} contatos, ${messages.length} mensagens.`);
     try {
+      // 1. Cria imediatamente todos os contatos e conversas existentes no celular
+      for (const chat of chats) {
+        const jid = chat.id || "";
+        if (jid.includes("@g.us") || jid.includes("@broadcast")) continue;
+        const phone = jid.replace(/@.*$/, "").replace(/\D/g, "");
+        if (!phone || phone.length < 8) continue;
+
+        await ingestLead(
+          clientId,
+          {
+            name: chat.name || null,
+            phone,
+          },
+          "manual",
+          {
+            origin: "whatsapp-direto",
+            received_at: new Date(Number(chat.conversationTimestamp || 0) * 1000 || Date.now()).toISOString(),
+            instance: "baileys_nativo",
+          }
+        ).catch(() => {});
+      }
+
+      // 2. Extrai mensagens históricas de todas as conversas
       for (const msg of messages) {
         if (!msg.message) continue;
         const remoteJid = msg.key.remoteJid || "";
