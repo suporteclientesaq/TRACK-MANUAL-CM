@@ -385,36 +385,6 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
           const ci = (msgObj.contextInfo || {}) as Record<string, unknown>;
           if (!ci || typeof ci !== "object") continue;
 
-          // ctwaClid pode vir como Buffer, Uint8Array, string ou base64
-          const rawClid = ci.ctwaClid ?? ci.conversionData ?? ci.ctwa_clid ?? null;
-          if (rawClid && !bctwa) {
-            if (Buffer.isBuffer(rawClid)) {
-              const s = rawClid.toString("utf-8").trim();
-              if (s) bctwa = s;
-            } else if (rawClid instanceof Uint8Array) {
-              const s = Buffer.from(rawClid).toString("utf-8").trim();
-              if (s) bctwa = s;
-            } else if (typeof rawClid === "string" && rawClid.trim()) {
-              bctwa = rawClid.trim();
-            } else {
-              const s = String(rawClid).trim();
-              if (s && s !== "[object Object]" && s !== "null") bctwa = s;
-            }
-            // Tenta base64 decode se parecer base64 e ainda não for um clid legível
-            if (bctwa && /^[A-Za-z0-9+/=]{20,}$/.test(bctwa) && !bctwa.includes(" ")) {
-              try {
-                const dec = Buffer.from(bctwa, "base64").toString("utf-8");
-                // Se a string decodificada tiver caracteres legíveis, usa ela
-                if (/[a-zA-Z0-9_-]{10,}/.test(dec)) {
-                  const m = dec.match(/([a-zA-Z0-9_-]{20,})/);
-                  if (m) bctwa = m[1];
-                }
-              } catch {
-                // mantém o original
-              }
-            }
-          }
-
           // externalAdReply com dados do anúncio
           const ear = (ci.externalAdReply || {}) as Record<string, unknown>;
           if (ear && typeof ear === "object") {
@@ -437,6 +407,60 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
             if (!bAdUrl) {
               const su = ear.sourceUrl ?? ear.source_url;
               if (su) bAdUrl = String(su).trim();
+            }
+          }
+
+          // ctwaClid pode vir em ci ou em ear como Buffer, Uint8Array, string ou base64
+          const rawClid =
+            ci.ctwaClid ??
+            ci.conversionData ??
+            ci.ctwa_clid ??
+            ci.conversion_data ??
+            ear.ctwaClid ??
+            ear.ctwa_clid ??
+            ear.conversionData ??
+            null;
+
+          if (rawClid && !bctwa) {
+            if (Buffer.isBuffer(rawClid) || rawClid instanceof Uint8Array) {
+              const buf = Buffer.from(rawClid);
+              if (buf.length > 0) {
+                const utf8 = buf.toString("utf-8").trim();
+                const m = utf8.match(/([a-zA-Z0-9+/=_-]{20,})/);
+                if (m && m[1].length >= 20) {
+                  bctwa = m[1];
+                } else {
+                  // Converte para Base64 (formato aceito pelo Meta CAPI para conversion_data do CTWA)
+                  const b64 = buf.toString("base64").trim();
+                  if (b64 && b64.length >= 16) bctwa = b64;
+                }
+              }
+            } else if (typeof rawClid === "string" && rawClid.trim()) {
+              bctwa = rawClid.trim();
+              if (/^[A-Za-z0-9+/=]{24,}$/.test(bctwa) && !bctwa.includes(" ")) {
+                try {
+                  const dec = Buffer.from(bctwa, "base64").toString("utf-8");
+                  const m = dec.match(/([a-zA-Z0-9_-]{20,})/);
+                  if (m) bctwa = m[1];
+                } catch {
+                  // mantém original
+                }
+              }
+            } else {
+              const s = String(rawClid).trim();
+              if (s && s !== "[object Object]" && s !== "null" && s !== "undefined") bctwa = s;
+            }
+          }
+
+          // Se não achou ctwa no objeto direto, tenta da URL do anúncio
+          if (!bctwa && bAdUrl) {
+            try {
+              const u = new URL(bAdUrl);
+              const urlClid = u.searchParams.get("ctwa_clid") || u.searchParams.get("fbclid");
+              if (urlClid) bctwa = urlClid;
+            } catch {
+              const m = bAdUrl.match(/(?:ctwa_clid|fbclid)=([^&]+)/i);
+              if (m) bctwa = decodeURIComponent(m[1]);
             }
           }
 

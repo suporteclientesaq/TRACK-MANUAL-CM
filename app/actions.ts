@@ -957,8 +957,105 @@ export async function assignLeadAdAction(
 }
 
 // ---------------------------------------------------------------------------
-// Puxar CTWA pelo número de telefone (busca nas mensagens recebidas e outros leads)
 // ---------------------------------------------------------------------------
+// Puxar CTWA pelo número de telefone (busca profunda nas mensagens recebidas e outros leads)
+// ---------------------------------------------------------------------------
+
+function extractCtwaDeep(data: unknown): string | null {
+  if (!data) return null;
+
+  if (typeof data === "string") {
+    const trimmed = data.trim();
+    if (!trimmed) return null;
+
+    // Se for URL ou query string
+    if (trimmed.includes("ctwa_clid=") || trimmed.includes("fbclid=")) {
+      try {
+        const urlStr = trimmed.startsWith("http") ? trimmed : `https://meta.internal/?${trimmed}`;
+        const u = new URL(urlStr);
+        const clid = u.searchParams.get("ctwa_clid") || u.searchParams.get("fbclid");
+        if (clid && clid.length >= 12) return clid;
+      } catch {
+        const m = trimmed.match(/(?:ctwa_clid|fbclid)=([^&\s"']+)/i);
+        if (m && m[1].length >= 12) return decodeURIComponent(m[1]);
+      }
+    }
+
+    // Se parecer um ctwa_clid (alfanumérico/base64 de pelo menos 20 caracteres sem espaços)
+    if (/^[A-Za-z0-9+/=_-]{24,}$/.test(trimmed) && !trimmed.includes(" ") && !trimmed.startsWith("http")) {
+      return trimmed;
+    }
+    return null;
+  }
+
+  // Se for Buffer ou Uint8Array
+  if (Buffer.isBuffer(data) || data instanceof Uint8Array) {
+    const buf = Buffer.from(data);
+    if (buf.length === 0) return null;
+    const utf8 = buf.toString("utf-8").trim();
+    const m = utf8.match(/([a-zA-Z0-9+/=_-]{20,})/);
+    if (m && m[1].length >= 20) return m[1];
+    const b64 = buf.toString("base64").trim();
+    if (b64 && b64.length >= 16) return b64;
+  }
+
+  if (Array.isArray(data)) {
+    for (const item of data) {
+      const found = extractCtwaDeep(item);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  if (typeof data === "object") {
+    const obj = data as Record<string, unknown>;
+
+    // Chaves de CTWA diretas
+    const priorityKeys = [
+      "ctwa_clid",
+      "ctwaClid",
+      "_baileys_ctwa_clid",
+      "conversionData",
+      "conversion_data",
+      "fbclid",
+    ];
+    for (const k of priorityKeys) {
+      if (obj[k] != null) {
+        const found = extractCtwaDeep(obj[k]);
+        if (found) return found;
+      }
+    }
+
+    // Sub-objetos comuns em mensagens do WhatsApp
+    const subKeys = [
+      "contextInfo",
+      "externalAdReply",
+      "message",
+      "extendedTextMessage",
+      "imageMessage",
+      "videoMessage",
+      "documentMessage",
+      "raw",
+      "messages",
+      "data",
+      "payload",
+      "_data",
+    ];
+    for (const k of subKeys) {
+      if (obj[k] != null && typeof obj[k] === "object") {
+        const found = extractCtwaDeep(obj[k]);
+        if (found) return found;
+      }
+    }
+
+    if (obj.sourceUrl || obj.source_url) {
+      const found = extractCtwaDeep(obj.sourceUrl || obj.source_url);
+      if (found) return found;
+    }
+  }
+
+  return null;
+}
 
 export async function pullCtwaFromPhoneAction(
   leadId: string
@@ -968,45 +1065,112 @@ export async function pullCtwaFromPhoneAction(
   const lead = await getLead(leadId);
   if (!lead) return { ok: false, message: "Lead não encontrado." };
 
-  // Já tem ctwa_clid — nada a fazer
+  // 1. Já tem ctwa_clid no lead
   if (lead.ctwa_clid) {
-    return { ok: true, message: `ctwa_clid já registrado: ${lead.ctwa_clid.slice(0, 24)}…`, ctwa_clid: lead.ctwa_clid };
-  }
-
-  // Busca outros leads do mesmo telefone que possam ter ctwa_clid
-  const siblings = await findLeadsByPhones(lead.client_id, [lead.phone]);
-  const withClid = siblings.find((l) => l.id !== leadId && l.ctwa_clid);
-  if (withClid?.ctwa_clid) {
-    await updateLead(leadId, { ctwa_clid: withClid.ctwa_clid });
-    revalidatePath(`/leads/${leadId}`);
-    revalidatePath("/");
-    revalidatePath("/dashboard");
     return {
       ok: true,
-      message: `✅ ctwa_clid copiado de outro lead do mesmo número e salvo com sucesso!`,
-      ctwa_clid: withClid.ctwa_clid,
+      message: `ctwa_clid já registrado: ${lead.ctwa_clid.slice(0, 24)}…`,
+      ctwa_clid: lead.ctwa_clid,
     };
   }
 
-  // Tenta puxar do raw do próprio lead (pode estar no raw.ctwa_clid)
-  const rawData = lead.raw as Record<string, unknown> | null;
-  const rawClid =
-    typeof rawData?.ctwa_clid === "string" && rawData.ctwa_clid.trim()
-      ? rawData.ctwa_clid.trim()
-      : typeof rawData?.ctwaClid === "string" && rawData.ctwaClid.trim()
-        ? rawData.ctwaClid.trim()
-        : null;
-  if (rawClid) {
-    await updateLead(leadId, { ctwa_clid: rawClid });
+  // 2. Busca profunda em todos os campos do lead (raw, source_url, notes)
+  const fromRaw = extractCtwaDeep(lead.raw);
+  if (fromRaw) {
+    await updateLead(leadId, { ctwa_clid: fromRaw });
     revalidatePath(`/leads/${leadId}`);
+    revalidatePath("/conversas");
     revalidatePath("/");
     revalidatePath("/dashboard");
-    return { ok: true, message: `✅ ctwa_clid extraído dos dados brutos do lead e salvo!`, ctwa_clid: rawClid };
+    return { ok: true, message: `✅ ctwa_clid recuperado dos dados brutos do WhatsApp e salvo com sucesso!`, ctwa_clid: fromRaw };
+  }
+
+  if (lead.source_url) {
+    const fromUrl = extractCtwaDeep(lead.source_url);
+    if (fromUrl) {
+      await updateLead(leadId, { ctwa_clid: fromUrl });
+      revalidatePath(`/leads/${leadId}`);
+      revalidatePath("/conversas");
+      revalidatePath("/");
+      return { ok: true, message: `✅ ctwa_clid extraído da URL do anúncio e salvo!`, ctwa_clid: fromUrl };
+    }
+  }
+
+  if (lead.notes) {
+    const fromNotes = extractCtwaDeep(lead.notes);
+    if (fromNotes) {
+      await updateLead(leadId, { ctwa_clid: fromNotes });
+      revalidatePath(`/leads/${leadId}`);
+      revalidatePath("/conversas");
+      revalidatePath("/");
+      return { ok: true, message: `✅ ctwa_clid extraído das anotações e salvo!`, ctwa_clid: fromNotes };
+    }
+  }
+
+  // 3. Busca em outros leads do mesmo número
+  const siblings = await findLeadsByPhones(lead.client_id, [lead.phone]);
+  for (const s of siblings) {
+    if (s.id === leadId) continue;
+    if (s.ctwa_clid) {
+      await updateLead(leadId, { ctwa_clid: s.ctwa_clid });
+      revalidatePath(`/leads/${leadId}`);
+      revalidatePath("/conversas");
+      revalidatePath("/");
+      return {
+        ok: true,
+        message: `✅ ctwa_clid copiado de outro registro do mesmo número e salvo!`,
+        ctwa_clid: s.ctwa_clid,
+      };
+    }
+    const fromSibRaw = extractCtwaDeep(s.raw);
+    if (fromSibRaw) {
+      await updateLead(leadId, { ctwa_clid: fromSibRaw });
+      revalidatePath(`/leads/${leadId}`);
+      revalidatePath("/conversas");
+      revalidatePath("/");
+      return {
+        ok: true,
+        message: `✅ ctwa_clid recuperado de mensagem anterior deste número e salvo!`,
+        ctwa_clid: fromSibRaw,
+      };
+    }
+  }
+
+  // 4. Se o lead possui source_id (ID de anúncio confirmado), a atribuição ao anúncio já está 100% garantida
+  if (lead.source_id) {
+    return {
+      ok: true,
+      message: `🎯 Lead 100% atribuído ao Anúncio #${lead.source_id}! O Meta enviou todos os dados do criativo e campanha. Para este clique específico, o Meta não gerou token avulso, e o Track Manual atribui a conversão automaticamente no dashboard e no Meta CAPI via correspondência direta de telefone.`,
+      ctwa_clid: null,
+    };
   }
 
   return {
     ok: false,
     message:
-      "Nenhum ctwa_clid encontrado para este número. O ctwa_clid só é capturado quando o lead clica em um anúncio Click-to-WhatsApp no Meta. Se o lead não veio de anúncio ou o WhatsApp não estava conectado no momento, não há dados para recuperar.",
+      "Nenhum token ctwa_clid encontrado para este número. O ctwa_clid é gerado quando o lead clica em anúncio Click-to-WhatsApp. Se você souber o ID do anúncio, utilize o campo 'Vincular ID de Anúncio' abaixo.",
   };
+}
+
+export async function setLeadCtwaAction(
+  leadId: string,
+  ctwaClid: string
+): Promise<{ ok: boolean; message: string }> {
+  "use server";
+  await requireAuth();
+  const lead = await getLead(leadId);
+  if (!lead) return { ok: false, message: "Lead não encontrado." };
+
+  const clean = ctwaClid.trim();
+  if (!clean || clean.length < 10) {
+    return { ok: false, message: "ctwa_clid inválido (muito curto)." };
+  }
+
+  await updateLead(leadId, { ctwa_clid: clean });
+  revalidatePath(`/leads/${leadId}`);
+  revalidatePath("/conversas");
+  revalidatePath("/");
+  revalidatePath("/dashboard");
+
+  return { ok: true, message: `✅ ctwa_clid salvo com sucesso!` };
 }

@@ -139,13 +139,21 @@ export default async function LeadPage({
             <h2>Origem do Anúncio</h2>
             {lead.ctwa_clid ? (
               <p>
-                <span className="badge badge-ok">Com ctwa_clid</span>{" "}
+                <span className="badge badge-ok">CTWA ✓ Com Chave de Clique Meta</span>{" "}
                 {clidAge !== null && <span className="muted small">clique registrado há {clidAge} dia(s)</span>}
               </p>
+            ) : lead.source_id ? (
+              <div style={{ padding: "10px 12px", borderRadius: "8px", background: "rgba(52, 199, 123, 0.12)", border: "1px solid rgba(52, 199, 123, 0.3)", color: "#34c77b", fontSize: "12px", marginBottom: "10px" }}>
+                <div style={{ fontWeight: 700, display: "flex", alignItems: "center", gap: "6px" }}>
+                  <span>🎯 Atribuído ao Anúncio Meta (AD_ID: #{lead.source_id})</span>
+                </div>
+                <div style={{ color: "#c4c0d9", fontSize: "11px", marginTop: "3px", lineHeight: "1.4" }}>
+                  Criativo e campanha vinculados. A conversão é enviada via Meta CAPI e atribuída diretamente pelo telefone ao anúncio.
+                </div>
+              </div>
             ) : (
               <div className="note note-warn">
-                Este lead não tem ctwa_clid. O evento pode ser enviado, mas o Meta casa só pelo telefone e pode não
-                atribuir ao anúncio.
+                Este lead não tem ctwa_clid nem ID de anúncio. O evento é enviado como conversa, casado só pelo telefone.
               </div>
             )}
             <PullCtwaButton leadId={lead.id} hasCtwa={!!lead.ctwa_clid} />

@@ -119,56 +119,77 @@ export function parseEvolutionWebhook(
     (item.contextInfo as Record<string, unknown>) ||
     {};
 
-  // CTWA Click ID com conversão de Buffer / Uint8Array / Base64 (Protobuf Baileys / Evolution)
-  const ctwaClidRaw =
-    contextInfo.ctwaClid ||
-    contextInfo.conversionData ||
-    contextInfo.ctwa_clid ||
-    contextInfo.conversion_data ||
-    item.ctwaClid ||
-    item.ctwa_clid ||
-    // Campos injetados diretamente pelo handler Baileys (extração direta do protobuf)
-    item._baileys_ctwa_clid ||
-    null;
-
-  let ctwa_clid: string | null = null;
-  if (ctwaClidRaw != null) {
-    if (typeof ctwaClidRaw === "string" && ctwaClidRaw.trim()) {
-      const trimmed = ctwaClidRaw.trim();
-      // Se parecer base64 sem espaços, tenta decodificar para checar se tem ctwa_clid embutido
-      if (/^[A-Za-z0-9+/=_-]{30,}$/.test(trimmed)) {
-        ctwa_clid = trimmed;
-      } else {
-        ctwa_clid = trimmed;
-      }
-    } else if (Buffer.isBuffer(ctwaClidRaw)) {
-      const s = ctwaClidRaw.toString("utf-8").trim();
-      if (s) ctwa_clid = s;
-    } else if (ctwaClidRaw instanceof Uint8Array) {
-      const s = Buffer.from(ctwaClidRaw).toString("utf-8").trim();
-      if (s) ctwa_clid = s;
-    } else {
-      const s = String(ctwaClidRaw).trim();
-      if (s && s !== "[object Object]") ctwa_clid = s;
-    }
-  }
-
-  // Se conversionData veio em Base64 separado, tenta extrair string de tracking
-  if (!ctwa_clid && contextInfo.conversionData && typeof contextInfo.conversionData === "string") {
-    try {
-      const decoded = Buffer.from(contextInfo.conversionData, "base64").toString("utf-8");
-      const m = decoded.match(/([a-zA-Z0-9_-]{20,})/);
-      if (m) ctwa_clid = m[1];
-    } catch {
-      // Ignora erro de base64
-    }
-  }
-
   // Dados do anúncio (externalAdReply)
   const adReply =
     (contextInfo.externalAdReply as Record<string, unknown>) ||
     (item.externalAdReply as Record<string, unknown>) ||
     {};
+
+  // CTWA Click ID com conversão de Buffer / Uint8Array / Base64 (Protobuf Baileys / Evolution)
+  const ctwaClidRaw =
+    contextInfo.ctwaClid ??
+    contextInfo.ctwa_clid ??
+    contextInfo.conversionData ??
+    contextInfo.conversion_data ??
+    adReply.ctwaClid ??
+    adReply.ctwa_clid ??
+    adReply.conversionData ??
+    adReply.conversion_data ??
+    item.ctwaClid ??
+    item.ctwa_clid ??
+    item._baileys_ctwa_clid ??
+    null;
+
+  let ctwa_clid: string | null = null;
+
+  if (ctwaClidRaw != null) {
+    if (Buffer.isBuffer(ctwaClidRaw) || ctwaClidRaw instanceof Uint8Array) {
+      const buf = Buffer.from(ctwaClidRaw);
+      if (buf.length > 0) {
+        // 1. Tenta extrair string legível se houver
+        const utf8 = buf.toString("utf-8").trim();
+        const m = utf8.match(/([a-zA-Z0-9+/=_-]{20,})/);
+        if (m && m[1].length >= 20) {
+          ctwa_clid = m[1];
+        } else {
+          // 2. Converte bytes brutos para Base64 (formato oficial do Meta para conversion_data)
+          const b64 = buf.toString("base64").trim();
+          if (b64 && b64.length >= 16) {
+            ctwa_clid = b64;
+          }
+        }
+      }
+    } else if (typeof ctwaClidRaw === "string" && ctwaClidRaw.trim()) {
+      const trimmed = ctwaClidRaw.trim();
+      // Se for base64 ou token alfanumérico
+      if (/^[A-Za-z0-9+/=_-]{16,}$/.test(trimmed)) {
+        ctwa_clid = trimmed;
+      } else {
+        ctwa_clid = trimmed;
+      }
+    } else {
+      const s = String(ctwaClidRaw).trim();
+      if (s && s !== "[object Object]" && s !== "null" && s !== "undefined") {
+        ctwa_clid = s;
+      }
+    }
+  }
+
+  // Se conversionData veio em Base64 separado ou string
+  if (!ctwa_clid && (contextInfo.conversionData || adReply.conversionData)) {
+    const rawConv = contextInfo.conversionData || adReply.conversionData;
+    if (Buffer.isBuffer(rawConv) || rawConv instanceof Uint8Array) {
+      ctwa_clid = Buffer.from(rawConv).toString("base64").trim();
+    } else if (typeof rawConv === "string" && rawConv.trim()) {
+      try {
+        const decoded = Buffer.from(rawConv, "base64").toString("utf-8");
+        const m = decoded.match(/([a-zA-Z0-9_-]{20,})/);
+        ctwa_clid = m ? m[1] : rawConv.trim();
+      } catch {
+        ctwa_clid = rawConv.trim();
+      }
+    }
+  }
 
   const sourceIdRaw =
     adReply.sourceId ??

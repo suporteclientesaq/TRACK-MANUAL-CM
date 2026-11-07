@@ -76,30 +76,64 @@ export function parseWahaWebhook(
     (payload.contextInfo as Record<string, unknown>) ||
     {};
 
-  // CTWA Click ID
-  let ctwa_clid: string | null = null;
-  const rawCtwa = contextInfo.ctwaClid || contextInfo.ctwa_clid || data.ctwaClid || payload.ctwaClid;
-  if (typeof rawCtwa === "string" && rawCtwa.trim()) {
-    ctwa_clid = rawCtwa.trim();
-  }
-
-  // Se conversionData veio em Base64, decodifica
-  if (!ctwa_clid && contextInfo.conversionData) {
-    try {
-      const rawConv = String(contextInfo.conversionData);
-      const decoded = Buffer.from(rawConv, "base64").toString("utf-8");
-      const m = decoded.match(/([a-zA-Z0-9_-]{20,})/);
-      if (m) ctwa_clid = m[1];
-    } catch {
-      // Ignora erro
-    }
-  }
-
   // Dados do anúncio (externalAdReply)
   const adReply =
     (contextInfo.externalAdReply as Record<string, unknown>) ||
     (data.externalAdReply as Record<string, unknown>) ||
+    (payload.externalAdReply as Record<string, unknown>) ||
     {};
+
+  // CTWA Click ID
+  let ctwa_clid: string | null = null;
+  const rawCtwa =
+    contextInfo.ctwaClid ??
+    contextInfo.ctwa_clid ??
+    contextInfo.conversionData ??
+    contextInfo.conversion_data ??
+    adReply.ctwaClid ??
+    adReply.ctwa_clid ??
+    adReply.conversionData ??
+    adReply.conversion_data ??
+    data.ctwaClid ??
+    payload.ctwaClid ??
+    null;
+
+  if (rawCtwa != null) {
+    if (Buffer.isBuffer(rawCtwa) || rawCtwa instanceof Uint8Array) {
+      const buf = Buffer.from(rawCtwa);
+      if (buf.length > 0) {
+        const utf8 = buf.toString("utf-8").trim();
+        const m = utf8.match(/([a-zA-Z0-9+/=_-]{20,})/);
+        if (m && m[1].length >= 20) {
+          ctwa_clid = m[1];
+        } else {
+          const b64 = buf.toString("base64").trim();
+          if (b64 && b64.length >= 16) ctwa_clid = b64;
+        }
+      }
+    } else if (typeof rawCtwa === "string" && rawCtwa.trim()) {
+      ctwa_clid = rawCtwa.trim();
+    } else {
+      const s = String(rawCtwa).trim();
+      if (s && s !== "[object Object]" && s !== "null" && s !== "undefined") ctwa_clid = s;
+    }
+  }
+
+  // Se conversionData veio em Base64, decodifica ou usa direto
+  if (!ctwa_clid && (contextInfo.conversionData || adReply.conversionData)) {
+    const rawConv = contextInfo.conversionData || adReply.conversionData;
+    if (Buffer.isBuffer(rawConv) || rawConv instanceof Uint8Array) {
+      ctwa_clid = Buffer.from(rawConv).toString("base64").trim();
+    } else if (typeof rawConv === "string" && rawConv.trim()) {
+      try {
+        const decoded = Buffer.from(rawConv.trim(), "base64").toString("utf-8");
+        const m = decoded.match(/([a-zA-Z0-9_-]{20,})/);
+        ctwa_clid = m ? m[1] : rawConv.trim();
+      } catch {
+        ctwa_clid = rawConv.trim();
+      }
+    }
+  }
 
   let source_id: string | null = null;
   const rawSourceId =
