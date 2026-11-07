@@ -109,7 +109,7 @@ export function parseEvolutionWebhook(
                   ? tpl.selectedDisplayText.trim()
                   : null;
 
-  // contextInfo pode estar em vários lugares dependendo do tipo da mensagem
+  // ctwaClid pode estar em vários lugares dependendo do tipo da mensagem
   const contextInfo =
     (ext.contextInfo as Record<string, unknown>) ||
     (img.contextInfo as Record<string, unknown>) ||
@@ -127,6 +127,8 @@ export function parseEvolutionWebhook(
     contextInfo.conversion_data ||
     item.ctwaClid ||
     item.ctwa_clid ||
+    // Campos injetados diretamente pelo handler Baileys (extração direta do protobuf)
+    item._baileys_ctwa_clid ||
     null;
 
   let ctwa_clid: string | null = null;

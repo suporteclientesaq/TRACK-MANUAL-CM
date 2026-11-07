@@ -360,28 +360,131 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
         const remoteJid = msg.key.remoteJid || "";
         if (remoteJid.includes("@g.us") || remoteJid.includes("@broadcast")) continue;
 
+        // Extrai ctwa_clid diretamente do objeto Baileys em todos os locais possíveis
+        // O Baileys entrega ctwaClid como Buffer/Uint8Array no contextInfo do protobuf
+        const rawMsg = msg.message as Record<string, unknown>;
+        const msgTypes = [
+          rawMsg.extendedTextMessage,
+          rawMsg.imageMessage,
+          rawMsg.videoMessage,
+          rawMsg.documentMessage,
+          rawMsg.audioMessage,
+          rawMsg.stickerMessage,
+          rawMsg,
+        ] as Array<Record<string, unknown> | undefined>;
+
+        let bctwa: string | null = null;
+        let bAdId: string | null = null;
+        let bAdTitle: string | null = null;
+        let bAdBody: string | null = null;
+        let bAdThumb: string | null = null;
+        let bAdUrl: string | null = null;
+
+        for (const msgObj of msgTypes) {
+          if (!msgObj || typeof msgObj !== "object") continue;
+          const ci = (msgObj.contextInfo || {}) as Record<string, unknown>;
+          if (!ci || typeof ci !== "object") continue;
+
+          // ctwaClid pode vir como Buffer, Uint8Array, string ou base64
+          const rawClid = ci.ctwaClid ?? ci.conversionData ?? ci.ctwa_clid ?? null;
+          if (rawClid && !bctwa) {
+            if (Buffer.isBuffer(rawClid)) {
+              const s = rawClid.toString("utf-8").trim();
+              if (s) bctwa = s;
+            } else if (rawClid instanceof Uint8Array) {
+              const s = Buffer.from(rawClid).toString("utf-8").trim();
+              if (s) bctwa = s;
+            } else if (typeof rawClid === "string" && rawClid.trim()) {
+              bctwa = rawClid.trim();
+            } else {
+              const s = String(rawClid).trim();
+              if (s && s !== "[object Object]" && s !== "null") bctwa = s;
+            }
+            // Tenta base64 decode se parecer base64 e ainda não for um clid legível
+            if (bctwa && /^[A-Za-z0-9+/=]{20,}$/.test(bctwa) && !bctwa.includes(" ")) {
+              try {
+                const dec = Buffer.from(bctwa, "base64").toString("utf-8");
+                // Se a string decodificada tiver caracteres legíveis, usa ela
+                if (/[a-zA-Z0-9_-]{10,}/.test(dec)) {
+                  const m = dec.match(/([a-zA-Z0-9_-]{20,})/);
+                  if (m) bctwa = m[1];
+                }
+              } catch {
+                // mantém o original
+              }
+            }
+          }
+
+          // externalAdReply com dados do anúncio
+          const ear = (ci.externalAdReply || {}) as Record<string, unknown>;
+          if (ear && typeof ear === "object") {
+            if (!bAdId) {
+              const sid = ear.sourceId ?? ear.source_id ?? ear.adId ?? ear.ad_id;
+              if (sid) bAdId = String(sid).trim();
+            }
+            if (!bAdTitle) {
+              const t = ear.title ?? ear.headline;
+              if (t) bAdTitle = String(t).trim();
+            }
+            if (!bAdBody) {
+              const b = ear.body ?? ear.ad_body;
+              if (b) bAdBody = String(b).trim();
+            }
+            if (!bAdThumb) {
+              const th = ear.thumbnailUrl ?? ear.thumbnail_url;
+              if (th) bAdThumb = String(th).trim();
+            }
+            if (!bAdUrl) {
+              const su = ear.sourceUrl ?? ear.source_url;
+              if (su) bAdUrl = String(su).trim();
+            }
+          }
+
+          if (bctwa && bAdId) break;
+        }
+
         // Usa o parser que já trata todos os campos (CTWA, externalAdReply, headline, source_id)
+        // Injeta os campos extraídos diretamente no data para garantir que o parser os capture
+        const msgData = {
+          ...(msg as unknown as Record<string, unknown>),
+          // Injeta campos de CTWA e anúncio extraídos diretamente do contextInfo Baileys
+          _baileys_ctwa_clid: bctwa,
+          _baileys_source_id: bAdId,
+          _baileys_headline: bAdTitle,
+          _baileys_ad_body: bAdBody,
+          _baileys_thumbnail_url: bAdThumb,
+          _baileys_source_url: bAdUrl,
+        };
+
         const parsed = parseEvolutionWebhook({
           event: "messages.upsert",
-          data: msg as unknown as Record<string, unknown>,
+          data: msgData as unknown as Record<string, unknown>,
         });
 
         if (!parsed.ok) continue;
 
-        console.log(`[Track Manual] Mensagem WhatsApp (${msg.key.fromMe ? "enviada" : "recebida"}) de ${parsed.lead.phone}! ctwa_clid: ${parsed.lead.ctwa_clid || "nenhum"}, adId: ${parsed.lead.source_id || "nenhum"}`);
+        // Mescla campos extraídos diretamente do protobuf Baileys com o resultado do parser
+        const finalCtwa = bctwa || parsed.lead.ctwa_clid;
+        const finalAdId = bAdId || parsed.lead.source_id;
+        const finalAdTitle = bAdTitle || parsed.lead.headline;
+        const finalAdBody = bAdBody || parsed.lead.ad_body;
+        const finalAdThumb = bAdThumb || parsed.lead.thumbnail_url;
+        const finalAdUrl = bAdUrl || parsed.lead.source_url;
+
+        console.log(`[Track Manual] Mensagem WhatsApp (${msg.key.fromMe ? "enviada" : "recebida"}) de ${parsed.lead.phone}! ctwa_clid: ${finalCtwa || "nenhum"}, adId: ${finalAdId || "nenhum"}`);
 
         await ingestLead(
           clientId,
           {
             name: parsed.lead.name,
             phone: parsed.lead.phone,
-            ctwa_clid: parsed.lead.ctwa_clid,
-            source_id: parsed.lead.source_id,
-            source_url: parsed.lead.source_url,
-            thumbnail_url: parsed.lead.thumbnail_url,
+            ctwa_clid: finalCtwa,
+            source_id: finalAdId,
+            source_url: finalAdUrl,
+            thumbnail_url: finalAdThumb,
             media_url: parsed.lead.media_url,
-            headline: parsed.lead.headline,
-            ad_body: parsed.lead.ad_body,
+            headline: finalAdTitle,
+            ad_body: finalAdBody,
             notes: parsed.lead.message_text ? `WhatsApp: "${parsed.lead.message_text}"` : null,
           },
           "manual",
@@ -391,6 +494,7 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
             instance: "baileys_nativo",
             message_text: parsed.lead.message_text,
             fromMe: Boolean(msg.key.fromMe),
+            ctwa_clid: finalCtwa,
           }
         );
       } catch (err) {
