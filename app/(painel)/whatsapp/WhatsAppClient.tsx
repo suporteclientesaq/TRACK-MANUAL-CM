@@ -150,10 +150,21 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
       if (connectionMode === "native") {
         const res = await nativeStatus(selectedClientId);
         if (res.ok) {
-          setConnectionState(res.state);
-          if (res.phone) setConnectedPhone(res.phone);
-          if (res.qrcode && res.state === "connecting") setQrCodeData(res.qrcode);
-          else if (res.state === "open") setQrCodeData(null);
+          if (res.state === "open") {
+            setConnectionState("open");
+            setQrCodeData(null);
+            if (res.phone) setConnectedPhone(res.phone);
+          } else if (res.state === "connecting" && res.qrcode) {
+            setConnectionState("connecting");
+            setQrCodeData(res.qrcode);
+          } else if (res.phone && !res.qrcode) {
+            // Sessão com credenciais salvas em reconexão transparente
+            setConnectionState("open");
+            setConnectedPhone(res.phone);
+            setQrCodeData(null);
+          } else if (res.state === "close") {
+            setConnectionState("close");
+          }
         } else {
           setConnectionState("close");
         }

@@ -95,15 +95,18 @@ export function getNativeWhatsAppStatus(clientId: string): {
       const creds = JSON.parse(fs.readFileSync(credsFile, "utf-8"));
       if (creds?.me?.id) {
         const phone = creds.me.id.split(":")[0].replace(/\D/g, "");
-        // Auto-reconecta automaticamente a sessão salva se estiver em ambiente contínuo
+        // Inicia a reconexão automática imediatamente se ainda não estiver ocorrendo
         if (!isServerlessEnvironment()) {
-          setTimeout(() => {
-            connectNativeWhatsApp(clientId).catch(() => {});
-          }, 100);
+          const current = sessions.get(clientId);
+          if (!current || (!current.socket && !current.isConnecting)) {
+            connectNativeWhatsApp(clientId).catch((err) =>
+              console.warn("[Track Manual] Auto-start WhatsApp na consulta de status:", err)
+            );
+          }
         }
         return {
           ok: true,
-          state: "connecting",
+          state: "open", // Preserva a indicação de conectado enquanto o Baileys retoma em background
           qrcode: null,
           phone,
           name: creds.me.name || null,
@@ -151,12 +154,24 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
     };
   }
 
-  if (session && session.state === "connecting" && session.qrcode) {
-    return {
-      ok: true,
-      state: "connecting",
-      qrcode: session.qrcode,
-    };
+  // Se já está conectando com socket ativo, apenas aguarda ou devolve o QR existente sem destruir
+  if (session && session.isConnecting && session.socket) {
+    if (session.qrcode) {
+      return {
+        ok: true,
+        state: "connecting",
+        qrcode: session.qrcode,
+      };
+    }
+  }
+
+  // Se já existia um socket antigo fechado, encerra limpo antes de abrir um novo
+  if (session?.socket) {
+    try {
+      session.socket.end(undefined);
+    } catch {
+      // ignora
+    }
   }
 
   if (!session) {
@@ -180,7 +195,7 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
     auth: authState,
     logger: pino({ level: "silent" }),
     printQRInTerminal: false,
-    connectTimeoutMs: 15_000,
+    connectTimeoutMs: 30_000,
     keepAliveIntervalMs: 25_000,
     browser: ["Track Manual", "Chrome", "1.0.0"],
   });
