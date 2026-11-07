@@ -186,10 +186,17 @@ export async function saveLeadAction(_prev: FormState, fd: FormData): Promise<Fo
   try {
     if (id) {
       const old = await getLead(id);
+      if (!row.ctwa_clid && old?.ctwa_clid) row.ctwa_clid = old.ctwa_clid;
+      if (!row.source_id && old?.source_id) row.source_id = old.source_id;
+      if (!row.thumbnail_url && old?.thumbnail_url) row.thumbnail_url = old.thumbnail_url;
+      if (!row.headline && old?.headline) row.headline = old.headline;
+      if (!row.ad_body && old?.ad_body) row.ad_body = old.ad_body;
+      if (row.source_id && !row.ctwa_clid) row.ctwa_clid = `ctwa_ad_${row.source_id}`;
       if (row.ctwa_clid && row.ctwa_clid !== old?.ctwa_clid) row.clid_seen_at = nowIso;
       await updateLead(id, row);
       savedId = id;
     } else {
+      if (row.source_id && !row.ctwa_clid) row.ctwa_clid = `ctwa_ad_${row.source_id}`;
       if (row.ctwa_clid) row.clid_seen_at = nowIso;
       savedId = await insertLead({ ...row, origin: "manual", first_seen_at: nowIso });
     }
@@ -201,6 +208,8 @@ export async function saveLeadAction(_prev: FormState, fd: FormData): Promise<Fo
     return { error: `Não foi possível salvar: ${e instanceof Error ? e.message : String(e)}` };
   }
   revalidatePath("/");
+  revalidatePath("/dashboard");
+  revalidatePath("/conversas");
   revalidatePath(`/leads/${savedId}`);
   redirect(id ? `/leads/${savedId}?salvo=1` : `/leads/${savedId}`);
 }
@@ -396,6 +405,8 @@ async function sendAndRecord(input: EventFormInput, eventId: string): Promise<Ev
 
   revalidatePath(`/leads/${p.lead.id}`);
   revalidatePath("/eventos");
+  revalidatePath("/conversas");
+  revalidatePath("/dashboard");
   revalidatePath("/");
 
   return {
@@ -743,6 +754,62 @@ export async function sendWhatsAppMessageAction(
   await requireAuth();
   const { sendNativeWhatsAppMessage } = await import("@/lib/whatsapp-baileys");
   const res = await sendNativeWhatsAppMessage(clientId, phone, text);
+  if (res.ok) {
+    revalidatePath("/conversas");
+    return res;
+  }
+
+  // Se o Baileys nativo não estiver conectado, tenta via WAHA
+  try {
+    const { getSetting } = await import("@/lib/store");
+    const wahaUrl = await getSetting("waha_server_url");
+    if (wahaUrl) {
+      const { wahaSendMessage } = await import("@/lib/waha");
+      const wahaApiKey = (await getSetting("waha_api_key")) || undefined;
+      const wahaSession = (await getSetting(`waha_session_${clientId}`)) || "default";
+      const wahaRes = await wahaSendMessage({ serverUrl: wahaUrl, apiKey: wahaApiKey, sessionName: wahaSession }, phone, text);
+      if (wahaRes.ok) {
+        // Grava no histórico do lead
+        const { ingestLead } = await import("@/lib/ingest");
+        await ingestLead(clientId, { phone: phone.replace(/\D/g, "") }, "manual", {
+          origin: "waha",
+          received_at: new Date().toISOString(),
+          message_text: text,
+          fromMe: true,
+        }).catch(() => {});
+        revalidatePath("/conversas");
+        return { ok: true };
+      }
+    }
+  } catch {
+    // segue para próxima tentativa
+  }
+
+  // Se ainda falhar, tenta via Evolution API
+  try {
+    const { getSetting } = await import("@/lib/store");
+    const evoUrl = await getSetting("evolution_server_url");
+    const evoKey = await getSetting("evolution_api_key");
+    if (evoUrl && evoKey) {
+      const { evolutionSendMessage } = await import("@/lib/evolution");
+      const evoInstance = (await getSetting(`evolution_instance_${clientId}`)) || "default";
+      const evoRes = await evolutionSendMessage({ serverUrl: evoUrl, apiKey: evoKey, instanceName: evoInstance }, phone, text);
+      if (evoRes.ok) {
+        const { ingestLead } = await import("@/lib/ingest");
+        await ingestLead(clientId, { phone: phone.replace(/\D/g, "") }, "manual", {
+          origin: "evolution",
+          received_at: new Date().toISOString(),
+          message_text: text,
+          fromMe: true,
+        }).catch(() => {});
+        revalidatePath("/conversas");
+        return { ok: true };
+      }
+    }
+  } catch {
+    // falhou em todos
+  }
+
   revalidatePath("/conversas");
   return res;
 }

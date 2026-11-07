@@ -513,4 +513,28 @@ export async function evolutionLogout(config: EvolutionConfig): Promise<{ ok: bo
   return { ok: res.ok, error: res.error };
 }
 
+export async function evolutionSendMessage(
+  config: EvolutionConfig,
+  phone: string,
+  text: string
+): Promise<{ ok: boolean; error?: string }> {
+  const base = normalizeBaseUrl(config.serverUrl);
+  const cleanPhone = phone.replace(/\D/g, "");
+  const res = await safeFetchJson(`${base}/message/sendText/${encodeURIComponent(config.instanceName)}`, {
+    method: "POST",
+    headers: {
+      apikey: config.apiKey,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      number: cleanPhone,
+      text,
+    }),
+  });
+  if (!res.ok) {
+    return { ok: false, error: res.error || "Erro ao enviar mensagem pela Evolution API." };
+  }
+  return { ok: true };
+}
+
 

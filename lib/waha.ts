@@ -420,3 +420,29 @@ export async function wahaLogout(config: WahaConfig): Promise<{ ok: boolean; err
 
   return { ok: true };
 }
+
+export async function wahaSendMessage(
+  config: WahaConfig,
+  phone: string,
+  text: string
+): Promise<{ ok: boolean; error?: string }> {
+  const base = normalizeBaseUrl(config.serverUrl);
+  const session = config.sessionName || "default";
+  const cleanPhone = phone.replace(/\D/g, "");
+  const chatId = `${cleanPhone}@c.us`;
+
+  const res = await safeFetchJson(`${base}/api/sendText`, {
+    method: "POST",
+    headers: wahaHeaders(config.apiKey, { "Content-Type": "application/json" }),
+    body: JSON.stringify({
+      session,
+      chatId,
+      text,
+    }),
+  });
+
+  if (!res.ok) {
+    return { ok: false, error: res.error || "Erro ao enviar mensagem pelo WAHA." };
+  }
+  return { ok: true };
+}
