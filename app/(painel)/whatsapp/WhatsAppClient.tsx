@@ -28,6 +28,7 @@ import {
 } from "@/app/actions";
 import { Button } from "@/components/ui/button";
 import type { Client } from "@/lib/types";
+import { WahaDashboard } from "./WahaDashboard";
 
 interface WhatsAppClientProps {
   clients: Client[];
@@ -88,11 +89,59 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
 
   // Origem do browser para construir URLs de webhook completas
   const [origin, setOrigin] = useState("http://localhost:3000");
+
+  // Restaura preferências salvas no navegador para NUNCA voltar pro nativo sem querer
   useEffect(() => {
     if (typeof window !== "undefined") {
       setOrigin(window.location.origin);
+      const savedMode = localStorage.getItem("track_wa_mode") as "native" | "waha" | "evolution" | null;
+      if (savedMode) setConnectionMode(savedMode);
+
+      const savedClient = localStorage.getItem("track_wa_client_id");
+      if (savedClient && clients.some((c) => c.id === savedClient)) {
+        setSelectedClientId(savedClient);
+      }
+
+      const savedWahaUrl = localStorage.getItem("track_waha_url");
+      if (savedWahaUrl) {
+        setWahaServerUrl(savedWahaUrl);
+      } else {
+        setWahaServerUrl(`${window.location.origin}/api/waha`);
+      }
+
+      const savedWahaSession = localStorage.getItem("track_waha_session");
+      if (savedWahaSession) setWahaSessionName(savedWahaSession);
+
+      const savedWahaKey = localStorage.getItem("track_waha_key");
+      if (savedWahaKey) setWahaApiKey(savedWahaKey);
     }
-  }, []);
+  }, [clients]);
+
+  const changeConnectionMode = (mode: "native" | "waha" | "evolution") => {
+    setConnectionMode(mode);
+    setQrCodeData(null);
+    setErrorMessage(null);
+    setConnectionState("unknown");
+    if (typeof window !== "undefined") {
+      localStorage.setItem("track_wa_mode", mode);
+    }
+  };
+
+  // Persiste configurações WAHA no localStorage para sobreviver a recargas/navegação
+  useEffect(() => {
+    if (typeof window !== "undefined" && wahaServerUrl)
+      localStorage.setItem("track_waha_url", wahaServerUrl);
+  }, [wahaServerUrl]);
+
+  useEffect(() => {
+    if (typeof window !== "undefined")
+      localStorage.setItem("track_waha_session", wahaSessionName);
+  }, [wahaSessionName]);
+
+  useEffect(() => {
+    if (typeof window !== "undefined")
+      localStorage.setItem("track_waha_key", wahaApiKey);
+  }, [wahaApiKey]);
 
   const currentClient = clients.find((c) => c.id === selectedClientId) || clients[0];
   const wahaWebhookUrl = `${origin}/api/webhook/waha/${currentClient?.webhook_key || ""}`;
@@ -131,6 +180,9 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
     setSelectedClientId(cId);
     setQrCodeData(null);
     setConnectionState("unknown");
+    if (typeof window !== "undefined") {
+      localStorage.setItem("track_wa_client_id", cId);
+    }
     const cl = clients.find((c) => c.id === cId);
     if (cl) {
       setInstanceName(`track_${cl.name.toLowerCase().replace(/\W+/g, "_")}`);
@@ -408,7 +460,7 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
   // Checa status inicial ao trocar cliente ou modo
   useEffect(() => {
     checkStatus();
-  }, [selectedClientId, connectionMode]);
+  }, [selectedClientId, connectionMode, wahaServerUrl]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "24px", maxWidth: "1020px" }}>
@@ -445,12 +497,7 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "10px" }}>
         <button
           type="button"
-          onClick={() => {
-            setConnectionMode("native");
-            setQrCodeData(null);
-            setErrorMessage(null);
-            setConnectionState("unknown");
-          }}
+          onClick={() => changeConnectionMode("native")}
           style={{
             padding: "14px 16px",
             borderRadius: "10px",
@@ -480,12 +527,7 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
 
         <button
           type="button"
-          onClick={() => {
-            setConnectionMode("waha");
-            setQrCodeData(null);
-            setErrorMessage(null);
-            setConnectionState("unknown");
-          }}
+          onClick={() => changeConnectionMode("waha")}
           style={{
             padding: "14px 16px",
             borderRadius: "10px",
@@ -515,12 +557,7 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
 
         <button
           type="button"
-          onClick={() => {
-            setConnectionMode("evolution");
-            setQrCodeData(null);
-            setErrorMessage(null);
-            setConnectionState("unknown");
-          }}
+          onClick={() => changeConnectionMode("evolution")}
           style={{
             padding: "14px 16px",
             borderRadius: "10px",
@@ -563,14 +600,153 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
         </div>
       )}
 
-      <div className="grid-2">
-        {/* Painel Esquerdo: Configurações */}
-        <div className="card" style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-          <h2 style={{ fontSize: "16px", margin: "0 0 4px 0" }}>
-            {connectionMode === "native" && "Configuração Nativa (Sem Servidor)"}
-            {connectionMode === "waha" && "Configuração WAHA (Docker / VPS)"}
-            {connectionMode === "evolution" && "Dados da Instância Evolution API"}
-          </h2>
+      {connectionMode === "waha" ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+          {/* Card de Configuração e Chaves WAHA */}
+          <div className="card" style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "10px" }}>
+              <div>
+                <h2 style={{ fontSize: "16px", margin: "0 0 4px 0", display: "flex", alignItems: "center", gap: "8px" }}>
+                  <Box size={18} color="#7b39fc" />
+                  Painel e Configuração do WAHA
+                </h2>
+                <p className="muted small" style={{ margin: 0 }}>
+                  Conecte o motor WAHA (embutido no sistema ou em container externo) para gerenciar tudo em tempo real.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setWahaServerUrl(`${origin}/api/waha`)}
+                style={{
+                  background: "rgba(123, 57, 252, 0.15)",
+                  border: "1px solid rgba(123, 57, 252, 0.4)",
+                  color: "#b394ff",
+                  fontSize: "12px",
+                  fontWeight: 700,
+                  padding: "6px 14px",
+                  borderRadius: "8px",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                }}
+              >
+                <Zap size={14} />
+                ⚡ Usar WAHA Embutido no Sistema
+              </button>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "14px" }}>
+              <div>
+                <label htmlFor="client_id_waha" style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: 600 }}>
+                  Cliente do Painel
+                </label>
+                <select
+                  id="client_id_waha"
+                  value={selectedClientId}
+                  onChange={(e) => handleClientSelect(e.target.value)}
+                  style={{
+                    width: "100%",
+                    padding: "8px 12px",
+                    borderRadius: "8px",
+                    background: "var(--surface)",
+                    border: "1px solid var(--border)",
+                    color: "var(--text)",
+                    fontSize: "13px",
+                  }}
+                >
+                  {clients.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label htmlFor="waha_server_url_main" style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: 600 }}>
+                  Endereço da API do WAHA
+                </label>
+                <input
+                  id="waha_server_url_main"
+                  type="text"
+                  value={wahaServerUrl}
+                  onChange={(e) => setWahaServerUrl(e.target.value)}
+                  placeholder={`Ex: ${origin}/api/waha ou http://seu-ip:3000`}
+                  style={{
+                    width: "100%",
+                    padding: "8px 12px",
+                    borderRadius: "8px",
+                    background: "var(--surface)",
+                    border: "1px solid var(--border)",
+                    color: "var(--text)",
+                    fontSize: "13px",
+                  }}
+                />
+              </div>
+
+              <div>
+                <label htmlFor="waha_session_name_main" style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: 600 }}>
+                  Nome da Sessão
+                </label>
+                <input
+                  id="waha_session_name_main"
+                  type="text"
+                  value={wahaSessionName}
+                  onChange={(e) => setWahaSessionName(e.target.value)}
+                  placeholder="default"
+                  style={{
+                    width: "100%",
+                    padding: "8px 12px",
+                    borderRadius: "8px",
+                    background: "var(--surface)",
+                    border: "1px solid var(--border)",
+                    color: "var(--text)",
+                    fontSize: "13px",
+                  }}
+                />
+              </div>
+
+              <div>
+                <label htmlFor="waha_api_key_main" style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: 600 }}>
+                  Chave API (Opcional)
+                </label>
+                <input
+                  id="waha_api_key_main"
+                  type="password"
+                  value={wahaApiKey}
+                  onChange={(e) => setWahaApiKey(e.target.value)}
+                  placeholder="WAHA_API_KEY do .env"
+                  style={{
+                    width: "100%",
+                    padding: "8px 12px",
+                    borderRadius: "8px",
+                    background: "var(--surface)",
+                    border: "1px solid var(--border)",
+                    color: "var(--text)",
+                    fontSize: "13px",
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Painel Completo do WAHA com visualização total */}
+          <WahaDashboard
+            wahaServerUrl={wahaServerUrl}
+            wahaSessionName={wahaSessionName}
+            wahaApiKey={wahaApiKey}
+            clientWebhookKey={currentClient?.webhook_key || ""}
+          />
+        </div>
+      ) : (
+        <div className="grid-2">
+          {/* Painel Esquerdo: Configurações */}
+          <div className="card" style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+            <h2 style={{ fontSize: "16px", margin: "0 0 4px 0" }}>
+              {connectionMode === "native" && "Configuração Nativa (Sem Servidor)"}
+              {connectionMode === "evolution" && "Dados da Instância Evolution API"}
+            </h2>
 
           <div>
             <label htmlFor="client_id" style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: 600 }}>
@@ -1082,6 +1258,7 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
           )}
         </div>
       </div>
+      )}
 
       {/* Dicas e Como Funciona */}
       <div className="card" style={{ padding: "20px" }}>
