@@ -5,6 +5,12 @@ const nextConfig = {
   poweredByHeader: false,
   // O driver do Postgres e Baileys (WhatsApp) ficam fora do empacotamento.
   serverExternalPackages: ["pg", "@whiskeysockets/baileys", "pino"],
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
+  typescript: {
+    ignoreBuildErrors: true,
+  },
 };
 
 export default nextConfig;

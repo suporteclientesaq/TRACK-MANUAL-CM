@@ -652,7 +652,7 @@ export function WahaDashboard({
             <div style={{ textAlign: "center", color: "var(--text-muted)", display: "flex", flexDirection: "column", alignItems: "center", gap: "10px" }}>
               <WifiOff size={36} style={{ opacity: 0.3 }} />
               <div style={{ fontSize: "13px" }}>Nenhuma sessão ativa</div>
-              <div style={{ fontSize: "11px" }}>Clique em "Iniciar Sessão" para conectar</div>
+              <div style={{ fontSize: "11px" }}>Clique em &quot;Iniciar Sessão&quot; para conectar</div>
             </div>
           )}
 

@@ -855,7 +855,7 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
                   }}
                 />
                 <div className="hint" style={{ marginTop: "4px" }}>
-                  Clique no botão <strong>"Usar WAHA Embutido"</strong> acima para rodar sem precisar de Docker ou VPS externa!
+                  Clique no botão <strong>&quot;Usar WAHA Embutido&quot;</strong> acima para rodar sem precisar de Docker ou VPS externa!
                 </div>
               </div>
 
