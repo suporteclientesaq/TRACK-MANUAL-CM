@@ -46,6 +46,29 @@ export function toClient(r: Row): Client {
 }
 
 export function toLead(r: Row): Lead {
+  const rawObj = fromJson(r.raw) as Record<string, unknown> | null;
+  let sourceId = str(r.source_id);
+  let ctwaClid = str(r.ctwa_clid);
+  let headline = str(r.headline);
+  let thumb = str(r.thumbnail_url);
+
+  // Fallback inteligente se o anúncio veio gravado no raw mas não nas colunas individuais
+  if (!sourceId && rawObj && typeof rawObj === "object") {
+    const rawSid = rawObj.source_id ?? rawObj.sourceId ?? rawObj.ad_id ?? rawObj._baileys_source_id;
+    if (rawSid) sourceId = String(rawSid).trim();
+  }
+  if (!headline && rawObj && typeof rawObj === "object") {
+    const rawH = rawObj.headline ?? rawObj.title ?? rawObj._baileys_headline;
+    if (rawH) headline = String(rawH).trim();
+  }
+  if (!thumb && rawObj && typeof rawObj === "object") {
+    const rawT = rawObj.thumbnail_url ?? rawObj.thumbnailUrl ?? rawObj._baileys_thumbnail_url;
+    if (rawT) thumb = String(rawT).trim();
+  }
+  if (!ctwaClid && sourceId) {
+    ctwaClid = `ctwa_ad_${sourceId}`;
+  }
+
   return {
     id: String(r.id),
     client_id: String(r.client_id),
@@ -56,17 +79,17 @@ export function toLead(r: Row): Lead {
     state: str(r.state),
     zip: str(r.zip),
     country: String(r.country || "br"),
-    ctwa_clid: str(r.ctwa_clid) || (r.source_id ? `ctwa_ad_${r.source_id}` : null),
-    source_id: str(r.source_id),
+    ctwa_clid: ctwaClid,
+    source_id: sourceId,
     source_url: str(r.source_url),
     source_type: str(r.source_type),
-    thumbnail_url: str(r.thumbnail_url),
+    thumbnail_url: thumb,
     media_url: str(r.media_url),
-    headline: str(r.headline),
+    headline: headline,
     ad_body: str(r.ad_body),
     origin: r.origin === "leona" ? "leona" : "manual",
     notes: str(r.notes),
-    raw: fromJson(r.raw),
+    raw: rawObj,
     first_seen_at: iso(r.first_seen_at),
     clid_seen_at: r.clid_seen_at === null || r.clid_seen_at === undefined ? null : iso(r.clid_seen_at),
     updated_at: iso(r.updated_at),

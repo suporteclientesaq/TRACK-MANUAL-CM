@@ -8,14 +8,14 @@ const FIELD_ALIASES: Record<string, string[]> = {
   city: ["city", "cidade", "local", "localidade"],
   state: ["state", "estado", "uf"],
   zip: ["zip", "cep", "zipcode", "zip_code"],
-  ctwa_clid: ["ctwa_clid", "ctwaclid", "ctwa", "clid", "click_id"],
-  source_id: ["source_id", "sourceid", "ad_id", "id_origem"],
-  source_url: ["source_url", "sourceurl", "url_origem"],
+  ctwa_clid: ["ctwa_clid", "ctwaclid", "ctwa", "clid", "click_id", "conversion_data", "conversiondata", "referral_click_id", "fbclid", "clickid", "meta_click_id", "ctwa_id"],
+  source_id: ["source_id", "sourceid", "ad_id", "adid", "id_origem", "hsa_ad", "anuncio_id", "ad"],
+  source_url: ["source_url", "sourceurl", "url_origem", "link_anuncio"],
   source_type: ["source_type", "sourcetype"],
-  thumbnail_url: ["thumbnail_url", "thumbnailurl", "thumbnail", "url_miniatura", "miniatura"],
+  thumbnail_url: ["thumbnail_url", "thumbnailurl", "thumbnail", "url_miniatura", "miniatura", "thumb", "ad_thumbnail"],
   media_url: ["media_url", "mediaurl", "image_url", "video_url"],
-  headline: ["headline", "titulo", "title"],
-  ad_body: ["ad_body", "body", "texto_anuncio"],
+  headline: ["headline", "titulo", "title", "ad_title", "nome_anuncio", "criativo"],
+  ad_body: ["ad_body", "body", "texto_anuncio", "ad_text"],
 };
 
 export interface ParsedLead {

@@ -10,7 +10,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ clientId: 
     await requireAuth();
     const { clientId } = await ctx.params;
     const { getNativeWhatsAppStatus } = await import("@/lib/whatsapp-baileys");
-    const result = getNativeWhatsAppStatus(clientId);
+    const result = await getNativeWhatsAppStatus(clientId);
     return NextResponse.json(result);
   } catch (e) {
     return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : String(e) });

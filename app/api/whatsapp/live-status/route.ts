@@ -16,7 +16,7 @@ export async function GET() {
 
     let onlineCount = 0;
     for (const client of clients) {
-      const status = getNativeWhatsAppStatus(client.id);
+      const status = await getNativeWhatsAppStatus(client.id);
       if (status.state === "open") {
         onlineCount++;
       }

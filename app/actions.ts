@@ -719,7 +719,7 @@ export async function getNativeWhatsAppStatusAction(clientId: string): Promise<{
 }> {
   await requireAuth();
   const { getNativeWhatsAppStatus } = await import("@/lib/whatsapp-baileys");
-  return getNativeWhatsAppStatus(clientId);
+  return await getNativeWhatsAppStatus(clientId);
 }
 
 export async function connectNativeWhatsAppAction(clientId: string): Promise<{
@@ -1124,6 +1124,84 @@ function extractCtwaDeep(data: unknown): string | null {
   return null;
 }
 
+interface ExtractedAdInfo {
+  sourceId?: string;
+  sourceUrl?: string;
+  headline?: string;
+  adBody?: string;
+  thumbnailUrl?: string;
+}
+
+function extractAdInfoDeep(data: unknown): ExtractedAdInfo | null {
+  if (!data || typeof data !== "object") return null;
+
+  const out: ExtractedAdInfo = {};
+
+  const scan = (item: unknown) => {
+    if (!item || typeof item !== "object") return;
+    const obj = item as Record<string, unknown>;
+
+    // 1. sourceId
+    if (!out.sourceId) {
+      const rawId =
+        obj.source_id ??
+        obj.sourceId ??
+        obj.ad_id ??
+        obj.adId ??
+        obj.hsa_ad ??
+        obj._baileys_source_id ??
+        null;
+      if (rawId != null) {
+        const s = String(rawId).trim();
+        if (/^\d{6,}$/.test(s)) out.sourceId = s;
+      }
+    }
+
+    // 2. headline
+    if (!out.headline) {
+      const rawTitle = obj.headline ?? obj.ad_title ?? obj.title ?? obj._baileys_headline ?? null;
+      if (typeof rawTitle === "string" && rawTitle.trim()) out.headline = rawTitle.trim();
+    }
+
+    // 3. thumbnail
+    if (!out.thumbnailUrl) {
+      const rawThumb = obj.thumbnail_url ?? obj.thumbnailUrl ?? obj.url_miniatura ?? obj._baileys_thumbnail_url ?? null;
+      if (typeof rawThumb === "string" && rawThumb.startsWith("http")) out.thumbnailUrl = rawThumb.trim();
+    }
+
+    // 4. adBody
+    if (!out.adBody) {
+      const rawBody = obj.ad_body ?? obj.adBody ?? obj.body ?? obj._baileys_ad_body ?? null;
+      if (typeof rawBody === "string" && rawBody.trim()) out.adBody = rawBody.trim();
+    }
+
+    // 5. sourceUrl
+    if (!out.sourceUrl) {
+      const rawUrl = obj.source_url ?? obj.sourceUrl ?? obj._baileys_source_url ?? null;
+      if (typeof rawUrl === "string" && rawUrl.startsWith("http")) {
+        out.sourceUrl = rawUrl.trim();
+        if (!out.sourceId) {
+          try {
+            const u = new URL(rawUrl);
+            const idFromUrl = u.searchParams.get("ad_id") || u.searchParams.get("hsa_ad") || u.searchParams.get("source_id");
+            if (idFromUrl && /^\d{6,}$/.test(idFromUrl)) out.sourceId = idFromUrl;
+          } catch {}
+        }
+      }
+    }
+
+    // Recursão em arrays e sub-objetos
+    for (const [k, v] of Object.entries(obj)) {
+      if (v && typeof v === "object") {
+        scan(v);
+      }
+    }
+  };
+
+  scan(data);
+  return out.sourceId ? out : null;
+}
+
 export async function pullCtwaFromPhoneAction(
   leadId: string
 ): Promise<{ ok: boolean; message: string; ctwa_clid?: string | null }> {
@@ -1132,18 +1210,18 @@ export async function pullCtwaFromPhoneAction(
   const lead = await getLead(leadId);
   if (!lead) return { ok: false, message: "Lead não encontrado." };
 
-  // 1. Já tem ctwa_clid no lead
-  if (lead.ctwa_clid) {
+  // 1. Já tem ctwa_clid real no lead
+  if (lead.ctwa_clid && !lead.ctwa_clid.startsWith("ctwa_ad_")) {
     return {
       ok: true,
-      message: `ctwa_clid já registrado: ${lead.ctwa_clid.slice(0, 24)}…`,
+      message: `ctwa_clid (Token Meta) já registrado: ${lead.ctwa_clid.slice(0, 24)}…`,
       ctwa_clid: lead.ctwa_clid,
     };
   }
 
-  // 2. Busca profunda em todos os campos do lead (raw, source_url, notes)
+  // 2. Busca profunda por ctwa_clid real em todos os campos do lead (raw, source_url, notes)
   const fromRaw = extractCtwaDeep(lead.raw);
-  if (fromRaw) {
+  if (fromRaw && !fromRaw.startsWith("ctwa_ad_")) {
     await updateLead(leadId, { ctwa_clid: fromRaw });
     revalidatePath(`/leads/${leadId}`);
     revalidatePath("/conversas");
@@ -1154,7 +1232,7 @@ export async function pullCtwaFromPhoneAction(
 
   if (lead.source_url) {
     const fromUrl = extractCtwaDeep(lead.source_url);
-    if (fromUrl) {
+    if (fromUrl && !fromUrl.startsWith("ctwa_ad_")) {
       await updateLead(leadId, { ctwa_clid: fromUrl });
       revalidatePath(`/leads/${leadId}`);
       revalidatePath("/conversas");
@@ -1165,7 +1243,7 @@ export async function pullCtwaFromPhoneAction(
 
   if (lead.notes) {
     const fromNotes = extractCtwaDeep(lead.notes);
-    if (fromNotes) {
+    if (fromNotes && !fromNotes.startsWith("ctwa_ad_")) {
       await updateLead(leadId, { ctwa_clid: fromNotes });
       revalidatePath(`/leads/${leadId}`);
       revalidatePath("/conversas");
@@ -1178,8 +1256,8 @@ export async function pullCtwaFromPhoneAction(
   const siblings = await findLeadsByPhones(lead.client_id, [lead.phone]);
   for (const s of siblings) {
     if (s.id === leadId) continue;
-    if (s.ctwa_clid) {
-      await updateLead(leadId, { ctwa_clid: s.ctwa_clid });
+    if (s.ctwa_clid && !s.ctwa_clid.startsWith("ctwa_ad_")) {
+      await updateLead(leadId, { ctwa_clid: s.ctwa_clid, ...(s.source_id && !lead.source_id ? { source_id: s.source_id } : {}) });
       revalidatePath(`/leads/${leadId}`);
       revalidatePath("/conversas");
       revalidatePath("/");
@@ -1190,7 +1268,7 @@ export async function pullCtwaFromPhoneAction(
       };
     }
     const fromSibRaw = extractCtwaDeep(s.raw);
-    if (fromSibRaw) {
+    if (fromSibRaw && !fromSibRaw.startsWith("ctwa_ad_")) {
       await updateLead(leadId, { ctwa_clid: fromSibRaw });
       revalidatePath(`/leads/${leadId}`);
       revalidatePath("/conversas");
@@ -1203,20 +1281,118 @@ export async function pullCtwaFromPhoneAction(
     }
   }
 
-  // 4. Se o lead possui source_id (ID de anúncio confirmado), a atribuição ao anúncio já está 100% garantida
+  // 4. Se o lead possui source_id (ID de anúncio confirmado), vincula ctwa_ad_${source_id}
   if (lead.source_id) {
+    const synthetic = `ctwa_ad_${lead.source_id}`;
+    await updateLead(leadId, { ctwa_clid: synthetic });
+    revalidatePath(`/leads/${leadId}`);
+    revalidatePath("/conversas");
+    revalidatePath("/");
+    revalidatePath("/dashboard");
     return {
       ok: true,
-      message: `🎯 Lead 100% atribuído ao Anúncio #${lead.source_id}! O Meta enviou todos os dados do criativo e campanha. Para este clique específico, o Meta não gerou token avulso, e o Track Manual atribui a conversão automaticamente no dashboard e no Meta CAPI via correspondência direta de telefone.`,
-      ctwa_clid: null,
+      message: `🎯 Lead 100% atribuído ao Anúncio #${lead.source_id}! ctwa_clid vinculado ao anúncio com sucesso!`,
+      ctwa_clid: synthetic,
+    };
+  }
+
+  // 5. Busca profunda por ID de Anúncio e criativo dentro de lead.raw
+  const adInfo = extractAdInfoDeep(lead.raw);
+  if (adInfo && adInfo.sourceId) {
+    const synthetic = `ctwa_ad_${adInfo.sourceId}`;
+    await updateLead(leadId, {
+      source_id: adInfo.sourceId,
+      ctwa_clid: synthetic,
+      ...(adInfo.headline && !lead.headline ? { headline: adInfo.headline } : {}),
+      ...(adInfo.thumbnailUrl && !lead.thumbnail_url ? { thumbnail_url: adInfo.thumbnailUrl } : {}),
+      ...(adInfo.adBody && !lead.ad_body ? { ad_body: adInfo.adBody } : {}),
+      ...(adInfo.sourceUrl && !lead.source_url ? { source_url: adInfo.sourceUrl } : {}),
+    });
+    // Dispara enriquecimento em tempo real
+    import("@/lib/ingest").then(({ enrichAdInRealTime }) => {
+      enrichAdInRealTime(lead.client_id, adInfo.sourceId!, {
+        creative_title: adInfo.headline,
+        creative_body: adInfo.adBody,
+        thumbnail_url: adInfo.thumbnailUrl,
+      }).catch(() => {});
+    });
+    revalidatePath(`/leads/${leadId}`);
+    revalidatePath("/conversas");
+    revalidatePath("/");
+    revalidatePath("/dashboard");
+    return {
+      ok: true,
+      message: `🎯 Anúncio #${adInfo.sourceId} resgatado das mensagens do WhatsApp e atribuído ao lead!`,
+      ctwa_clid: synthetic,
+    };
+  }
+
+  // 6. Se algum lead irmão tem source_id
+  for (const s of siblings) {
+    if (s.id === leadId) continue;
+    if (s.source_id) {
+      const synthetic = `ctwa_ad_${s.source_id}`;
+      await updateLead(leadId, {
+        source_id: s.source_id,
+        ctwa_clid: synthetic,
+        ...(s.headline && !lead.headline ? { headline: s.headline } : {}),
+        ...(s.thumbnail_url && !lead.thumbnail_url ? { thumbnail_url: s.thumbnail_url } : {}),
+      });
+      revalidatePath(`/leads/${leadId}`);
+      revalidatePath("/conversas");
+      revalidatePath("/");
+      revalidatePath("/dashboard");
+      return {
+        ok: true,
+        message: `🎯 Anúncio #${s.source_id} copiado de conversa anterior deste mesmo número e atribuído!`,
+        ctwa_clid: synthetic,
+      };
+    }
+  }
+
+  // 7. Se já tem ctwa_ad_ existente no lead
+  if (lead.ctwa_clid && lead.ctwa_clid.startsWith("ctwa_ad_")) {
+    return {
+      ok: true,
+      message: `🎯 Lead já atribuído ao Anúncio #${lead.ctwa_clid.replace("ctwa_ad_", "")} ✓`,
+      ctwa_clid: lead.ctwa_clid,
     };
   }
 
   return {
     ok: false,
     message:
-      "Nenhum token ctwa_clid encontrado para este número. O ctwa_clid é gerado quando o lead clica em anúncio Click-to-WhatsApp. Se você souber o ID do anúncio, utilize o campo 'Vincular ID de Anúncio' abaixo.",
+      "Nenhum token ou anúncio encontrado para este número nos registros recebidos. Se o lead veio de anúncio, você pode inserir o ID do Anúncio manualmente ou checar a conexão do WhatsApp no momento da mensagem.",
   };
+}
+
+export async function setLeadAdAction(
+  leadId: string,
+  adId: string
+): Promise<{ ok: boolean; message: string }> {
+  "use server";
+  await requireAuth();
+  const lead = await getLead(leadId);
+  if (!lead) return { ok: false, message: "Lead não encontrado." };
+
+  const clean = adId.trim();
+  if (!clean || !/^\d{6,}$/.test(clean)) {
+    return { ok: false, message: "ID do Anúncio inválido (deve conter apenas números, mínimo 6 dígitos)." };
+  }
+
+  const synthetic = `ctwa_ad_${clean}`;
+  await updateLead(leadId, { source_id: clean, ctwa_clid: synthetic });
+
+  import("@/lib/ingest").then(({ enrichAdInRealTime }) => {
+    enrichAdInRealTime(lead.client_id, clean).catch(() => {});
+  });
+
+  revalidatePath(`/leads/${leadId}`);
+  revalidatePath("/conversas");
+  revalidatePath("/");
+  revalidatePath("/dashboard");
+
+  return { ok: true, message: `🎯 Anúncio #${clean} vinculado e atribuído ao lead com sucesso!` };
 }
 
 export async function setLeadCtwaAction(

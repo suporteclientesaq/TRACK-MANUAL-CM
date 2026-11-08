@@ -195,8 +195,11 @@ export function buildEvent(input: BuildEventInput): BuiltEvent {
 
   if (client.send_extra_data) {
     // content_ids: ID do anúncio de origem — ajuda o Meta a fechar o loop de atribuição
-    if (lead.source_id) customData.content_ids = [lead.source_id];
-    if (lead.source_id) customData.ctwa_source_id = lead.source_id;
+    const effectiveSourceId = lead.source_id || (lead.ctwa_clid?.startsWith("ctwa_ad_") ? lead.ctwa_clid.replace("ctwa_ad_", "") : null);
+    if (effectiveSourceId) {
+      customData.content_ids = [effectiveSourceId];
+      customData.ctwa_source_id = effectiveSourceId;
+    }
     if (lead.source_url) customData.ctwa_source_url = lead.source_url;
   }
 

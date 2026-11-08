@@ -28,7 +28,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { sendEventAction, sendWhatsAppMessageAction } from "@/app/actions";
+import { pullCtwaFromPhoneAction, sendEventAction, sendWhatsAppMessageAction } from "@/app/actions";
 import { Button } from "@/components/ui/button";
 import { formatDateTime, formatMoney, formatPhone } from "@/lib/format";
 import type { Lead } from "@/lib/types";
@@ -133,6 +133,8 @@ export function ConversasClient({
   const [saleValue, setSaleValue] = useState<string>("197,00");
   const [sendingSale, setSendingSale] = useState(false);
   const [saleNotice, setSaleNotice] = useState<string | null>(null);
+  const [pullingCtwa, setPullingCtwa] = useState(false);
+  const [ctwaNotice, setCtwaNotice] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [showRightPanel, setShowRightPanel] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
@@ -161,8 +163,18 @@ export function ConversasClient({
         // silencioso
       }
     };
+    const onFocus = () => {
+      fetchLive();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
     const interval = setInterval(fetchLive, 4000);
-    return () => { active = false; clearInterval(interval); };
+    return () => {
+      active = false;
+      clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
+    };
   }, [clientFilter, searchQuery]);
 
   // Auto scroll to bottom on new messages
@@ -176,24 +188,39 @@ export function ConversasClient({
     setTimeout(() => setCopiedKey(null), 2000);
   }, []);
 
-  const filteredLeads = useMemo(() => {
-    return currentLeads.filter((lead) => {
-      if (clientFilter && lead.client_id !== clientFilter) return false;
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase().trim();
-        const nameMatch = lead.name?.toLowerCase().includes(q);
-        const phoneMatch = lead.phone.includes(q);
-        const adMatch = lead.source_id?.includes(q);
-        const notesMatch = lead.notes?.toLowerCase().includes(q);
-        if (!nameMatch && !phoneMatch && !adMatch && !notesMatch) return false;
-      }
-      const hasPurchased = (currentEventsData[lead.id] || []).some((e) => e.event_name === "Purchase");
-      const hasAd = Boolean(lead.ctwa_clid || lead.source_id);
-      if (activeTab === "com-anuncio" && !hasAd) return false;
-      if (activeTab === "com-venda" && !hasPurchased) return false;
-      if (activeTab === "aguardando" && hasPurchased) return false;
-      return true;
-    });
+    return currentLeads
+      .filter((lead) => {
+        if (clientFilter && lead.client_id !== clientFilter) return false;
+        if (searchQuery.trim()) {
+          const q = searchQuery.toLowerCase().trim();
+          const nameMatch = lead.name?.toLowerCase().includes(q);
+          const phoneMatch = lead.phone.includes(q);
+          const adMatch = lead.source_id?.includes(q);
+          const notesMatch = lead.notes?.toLowerCase().includes(q);
+          if (!nameMatch && !phoneMatch && !adMatch && !notesMatch) return false;
+        }
+        const hasPurchased = (currentEventsData[lead.id] || []).some((e) => e.event_name === "Purchase");
+        const hasAd = Boolean(lead.ctwa_clid || lead.source_id);
+        if (activeTab === "com-anuncio" && !hasAd) return false;
+        if (activeTab === "com-venda" && !hasPurchased) return false;
+        if (activeTab === "aguardando" && hasPurchased) return false;
+        return true;
+      })
+      .sort((a, b) => {
+        const getLatestTime = (lead: Lead) => {
+          const rawObj = lead.raw && typeof lead.raw === "object" ? (lead.raw as Record<string, any>) : {};
+          const msgs = Array.isArray(rawObj.messages) ? rawObj.messages : [];
+          const last = msgs[msgs.length - 1];
+          if (last?.at) {
+            const t = new Date(last.at).getTime();
+            if (!isNaN(t)) return t;
+          }
+          const u = new Date(lead.updated_at).getTime();
+          if (!isNaN(u)) return u;
+          return new Date(lead.first_seen_at).getTime() || 0;
+        };
+        return getLatestTime(b) - getLatestTime(a);
+      });
   }, [currentLeads, clientFilter, searchQuery, activeTab, currentEventsData]);
 
   const selectedLead = useMemo(() => {
@@ -270,6 +297,34 @@ export function ConversasClient({
       setSaleNotice(`❌ Falha: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setSendingSale(false);
+    }
+  };
+
+  const handlePullCtwa = async () => {
+    if (!selectedLead) return;
+    setPullingCtwa(true);
+    setCtwaNotice(null);
+    try {
+      const res = await pullCtwaFromPhoneAction(selectedLead.id);
+      setCtwaNotice(res.message);
+      if (res.ok) {
+        // Dispara re-fetch live imediato para atualizar dados na hora
+        const params = new URLSearchParams();
+        if (clientFilter) params.set("cliente", clientFilter);
+        if (searchQuery) params.set("q", searchQuery);
+        const ref = await fetch(`/api/conversas/live?${params.toString()}`, { cache: "no-store" });
+        if (ref.ok) {
+          const json = await ref.json();
+          if (json.ok && Array.isArray(json.leads)) {
+            setCurrentLeads(json.leads);
+            if (json.adsData) setCurrentAdsData(json.adsData);
+          }
+        }
+      }
+    } catch (e) {
+      setCtwaNotice("Erro: " + String(e));
+    } finally {
+      setPullingCtwa(false);
     }
   };
 
@@ -1046,6 +1101,40 @@ export function ConversasClient({
                   </div>
                 )}
 
+                {/* Respostas Rápidas / Templates */}
+                <div style={{ display: "flex", gap: 6, marginBottom: 8, overflowX: "auto", paddingBottom: 2 }}>
+                  {[
+                    { label: "👋 Olá!", text: "Olá! Tudo bem? Como posso te ajudar hoje?" },
+                    { label: "🎯 Vi seu Anúncio", text: "Olá! Vi que você veio pelo nosso anúncio. Gostaria de tirar alguma dúvida ou fechar seu pedido?" },
+                    { label: "💳 Chave PIX", text: "Segue nossa chave PIX para pagamento: [CHAVE PIX]. Assim que realizar o envio, me mande o comprovante por aqui!" },
+                    { label: "✅ Confirmado", text: "Pagamento e pedido confirmados com sucesso! Seja muito bem-vindo(a)!" },
+                  ].map((chip, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => {
+                        setReplyText(chip.text);
+                        inputRef.current?.focus();
+                      }}
+                      style={{
+                        padding: "3px 8px",
+                        borderRadius: 12,
+                        background: "rgba(123,57,252,0.12)",
+                        border: "1px solid rgba(123,57,252,0.3)",
+                        color: "#c4b5fd",
+                        fontSize: 10,
+                        cursor: "pointer",
+                        whiteSpace: "nowrap",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 3,
+                      }}
+                    >
+                      {chip.label}
+                    </button>
+                  ))}
+                </div>
+
                 {/* Message input */}
                 <form onSubmit={handleSendMessage} style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <input
@@ -1265,6 +1354,45 @@ export function ConversasClient({
                         <span style={{ color: TEXT_MUTED, fontFamily: "inherit" }}>
                           {selectedLead.source_id ? `Atribuído ao Anúncio #${selectedLead.source_id} ✓` : "Lead Orgânico"}
                         </span>
+                      )}
+                    </div>
+
+                    <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+                      <button
+                        type="button"
+                        onClick={handlePullCtwa}
+                        disabled={pullingCtwa}
+                        style={{
+                          background: "rgba(123,57,252,0.12)",
+                          border: "1px solid rgba(123,57,252,0.3)",
+                          color: "#c4b5fd",
+                          borderRadius: 6,
+                          padding: "4px 8px",
+                          fontSize: 10,
+                          cursor: pullingCtwa ? "default" : "pointer",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                          fontWeight: 600,
+                          width: "fit-content",
+                        }}
+                      >
+                        {pullingCtwa ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
+                        {selectedLead.ctwa_clid ? "Atualizar Atribuição / CTWA" : "🎯 Puxar CTWA / Anúncio"}
+                      </button>
+                      {ctwaNotice && (
+                        <div
+                          style={{
+                            fontSize: 10,
+                            padding: "4px 6px",
+                            borderRadius: 4,
+                            background: ctwaNotice.includes("✅") || ctwaNotice.includes("🎯") ? "rgba(52,199,123,0.1)" : "rgba(239,68,68,0.1)",
+                            color: ctwaNotice.includes("✅") || ctwaNotice.includes("🎯") ? "#34c77b" : "#ef4444",
+                            lineHeight: 1.3,
+                          }}
+                        >
+                          {ctwaNotice}
+                        </div>
                       )}
                     </div>
                   </div>

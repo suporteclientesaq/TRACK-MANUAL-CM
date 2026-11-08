@@ -21,7 +21,7 @@ export async function GET(
       return NextResponse.json({ message: "Session not found" }, { status: 404 });
     }
 
-    const st = getNativeWhatsAppStatus(client.id);
+    const st = await getNativeWhatsAppStatus(client.id);
 
     // Mapeia status do Baileys para o formato oficial do WAHA
     let wahaStatus = "STOPPED";

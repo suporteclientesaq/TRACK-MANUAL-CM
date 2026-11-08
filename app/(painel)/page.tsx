@@ -188,7 +188,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                     </td>
                     <td>
                       {lead.ctwa_clid && !lead.ctwa_clid.startsWith("ctwa_ad_") ? (
-                        <span className="badge badge-ok" title={`Token CTWA: ${lead.ctwa_clid}`}>
+                        <span className="badge badge-ok" title={`Token CTWA Meta: ${lead.ctwa_clid}`}>
                           🎯 CTWA ✓
                         </span>
                       ) : lead.source_id || (lead.ctwa_clid && lead.ctwa_clid.startsWith("ctwa_ad_")) ? (
@@ -201,6 +201,19 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                             fontWeight: 700,
                           }}
                           title={`Atribuído ao Anúncio #${lead.source_id || lead.ctwa_clid?.replace("ctwa_ad_", "")}`}
+                        >
+                          🎯 CTWA (AD) ✓
+                        </span>
+                      ) : lead.headline || lead.thumbnail_url ? (
+                        <span
+                          className="badge badge-ok"
+                          style={{
+                            background: "rgba(52, 199, 123, 0.15)",
+                            color: "#34c77b",
+                            border: "1px solid rgba(52, 199, 123, 0.4)",
+                            fontWeight: 700,
+                          }}
+                          title="Lead com anúncio/criativo detectado nas mensagens"
                         >
                           🎯 CTWA (AD) ✓
                         </span>

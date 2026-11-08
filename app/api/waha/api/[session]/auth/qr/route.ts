@@ -21,7 +21,7 @@ export async function GET(
       return NextResponse.json({ message: "Session not found" }, { status: 404 });
     }
 
-    let status = getNativeWhatsAppStatus(client.id);
+    let status = await getNativeWhatsAppStatus(client.id);
     if (!status.qrcode && status.state !== "open") {
       const conn = await connectNativeWhatsApp(client.id);
       status = { ...status, qrcode: conn.qrcode };
