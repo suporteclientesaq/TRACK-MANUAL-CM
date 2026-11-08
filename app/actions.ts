@@ -54,6 +54,7 @@ export async function setupPasswordAction(_prev: FormState, fd: FormData): Promi
   await setPassword(password);
   await startSession();
   redirect("/");
+  throw new Error("unreachable");
 }
 
 export async function loginAction(_prev: FormState, fd: FormData): Promise<FormState> {
@@ -61,6 +62,7 @@ export async function loginAction(_prev: FormState, fd: FormData): Promise<FormS
   const ok = await login(String(fd.get("password") || ""));
   if (!ok) return { error: "Senha incorreta." };
   redirect("/");
+  throw new Error("unreachable");
 }
 
 export async function logoutAction() {
@@ -95,6 +97,7 @@ export async function changePasswordAction(_prev: FormState, fd: FormData): Prom
   if (password !== confirm) return { error: "As duas senhas novas não são iguais." };
   await setPassword(password);
   redirect("/configuracoes?salvo=1");
+  throw new Error("unreachable");
 }
 
 // ---------------------------------------------------------------------------
@@ -148,6 +151,7 @@ export async function saveClientAction(_prev: FormState, fd: FormData): Promise<
   }
   revalidatePath("/clientes");
   redirect(`/clientes/${savedId}?salvo=1`);
+  throw new Error("unreachable");
 }
 
 // ---------------------------------------------------------------------------
@@ -212,6 +216,7 @@ export async function saveLeadAction(_prev: FormState, fd: FormData): Promise<Fo
   revalidatePath("/conversas");
   revalidatePath(`/leads/${savedId}`);
   redirect(id ? `/leads/${savedId}?salvo=1` : `/leads/${savedId}`);
+  throw new Error("unreachable");
 }
 
 export async function deleteLeadAction(fd: FormData) {
@@ -1519,28 +1524,38 @@ export async function autoRecoverLeadNamesAction(): Promise<{
     if (lead.name && lead.name.trim() && lead.name.trim() !== "Sem Nome") continue;
 
     const raw = lead.raw as Record<string, any> | null;
-    if (!raw) continue;
-
-    // Procura em todos os possíveis campos do WhatsApp onde o nome pode estar escondido
     let candidateName: string | null = null;
 
-    if (typeof raw.pushName === "string" && raw.pushName.trim()) candidateName = raw.pushName.trim();
-    else if (typeof raw.pushname === "string" && raw.pushname.trim()) candidateName = raw.pushname.trim();
-    else if (typeof raw.notifyName === "string" && raw.notifyName.trim()) candidateName = raw.notifyName.trim();
-    else if (typeof raw.notifyname === "string" && raw.notifyname.trim()) candidateName = raw.notifyname.trim();
-    else if (typeof raw.verifiedName === "string" && raw.verifiedName.trim()) candidateName = raw.verifiedName.trim();
-    else if (typeof raw.name === "string" && raw.name.trim() && raw.name.trim() !== "Sem Nome") candidateName = raw.name.trim();
-    else if (raw.sender && typeof raw.sender.name === "string" && raw.sender.name.trim()) candidateName = raw.sender.name.trim();
-    else if (Array.isArray(raw.messages)) {
-      for (const m of raw.messages) {
-        if (typeof m.senderName === "string" && m.senderName.trim()) {
-          candidateName = m.senderName.trim();
-          break;
+    if (raw) {
+      if (typeof raw.pushName === "string" && raw.pushName.trim()) candidateName = raw.pushName.trim();
+      else if (typeof raw.pushname === "string" && raw.pushname.trim()) candidateName = raw.pushname.trim();
+      else if (typeof raw.notifyName === "string" && raw.notifyName.trim()) candidateName = raw.notifyName.trim();
+      else if (typeof raw.notifyname === "string" && raw.notifyname.trim()) candidateName = raw.notifyname.trim();
+      else if (typeof raw.verifiedName === "string" && raw.verifiedName.trim()) candidateName = raw.verifiedName.trim();
+      else if (typeof raw.name === "string" && raw.name.trim() && raw.name.trim() !== "Sem Nome") candidateName = raw.name.trim();
+      else if (raw.sender && typeof raw.sender.name === "string" && raw.sender.name.trim()) candidateName = raw.sender.name.trim();
+      else if (Array.isArray(raw.messages)) {
+        for (const m of raw.messages) {
+          if (typeof m.senderName === "string" && m.senderName.trim()) {
+            candidateName = m.senderName.trim();
+            break;
+          }
+          if (typeof m.pushName === "string" && m.pushName.trim()) {
+            candidateName = m.pushName.trim();
+            break;
+          }
         }
-        if (typeof m.pushName === "string" && m.pushName.trim()) {
-          candidateName = m.pushName.trim();
-          break;
-        }
+      }
+    }
+
+    // Se ainda não encontrou no raw, busca nas anotações / propostas do lead (ex: "Cliente: Vilson Gregorio")
+    if (!candidateName && lead.notes) {
+      const m =
+        lead.notes.match(/(?:Cliente|Nome|Lead|Contato):\s*([^\n\r,•*#|]+)/i) ||
+        lead.notes.match(/👤\s*(?:\*\*)?(?:Cliente|Nome)?(?:\*\*)?:\s*([^\n\r,•*#|]+)/i);
+      if (m && m[1].trim() && !/pendente/i.test(m[1])) {
+        const extracted = m[1].trim().replace(/^[*_#\s]+|[*_#\s]+$/g, "");
+        if (extracted.length >= 2) candidateName = extracted;
       }
     }
 

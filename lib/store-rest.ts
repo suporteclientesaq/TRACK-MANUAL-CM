@@ -263,7 +263,7 @@ export const restStore: StoreImpl = {
       if (digits.length >= 4) parts.push(`phone.like.${quote(`*${digits}*`)}`);
       conds.push(`or(${parts.join(",")})`);
     }
-    const query: Query = { select: "*", order: "first_seen_at.desc", limit: f.limit, offset: f.offset };
+    const query: Query = { select: "*", order: "updated_at.desc", limit: f.limit, offset: f.offset };
     if (conds.length) query.and = `(${conds.join(",")})`;
     return (await get("leads", query)).data.map(toLead);
   },

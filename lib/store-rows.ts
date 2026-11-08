@@ -69,10 +69,37 @@ export function toLead(r: Row): Lead {
     ctwaClid = `ctwa_ad_${sourceId}`;
   }
 
+  // Resolve nome real: usa pushName/notifyName/verifiedName do raw, ou extrai das anotações/propostas
+  let resolvedName = str(r.name);
+  if ((!resolvedName || resolvedName === "Sem Nome") && rawObj && typeof rawObj === "object") {
+    const rn = rawObj as Record<string, unknown>;
+    const fromRaw =
+      (typeof rn.pushName === "string" && rn.pushName.trim()) ||
+      (typeof rn.pushname === "string" && rn.pushname.trim()) ||
+      (typeof rn.notifyName === "string" && rn.notifyName.trim()) ||
+      (typeof rn.verifiedName === "string" && rn.verifiedName.trim()) ||
+      (typeof rn.name === "string" && rn.name.trim() && rn.name.trim() !== "Sem Nome" && rn.name.trim()) ||
+      null;
+    if (fromRaw) resolvedName = fromRaw;
+  }
+  // Se ainda estiver sem nome, tenta extrair de notas ou propostas importadas (ex: "Cliente: Vilson Gregorio")
+  if (!resolvedName || resolvedName === "Sem Nome") {
+    const notesStr = str(r.notes);
+    if (notesStr) {
+      const m =
+        notesStr.match(/(?:Cliente|Nome|Lead|Contato):\s*([^\n\r,•*#|]+)/i) ||
+        notesStr.match(/👤\s*(?:\*\*)?(?:Cliente|Nome)?(?:\*\*)?:\s*([^\n\r,•*#|]+)/i);
+      if (m && m[1].trim() && !/pendente/i.test(m[1])) {
+        const extracted = m[1].trim().replace(/^[*_#\s]+|[*_#\s]+$/g, "");
+        if (extracted.length >= 2) resolvedName = extracted;
+      }
+    }
+  }
+
   return {
     id: String(r.id),
     client_id: String(r.client_id),
-    name: str(r.name),
+    name: resolvedName,
     phone: String(r.phone),
     email: str(r.email),
     city: str(r.city),

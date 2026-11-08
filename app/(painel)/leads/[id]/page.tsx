@@ -24,8 +24,9 @@ export default async function LeadPage({
   const { salvo } = await searchParams;
   if (!/^[0-9a-f-]{36}$/i.test(id)) notFound();
 
-  const lead = await getLead(id);
-  if (!lead) notFound();
+  const leadOrNull = await getLead(id);
+  if (!leadOrNull) notFound();
+  const lead = leadOrNull as NonNullable<typeof leadOrNull>;
   const [client, clientsData, events, ad, products, leadsForPhone] = await Promise.all([
     getClient(lead.client_id),
     listClients(),

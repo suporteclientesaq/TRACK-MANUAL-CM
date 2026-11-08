@@ -1,12 +1,36 @@
 /**
  * Informações de versão e build do Track Manual.
  */
-export const APP_VERSION = "2.6.0";
-export const APP_RELEASE_NAME = "Track Manual Pro — Favicon Customizável, Auto-Limpeza & Inbox Inteligente";
+export const APP_VERSION = "2.6.2";
+export const APP_RELEASE_NAME = "Track Manual Pro — Inbox em Tempo Real WhatsApp Web & Resgate Profundo de Nomes";
 export const APP_BUILD_DATE = "08/11/2026";
 export const APP_UPDATE_STATUS = "Atualizado";
 
 export const APP_CHANGELOG = [
+  {
+    version: "2.6.2",
+    date: "08/11/2026",
+    title: "Inbox em Tempo Real Estilo WhatsApp Web e Resgate Profundo de Nomes",
+    highlights: [
+      "Extração e live polling de mensagens acelerado para 2s em tempo real estilo WhatsApp Web",
+      "Novo botão de 'Sincronizar' no topo da Central de Conversas para atualização instantânea e resgate forçado",
+      "Resgate profundo de nomes: recupera automaticamente nomes de contatos a partir de notas, propostas comerciais e pushName",
+      "Ordenação nativa por atividade recente (updated_at desc) no SQLite, Postgres e Supabase",
+      "Captura de fotos de perfil (profilePicUrl) do WhatsApp diretamente nas mensagens recebidas",
+      "Suporte a mensagens de áudio, fotos e mídias no histórico mesmo sem texto digitado",
+      "Normalização de DDI 55 nos envios de mensagens para evitar falhas silenciosas de entrega",
+    ],
+  },
+  {
+    version: "2.6.1",
+    date: "08/11/2026",
+    title: "Correções de Segurança de Tipos (TypeScript) e Estabilidade",
+    highlights: [
+      "Correção de erros TypeScript em actions.ts: funções com redirect() agora têm retorno explícito satisfazendo o compilador",
+      "Correção de erros de tipo nulo em leads/[id]/page.tsx com asserção explícita após guard notFound()",
+      "Zero erros reais de tipo em toda a base de código (erros restantes são apenas de módulos CSS/Next.js fora do escopo do tsc standalone)",
+    ],
+  },
   {
     version: "2.6.0",
     date: "08/11/2026",

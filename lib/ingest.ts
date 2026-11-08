@@ -138,16 +138,31 @@ export async function ingestLead(
 
   const newRawObj = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const incomingMsg = typeof newRawObj.message_text === "string" ? newRawObj.message_text.trim() : null;
+  const incomingType = typeof newRawObj.type === "string" ? newRawObj.type : undefined;
 
-  if (incomingMsg) {
-    const isDuplicate = messagesHistory.some((m) => m.text === incomingMsg && Math.abs(new Date(m.at).getTime() - new Date(t).getTime()) < 5000);
+  if (incomingMsg || incomingType) {
+    const textToRecord = incomingMsg || (incomingType === "audio" ? "[Áudio do WhatsApp]" : incomingType === "image" ? "[Foto do WhatsApp]" : "[Mídia]");
+    const isDuplicate = messagesHistory.some((m) => m.text === textToRecord && Math.abs(new Date(m.at).getTime() - new Date(t).getTime()) < 5000);
     if (!isDuplicate) {
       messagesHistory.push({
-        text: incomingMsg,
+        text: textToRecord,
         at: t,
         fromMe: Boolean(newRawObj.fromMe),
+        ...(incomingType ? { type: incomingType } : {}),
+        ...(newRawObj.base64 ? { base64: String(newRawObj.base64) } : {}),
       });
     }
+  }
+
+  // Promove pushName/notifyName/verifiedName do raw para a coluna name se o lead ainda está sem nome
+  const rawPushName =
+    (typeof newRawObj.pushName === "string" && newRawObj.pushName.trim()) ||
+    (typeof newRawObj.pushname === "string" && newRawObj.pushname.trim()) ||
+    (typeof newRawObj.notifyName === "string" && newRawObj.notifyName.trim()) ||
+    (typeof newRawObj.verifiedName === "string" && newRawObj.verifiedName.trim()) ||
+    null;
+  if (rawPushName && (!merged.name || merged.name === "Sem Nome")) {
+    merged.name = rawPushName;
   }
 
   const row: Record<string, unknown> = {
@@ -157,6 +172,9 @@ export async function ingestLead(
       ...(newRawObj || {}),
       messages: messagesHistory,
       message_text: incomingMsg || existingRaw?.message_text || null,
+      // Preserva pushName e profilePicUrl no raw
+      ...(rawPushName ? { pushName: rawPushName } : {}),
+      ...(newRawObj.profilePicUrl ? { profilePicUrl: String(newRawObj.profilePicUrl) } : existingRaw?.profilePicUrl ? { profilePicUrl: existingRaw.profilePicUrl } : {}),
     },
     ...(clidChanged ? { clid_seen_at: t } : {}),
   };

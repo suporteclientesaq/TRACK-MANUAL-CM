@@ -13,6 +13,7 @@ import path from "node:path";
 import { ingestLead } from "./ingest";
 import { parseEvolutionWebhook } from "./evolution";
 import { getSetting, setSettings } from "./store";
+import { normalizePhone } from "./normalize";
 
 export function isServerlessEnvironment(): boolean {
   return Boolean(
@@ -461,7 +462,7 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
   });
 
   // Captura inteligente de mensagens Click-to-WhatsApp
-  sock.ev.on("messages.upsert", async ({ messages, type }) => {
+  sock.ev.on("messages.upsert", async ({ messages, type }: any) => {
     if (type !== "notify") return;
 
     for (const msg of messages) {
@@ -506,6 +507,18 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
         console.log(`[Track Manual] Mensagem WhatsApp (${msg.key.fromMe ? "enviada" : "recebida"}) de ${parsed.lead.phone}! ctwa_clid: ${finalCtwa || "nenhum"}, adId: ${finalAdId || "nenhum"}`);
 
         const pushName = (msg.pushName || "").trim();
+        const isAudio = Boolean(msg.message?.audioMessage || msg.message?.voiceMessage);
+        const isImage = Boolean(msg.message?.imageMessage);
+        const isDoc = Boolean(msg.message?.documentMessage);
+        const msgType = isAudio ? "audio" : isImage ? "image" : isDoc ? "document" : "text";
+
+        let profilePicUrl: string | null = null;
+        try {
+          if (sock && remoteJid && !msg.key.fromMe) {
+            profilePicUrl = await sock.profilePictureUrl(remoteJid, "image").catch(() => null);
+          }
+        } catch {}
+
         await ingestLead(
           clientId,
           {
@@ -525,11 +538,13 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
             origin: "whatsapp-direto",
             received_at: new Date().toISOString(),
             instance: "baileys_nativo",
-            message_text: parsed.lead.message_text,
+            message_text: parsed.lead.message_text || (isAudio ? "[Áudio do WhatsApp]" : isImage ? "[Foto do WhatsApp]" : "[Mídia]"),
             fromMe: Boolean(msg.key.fromMe),
             ctwa_clid: finalCtwa,
             source_id: finalAdId,
             pushName: pushName || undefined,
+            type: msgType,
+            ...(profilePicUrl ? { profilePicUrl } : {}),
             contextInfo: (msg.message?.extendedTextMessage?.contextInfo || msg.message?.contextInfo || {}) as Record<string, unknown>,
           }
         );
@@ -540,7 +555,7 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
   });
 
   // Atualiza os nomes dos contatos em tempo real conforme chegam do WhatsApp
-  sock.ev.on("contacts.upsert", async (contacts) => {
+  sock.ev.on("contacts.upsert", async (contacts: any[]) => {
     try {
       const { findLead, updateLead } = await import("./store");
       for (const c of contacts) {
@@ -559,7 +574,7 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
   });
 
   // Sincronização automática do histórico completo de conversas anteriores do celular
-  sock.ev.on("messaging-history.set", async ({ chats, contacts, messages, isLatest }) => {
+  sock.ev.on("messaging-history.set", async ({ chats, contacts, messages, isLatest }: any) => {
     console.log(`[Track Manual] Sincronizando histórico do WhatsApp: ${chats.length} chats, ${contacts.length} contatos, ${messages.length} mensagens.`);
     try {
       // Mapeia nomes reais dos contatos fornecidos pelo WhatsApp
@@ -707,7 +722,7 @@ export async function sendNativeWhatsAppMessage(
   }
 
   try {
-    const cleanPhone = phone.replace(/\D/g, "");
+    const cleanPhone = normalizePhone(phone) || phone.replace(/\D/g, "");
     const jid = `${cleanPhone}@s.whatsapp.net`;
     await session.socket.sendMessage(jid, { text });
 
@@ -748,7 +763,7 @@ export async function sendNativeWhatsAppMedia(
   }
 
   try {
-    const cleanPhone = phone.replace(/\D/g, "");
+    const cleanPhone = normalizePhone(phone) || phone.replace(/\D/g, "");
     const jid = `${cleanPhone}@s.whatsapp.net`;
     const cleanB64 = media.base64.replace(/^data:.*?;base64,/, "");
     const buffer = Buffer.from(cleanB64, "base64");

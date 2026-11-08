@@ -234,7 +234,7 @@ export const pgStore: StoreImpl = {
       if (digits.length >= 4) parts.push(`phone like ${add(`%${digits}%`)}`);
       where.push(`(${parts.join(" or ")})`);
     }
-    const sql = `select * from leads ${where.length ? "where " + where.join(" and ") : ""} order by first_seen_at desc limit ${add(f.limit)} offset ${add(f.offset)}`;
+    const sql = `select * from leads ${where.length ? "where " + where.join(" and ") : ""} order by updated_at desc limit ${add(f.limit)} offset ${add(f.offset)}`;
     return (await q(sql, params)).map(toLead);
   },
   async insertLead(row) {

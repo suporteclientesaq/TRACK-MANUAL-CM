@@ -813,154 +813,6 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
             </div>
           )}
 
-          {/* MODO WAHA */}
-          {connectionMode === "waha" && (
-            <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
-              <div>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
-                  <label htmlFor="waha_server_url" style={{ fontSize: "13px", fontWeight: 600 }}>
-                    Endereço da API do WAHA
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => setWahaServerUrl(`${origin}/api/waha`)}
-                    style={{
-                      background: "rgba(123, 57, 252, 0.15)",
-                      border: "1px solid rgba(123, 57, 252, 0.4)",
-                      color: "#b394ff",
-                      fontSize: "11px",
-                      fontWeight: 700,
-                      padding: "2px 8px",
-                      borderRadius: "6px",
-                      cursor: "pointer",
-                    }}
-                  >
-                    ⚡ Usar WAHA Embutido no Sistema
-                  </button>
-                </div>
-                <input
-                  id="waha_server_url"
-                  type="text"
-                  value={wahaServerUrl}
-                  onChange={(e) => setWahaServerUrl(e.target.value)}
-                  placeholder={`Ex: ${origin}/api/waha ou http://seu-ip:3000`}
-                  style={{
-                    width: "100%",
-                    padding: "8px 12px",
-                    borderRadius: "8px",
-                    background: "var(--surface)",
-                    border: "1px solid var(--border)",
-                    color: "var(--text)",
-                    fontSize: "13px",
-                  }}
-                />
-                <div className="hint" style={{ marginTop: "4px" }}>
-                  Clique no botão <strong>&quot;Usar WAHA Embutido&quot;</strong> acima para rodar sem precisar de Docker ou VPS externa!
-                </div>
-              </div>
-
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
-                <div>
-                  <label htmlFor="waha_session_name" style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: 600 }}>
-                    Nome da Sessão
-                  </label>
-                  <input
-                    id="waha_session_name"
-                    type="text"
-                    value={wahaSessionName}
-                    onChange={(e) => setWahaSessionName(e.target.value)}
-                    placeholder="default"
-                    style={{
-                      width: "100%",
-                      padding: "8px 12px",
-                      borderRadius: "8px",
-                      background: "var(--surface)",
-                      border: "1px solid var(--border)",
-                      color: "var(--text)",
-                      fontSize: "13px",
-                    }}
-                  />
-                </div>
-                <div>
-                  <label htmlFor="waha_api_key" style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: 600 }}>
-                    Chave API (Opcional)
-                  </label>
-                  <input
-                    id="waha_api_key"
-                    type="password"
-                    value={wahaApiKey}
-                    onChange={(e) => setWahaApiKey(e.target.value)}
-                    placeholder="WAHA_API_KEY do .env"
-                    style={{
-                      width: "100%",
-                      padding: "8px 12px",
-                      borderRadius: "8px",
-                      background: "var(--surface)",
-                      border: "1px solid var(--border)",
-                      color: "var(--text)",
-                      fontSize: "13px",
-                    }}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: 600 }}>
-                  Webhook URL do Track Manual no WAHA (Evento <code>message</code>)
-                </label>
-                <div style={{ display: "flex", gap: "6px" }}>
-                  <input
-                    type="text"
-                    readOnly
-                    value={wahaWebhookUrl}
-                    style={{
-                      flex: 1,
-                      padding: "8px 12px",
-                      borderRadius: "8px",
-                      background: "var(--surface)",
-                      border: "1px solid var(--border)",
-                      color: "#34c77b",
-                      fontSize: "11px",
-                      fontFamily: "monospace",
-                    }}
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => copyToClipboard(wahaWebhookUrl, "webhook")}
-                  >
-                    {copiedField === "webhook" ? <CheckCircle2 size={14} /> : <Copy size={14} />}
-                    {copiedField === "webhook" ? "Copiado!" : "Copiar"}
-                  </Button>
-                </div>
-                <div className="hint" style={{ marginTop: "4px" }}>
-                  Ao clicar em <strong>Gerar QR Code</strong>, o Track Manual registra esse webhook automaticamente no WAHA!
-                </div>
-              </div>
-
-              <div style={{ display: "flex", gap: "8px", marginTop: "4px" }}>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={testWahaWebhook}
-                  disabled={wahaTesting}
-                  style={{ flex: 1 }}
-                >
-                  {wahaTesting ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                  Testar Endpoint do Webhook
-                </Button>
-              </div>
-
-              {wahaTestResult && (
-                <div style={{ fontSize: "12px", padding: "8px 12px", borderRadius: "6px", background: "var(--surface)", border: "1px solid var(--border)" }}>
-                  {wahaTestResult}
-                </div>
-              )}
-            </div>
-          )}
-
           {/* MODO EVOLUTION */}
           {connectionMode === "evolution" && (
             <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
@@ -1195,23 +1047,17 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
                   background:
                     connectionMode === "native"
                       ? "rgba(52, 199, 123, 0.15)"
-                      : connectionMode === "waha"
-                        ? "rgba(123, 57, 252, 0.15)"
-                        : "rgba(56, 189, 248, 0.15)",
+                      : "rgba(56, 189, 248, 0.15)",
                   color:
                     connectionMode === "native"
                       ? "#34c77b"
-                      : connectionMode === "waha"
-                        ? "#b394ff"
-                        : "#38bdf8",
+                      : "#38bdf8",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
                 }}
               >
-                {connectionMode === "native" && <Smartphone size={34} />}
-                {connectionMode === "waha" && <Box size={34} />}
-                {connectionMode === "evolution" && <Server size={34} />}
+                {connectionMode === "native" ? <Smartphone size={34} /> : <Server size={34} />}
               </div>
               <div>
                 <h3 style={{ margin: "0 0 6px 0", fontSize: "17px", fontWeight: 700 }}>
@@ -1220,9 +1066,7 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
                 <p className="muted small" style={{ margin: 0, maxWidth: "340px" }}>
                   {connectionMode === "native"
                     ? "Gere o QR Code para conectar seu número de WhatsApp diretamente ao Track Manual."
-                    : connectionMode === "waha"
-                      ? "Gere o QR Code para conectar a sessão WAHA ao seu WhatsApp."
-                      : "Gere o QR Code para conectar a instância Evolution API ao seu WhatsApp."}
+                    : "Gere o QR Code para conectar a instância Evolution API ao seu WhatsApp."}
                 </p>
               </div>
               <Button
@@ -1233,9 +1077,7 @@ export function WhatsAppClient({ clients }: WhatsAppClientProps) {
                   background:
                     connectionMode === "native"
                       ? "linear-gradient(90deg, #34c77b 0%, #00f2fe 100%)"
-                      : connectionMode === "waha"
-                        ? "linear-gradient(90deg, #7b39fc 0%, #34c77b 100%)"
-                        : "linear-gradient(90deg, #38bdf8 0%, #7b39fc 100%)",
+                      : "linear-gradient(90deg, #38bdf8 0%, #7b39fc 100%)",
                   color: "#ffffff",
                   fontWeight: 700,
                   boxShadow: "0 4px 15px rgba(0, 0, 0, 0.3)",

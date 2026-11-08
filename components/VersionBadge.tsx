@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-const VERSION = "2.6.0";
+const VERSION = "2.6.2";
 
 function pad(n: number) {
   return String(n).padStart(2, "0");

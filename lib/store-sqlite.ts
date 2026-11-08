@@ -271,7 +271,7 @@ export const sqliteStore: StoreImpl = {
       }
       where.push(`(${parts.join(" or ")})`);
     }
-    const sql = `select * from leads ${where.length ? "where " + where.join(" and ") : ""} order by first_seen_at desc limit ? offset ?`;
+    const sql = `select * from leads ${where.length ? "where " + where.join(" and ") : ""} order by updated_at desc limit ? offset ?`;
     params.push(f.limit, f.offset);
     return (db().prepare(sql).all(...params) as Row[]).map(toLead);
   },

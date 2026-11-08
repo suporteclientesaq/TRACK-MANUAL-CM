@@ -29,7 +29,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { pullCtwaFromPhoneAction, sendEventAction, sendWhatsAppMessageAction, sendWhatsAppMediaAction } from "@/app/actions";
+import { pullCtwaFromPhoneAction, sendEventAction, sendWhatsAppMessageAction, sendWhatsAppMediaAction, autoRecoverLeadNamesAction } from "@/app/actions";
 import { Button } from "@/components/ui/button";
 import { formatDateTime, formatMoney, formatPhone } from "@/lib/format";
 import type { Lead } from "@/lib/types";
@@ -104,6 +104,23 @@ function getLeadDisplayName(lead: Lead | null | undefined): string {
     if (typeof raw.verifiedName === "string" && raw.verifiedName.trim()) return raw.verifiedName.trim();
     if (typeof raw.name === "string" && raw.name.trim() && raw.name.trim() !== "Sem Nome") return raw.name.trim();
     if (raw.sender && typeof raw.sender.name === "string" && raw.sender.name.trim()) return raw.sender.name.trim();
+    if (Array.isArray(raw.messages)) {
+      for (let i = raw.messages.length - 1; i >= 0; i--) {
+        const m = raw.messages[i];
+        if (m && typeof m.senderName === "string" && m.senderName.trim()) return m.senderName.trim();
+        if (m && typeof m.pushName === "string" && m.pushName.trim()) return m.pushName.trim();
+      }
+    }
+  }
+  // Extrai nome de notas e propostas comerciais importadas (ex: "Cliente: Vilson Gregorio")
+  if (lead.notes) {
+    const m =
+      lead.notes.match(/(?:Cliente|Nome|Lead|Contato):\s*([^\n\r,•*#|]+)/i) ||
+      lead.notes.match(/👤\s*(?:\*\*)?(?:Cliente|Nome)?(?:\*\*)?:\s*([^\n\r,•*#|]+)/i);
+    if (m && m[1].trim() && !/pendente/i.test(m[1])) {
+      const extracted = m[1].trim().replace(/^[*_#\s]+|[*_#\s]+$/g, "");
+      if (extracted.length >= 2) return extracted;
+    }
   }
   return formatPhone(lead.phone);
 }
@@ -111,8 +128,12 @@ function getLeadDisplayName(lead: Lead | null | undefined): string {
 function getLeadAvatarUrl(lead: Lead | null | undefined): string | null {
   if (!lead) return null;
   const raw = lead.raw as Record<string, any> | null;
-  if (raw && typeof raw.profilePicUrl === "string" && raw.profilePicUrl.startsWith("http")) {
-    return raw.profilePicUrl;
+  if (raw) {
+    if (typeof raw.profilePicUrl === "string" && raw.profilePicUrl.startsWith("http")) return raw.profilePicUrl;
+    if (typeof raw.profile_picture === "string" && raw.profile_picture.startsWith("http")) return raw.profile_picture;
+    if (typeof raw.avatarUrl === "string" && raw.avatarUrl.startsWith("http")) return raw.avatarUrl;
+    if (typeof raw.avatar === "string" && raw.avatar.startsWith("http")) return raw.avatar;
+    if (typeof raw.picture === "string" && raw.picture.startsWith("http")) return raw.picture;
   }
   return null;
 }
@@ -203,6 +224,7 @@ export function ConversasClient({
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [showRightPanel, setShowRightPanel] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [sendingMedia, setSendingMedia] = useState(false);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -210,7 +232,33 @@ export function ConversasClient({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const previousMsgsHashRef = useRef<string>("");
 
-  // Live polling
+  const handleManualRefresh = useCallback(async () => {
+    setIsRefreshing(true);
+    try {
+      // Dispara recuperação inteligente de nomes de contatos em segundo plano
+      autoRecoverLeadNamesAction().catch(() => {});
+      const params = new URLSearchParams();
+      if (clientFilter) params.set("cliente", clientFilter);
+      if (searchQuery) params.set("q", searchQuery);
+      if (selectedLeadId) params.set("lead", selectedLeadId);
+      const res = await fetch(`/api/conversas/live?${params.toString()}`, { cache: "no-store" });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.ok && Array.isArray(json.leads)) {
+          setCurrentLeads(json.leads);
+          if (json.adsData) setCurrentAdsData(json.adsData);
+          if (json.eventsData) setCurrentEventsData(json.eventsData);
+          setLastUpdated(new Date());
+        }
+      }
+    } catch {
+      // silencioso
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [clientFilter, searchQuery, selectedLeadId]);
+
+  // Live polling a cada 2 segundos estilo WhatsApp Web
   useEffect(() => {
     let active = true;
     const fetchLive = async () => {
@@ -261,7 +309,7 @@ export function ConversasClient({
     };
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onFocus);
-    const interval = setInterval(fetchLive, 4000);
+    const interval = setInterval(fetchLive, 2000);
     return () => {
       active = false;
       clearInterval(interval);
@@ -606,6 +654,28 @@ export function ConversasClient({
           <span style={{ fontSize: 10, color: TEXT_MUTED }}>
             {lastUpdated.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
           </span>
+          <button
+            type="button"
+            onClick={handleManualRefresh}
+            disabled={isRefreshing}
+            title="Sincronizar conversas e recuperar nomes agora"
+            style={{
+              padding: "4px 10px",
+              borderRadius: 6,
+              border: `1px solid rgba(123, 57, 252, 0.35)`,
+              background: "rgba(123, 57, 252, 0.15)",
+              color: "#c9b8ff",
+              fontSize: 11,
+              fontWeight: 600,
+              cursor: isRefreshing ? "wait" : "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 5,
+            }}
+          >
+            <RefreshCw size={11} style={{ animation: isRefreshing ? "spin 1s linear infinite" : "none" }} />
+            {isRefreshing ? "Sincronizando..." : "Sincronizar"}
+          </button>
           <button
             type="button"
             onClick={() => setShowRightPanel((v) => !v)}
