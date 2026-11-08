@@ -51,7 +51,20 @@ interface ConversasClientProps {
   initialSearchQuery: string;
 }
 
-type TabFilter = "todos" | "com-anuncio" | "com-venda" | "aguardando" | "pix";
+type TabFilter = "todos" | "nao-respondidas" | "com-anuncio" | "com-venda" | "aguardando" | "pix";
+
+function getUnansweredCount(lead: Lead): number {
+  const rawObj = (lead.raw && typeof lead.raw === "object") ? (lead.raw as Record<string, any>) : {};
+  const msgs = Array.isArray(rawObj.messages) ? rawObj.messages : [];
+  if (msgs.length === 0) return 0;
+
+  let count = 0;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].fromMe) break;
+    count++;
+  }
+  return count;
+}
 
 const QUICK_SLASH_COMMANDS = [
   { trigger: "/ola", label: "👋 Olá!", text: "Olá! Tudo bem? Como posso te ajudar hoje?" },
@@ -76,6 +89,32 @@ function playNotificationSound() {
     osc.start();
     osc.stop(ctx.currentTime + 0.35);
   } catch {}
+}
+
+function getLeadDisplayName(lead: Lead | null | undefined): string {
+  if (!lead) return "Sem Nome";
+  if (lead.name && lead.name.trim() && lead.name.trim() !== "Sem Nome") {
+    return lead.name.trim();
+  }
+  const raw = lead.raw as Record<string, any> | null;
+  if (raw) {
+    if (typeof raw.pushName === "string" && raw.pushName.trim()) return raw.pushName.trim();
+    if (typeof raw.pushname === "string" && raw.pushname.trim()) return raw.pushname.trim();
+    if (typeof raw.notifyName === "string" && raw.notifyName.trim()) return raw.notifyName.trim();
+    if (typeof raw.verifiedName === "string" && raw.verifiedName.trim()) return raw.verifiedName.trim();
+    if (typeof raw.name === "string" && raw.name.trim() && raw.name.trim() !== "Sem Nome") return raw.name.trim();
+    if (raw.sender && typeof raw.sender.name === "string" && raw.sender.name.trim()) return raw.sender.name.trim();
+  }
+  return formatPhone(lead.phone);
+}
+
+function getLeadAvatarUrl(lead: Lead | null | undefined): string | null {
+  if (!lead) return null;
+  const raw = lead.raw as Record<string, any> | null;
+  if (raw && typeof raw.profilePicUrl === "string" && raw.profilePicUrl.startsWith("http")) {
+    return raw.profilePicUrl;
+  }
+  return null;
 }
 
 function getInitials(name: string | null): string {
@@ -165,6 +204,7 @@ export function ConversasClient({
   const [showRightPanel, setShowRightPanel] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
   const [sendingMedia, setSendingMedia] = useState(false);
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -178,6 +218,7 @@ export function ConversasClient({
         const params = new URLSearchParams();
         if (clientFilter) params.set("cliente", clientFilter);
         if (searchQuery) params.set("q", searchQuery);
+        if (selectedLeadId) params.set("lead", selectedLeadId);
         const res = await fetch(`/api/conversas/live?${params.toString()}`, { cache: "no-store" });
         if (res.ok && active) {
           const json = await res.json();
@@ -227,7 +268,7 @@ export function ConversasClient({
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onFocus);
     };
-  }, [clientFilter, searchQuery]);
+  }, [clientFilter, searchQuery, selectedLeadId]);
 
   // Auto scroll to bottom on new messages
   useEffect(() => {
@@ -240,19 +281,43 @@ export function ConversasClient({
     setTimeout(() => setCopiedKey(null), 2000);
   }, []);
 
+  // Mapeia compras por telefone consolidado para resolver divergências de vendas
+  const phoneEventsMap = useMemo(() => {
+    const map = new Map<string, any[]>();
+    for (const lead of currentLeads) {
+      const cleanPhone = lead.phone.replace(/\D/g, "");
+      const evs = currentEventsData[lead.id] || [];
+      if (evs.length > 0) {
+        const prev = map.get(cleanPhone) || [];
+        map.set(cleanPhone, [...prev, ...evs]);
+      }
+    }
+    return map;
+  }, [currentLeads, currentEventsData]);
+
+  const hasPurchasedLead = useCallback(
+    (lead: Lead) => {
+      const byId = (currentEventsData[lead.id] || []).some((e) => e.event_name === "Purchase");
+      if (byId) return true;
+      const cleanPhone = lead.phone.replace(/\D/g, "");
+      return (phoneEventsMap.get(cleanPhone) || []).some((e) => e.event_name === "Purchase");
+    },
+    [currentEventsData, phoneEventsMap]
+  );
+
   const filteredLeads = useMemo(() => {
     return currentLeads
       .filter((lead) => {
         if (clientFilter && lead.client_id !== clientFilter) return false;
         if (searchQuery.trim()) {
           const q = searchQuery.toLowerCase().trim();
-          const nameMatch = lead.name?.toLowerCase().includes(q);
+          const nameMatch = (getLeadDisplayName(lead)).toLowerCase().includes(q);
           const phoneMatch = lead.phone.includes(q);
           const adMatch = lead.source_id?.includes(q);
           const notesMatch = lead.notes?.toLowerCase().includes(q);
           if (!nameMatch && !phoneMatch && !adMatch && !notesMatch) return false;
         }
-        const hasPurchased = (currentEventsData[lead.id] || []).some((e) => e.event_name === "Purchase");
+        const hasPurchased = hasPurchasedLead(lead);
         const hasAd = Boolean(lead.ctwa_clid || lead.source_id);
         const hasPix = () => {
           const raw = lead.raw as Record<string, any> | null;
@@ -261,6 +326,7 @@ export function ConversasClient({
           return corpus.includes("pix") || corpus.includes("chave") || corpus.includes("comprovante");
         };
 
+        if (activeTab === "nao-respondidas" && getUnansweredCount(lead) === 0) return false;
         if (activeTab === "com-anuncio" && !hasAd) return false;
         if (activeTab === "com-venda" && !hasPurchased) return false;
         if (activeTab === "aguardando" && hasPurchased) return false;
@@ -282,11 +348,15 @@ export function ConversasClient({
         };
         return getLatestTime(b) - getLatestTime(a);
       });
-  }, [currentLeads, clientFilter, searchQuery, activeTab, currentEventsData]);
+  }, [currentLeads, clientFilter, searchQuery, activeTab, hasPurchasedLead]);
 
+  // CRÍTICO: Se houver selectedLeadId, NUNCA substitui por outra pessoa se o lead existir na base!
   const selectedLead = useMemo(() => {
-    if (!selectedLeadId) return filteredLeads[0] || currentLeads[0] || null;
-    return currentLeads.find((l) => l.id === selectedLeadId) || filteredLeads[0] || null;
+    if (selectedLeadId) {
+      const match = currentLeads.find((l) => l.id === selectedLeadId);
+      if (match) return match;
+    }
+    return filteredLeads[0] || currentLeads[0] || null;
   }, [selectedLeadId, currentLeads, filteredLeads]);
 
   const selectedAd = useMemo(() => {
@@ -296,8 +366,19 @@ export function ConversasClient({
 
   const selectedEvents = useMemo(() => {
     if (!selectedLead) return [];
-    return currentEventsData[selectedLead.id] || [];
-  }, [selectedLead, currentEventsData]);
+    const byId = currentEventsData[selectedLead.id] || [];
+    const cleanPhone = selectedLead.phone.replace(/\D/g, "");
+    const byPhone = phoneEventsMap.get(cleanPhone) || [];
+    const seen = new Set<string>();
+    const merged: any[] = [];
+    for (const ev of [...byId, ...byPhone]) {
+      if (!seen.has(ev.id)) {
+        seen.add(ev.id);
+        merged.push(ev);
+      }
+    }
+    return merged.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  }, [selectedLead, currentEventsData, phoneEventsMap]);
 
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -462,19 +543,21 @@ export function ConversasClient({
   // Tab counts
   const tabCounts = useMemo(() => ({
     todos: currentLeads.length,
+    "nao-respondidas": currentLeads.filter((l) => getUnansweredCount(l) > 0).length,
     "com-anuncio": currentLeads.filter((l) => l.ctwa_clid || l.source_id).length,
-    "com-venda": currentLeads.filter((l) => (currentEventsData[l.id] || []).some((e) => e.event_name === "Purchase")).length,
-    aguardando: currentLeads.filter((l) => !(currentEventsData[l.id] || []).some((e) => e.event_name === "Purchase")).length,
+    "com-venda": currentLeads.filter((l) => hasPurchasedLead(l)).length,
+    aguardando: currentLeads.filter((l) => !hasPurchasedLead(l)).length,
     pix: currentLeads.filter((l) => {
       const raw = l.raw as Record<string, any> | null;
       const msgs: any[] = Array.isArray(raw?.messages) ? raw!.messages : [];
       const corpus = [l.notes || "", ...msgs.map((m) => m.text || "")].join(" ").toLowerCase();
       return corpus.includes("pix") || corpus.includes("chave") || corpus.includes("comprovante");
     }).length,
-  }), [currentLeads, currentEventsData]);
+  }), [currentLeads, hasPurchasedLead]);
 
   const tabs: { id: TabFilter; label: string }[] = [
     { id: "todos", label: "Todos" },
+    { id: "nao-respondidas", label: "📥 Não Respondidas" },
     { id: "aguardando", label: "Aguardando" },
     { id: "com-anuncio", label: "🎯 Anúncio" },
     { id: "pix", label: "💳 PIX" },
@@ -653,6 +736,10 @@ export function ConversasClient({
                 const lastMsg = msgs[msgs.length - 1];
                 const lastTime = lastMsg?.at || lead.first_seen_at;
 
+                const displayName = getLeadDisplayName(lead);
+                const avatarUrl = getLeadAvatarUrl(lead);
+                const unansweredCount = getUnansweredCount(lead);
+
                 return (
                   <div
                     key={lead.id}
@@ -668,13 +755,13 @@ export function ConversasClient({
                       transition: "all 0.1s",
                     }}
                   >
-                    {/* Avatar */}
+                    {/* Avatar com Foto Real ou Gradiente de Iniciais */}
                     <div
                       style={{
                         width: 40,
                         height: 40,
                         borderRadius: "50%",
-                        background: isSelected ? `linear-gradient(135deg, ${PURPLE}, #34c77b)` : getAvatarGradient(lead.name),
+                        background: avatarUrl ? "transparent" : (isSelected ? `linear-gradient(135deg, ${PURPLE}, #34c77b)` : getAvatarGradient(displayName)),
                         color: "#fff",
                         display: "flex",
                         alignItems: "center",
@@ -683,9 +770,21 @@ export function ConversasClient({
                         fontSize: 13,
                         flexShrink: 0,
                         position: "relative",
+                        overflow: "hidden",
                       }}
                     >
-                      {getInitials(lead.name)}
+                      {avatarUrl ? (
+                        <img
+                          src={avatarUrl}
+                          alt={displayName}
+                          style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                          onError={(e) => {
+                            (e.currentTarget as HTMLElement).style.display = "none";
+                          }}
+                        />
+                      ) : (
+                        getInitials(displayName)
+                      )}
                       {/* Online dot */}
                       {isSelected && (
                         <span style={{
@@ -697,6 +796,7 @@ export function ConversasClient({
                           borderRadius: "50%",
                           background: "#34c77b",
                           border: "2px solid #0d0a1e",
+                          zIndex: 2,
                         }} />
                       )}
                     </div>
@@ -704,12 +804,33 @@ export function ConversasClient({
                     {/* Info */}
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 1 }}>
-                        <span style={{ fontWeight: 700, fontSize: 12, color: isSelected ? "#fff" : "#ccc", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 120 }}>
-                          {lead.name || "Sem Nome"}
+                        <span style={{ fontWeight: 700, fontSize: 12, color: isSelected ? "#fff" : "#ccc", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 120 }} title={displayName}>
+                          {displayName}
                         </span>
-                        <span style={{ fontSize: 10, color: TEXT_MUTED, flexShrink: 0 }}>
-                          {timeAgo(lastTime)}
-                        </span>
+                        <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
+                          <span style={{ fontSize: 10, color: TEXT_MUTED }}>
+                            {timeAgo(lastTime)}
+                          </span>
+                          {unansweredCount > 0 && (
+                            <span
+                              style={{
+                                background: "#ef4444",
+                                color: "#fff",
+                                fontSize: 10,
+                                fontWeight: 800,
+                                padding: "1px 5px",
+                                borderRadius: 999,
+                                lineHeight: "14px",
+                                display: "inline-block",
+                                minWidth: 16,
+                                textAlign: "center",
+                              }}
+                              title={`${unansweredCount} mensagem(ns) aguardando resposta`}
+                            >
+                              {unansweredCount}
+                            </span>
+                          )}
+                        </div>
                       </div>
 
                       <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 2 }}>
@@ -721,7 +842,7 @@ export function ConversasClient({
                       </div>
 
                       {/* Badges */}
-                      <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
+                      <div style={{ display: "flex", gap: 3, flexWrap: "wrap", alignItems: "center" }}>
                         {hasCtwa && (
                           <span style={{ fontSize: 9, padding: "1px 4px", borderRadius: 3, background: "rgba(52,199,123,0.15)", color: "#34c77b", fontWeight: 700 }}>
                             CTWA ✓
@@ -735,6 +856,10 @@ export function ConversasClient({
                         {purchase ? (
                           <span style={{ fontSize: 9, padding: "1px 4px", borderRadius: 3, background: "rgba(255,215,0,0.15)", color: "#ffd700", fontWeight: 700 }}>
                             {formatMoney(purchase.value, purchase.currency || "BRL")}
+                          </span>
+                        ) : hasPurchasedLead(lead) ? (
+                          <span style={{ fontSize: 9, padding: "1px 4px", borderRadius: 3, background: "rgba(255,215,0,0.15)", color: "#ffd700", fontWeight: 700 }}>
+                            💰 Cliente
                           </span>
                         ) : (
                           <span style={{ fontSize: 9, padding: "1px 4px", borderRadius: 3, background: "rgba(255,255,255,0.05)", color: TEXT_MUTED }}>
@@ -777,44 +902,69 @@ export function ConversasClient({
                 }}
               >
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <div
-                    style={{
-                      width: 38,
-                      height: 38,
-                      borderRadius: "50%",
-                      background: `linear-gradient(135deg, ${PURPLE}, #34c77b)`,
-                      color: "#fff",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontWeight: 800,
-                      fontSize: 13,
-                      flexShrink: 0,
-                    }}
-                  >
-                    {getInitials(selectedLead.name)}
-                  </div>
-                  <div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <strong style={{ fontSize: 14, color: "#fff" }}>{selectedLead.name || "Sem Nome"}</strong>
-                      {selectedLead.ctwa_clid && (
-                        <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: "rgba(52,199,123,0.15)", color: "#34c77b", fontWeight: 700 }}>
-                          CTWA ✓
-                        </span>
-                      )}
-                      {selectedLead.source_id && !selectedLead.ctwa_clid && (
-                        <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: "rgba(123,57,252,0.15)", color: "#b394ff", fontWeight: 700 }}>
-                          AD
-                        </span>
-                      )}
-                    </div>
-                    <div style={{ fontSize: 11, color: TEXT_MUTED, display: "flex", alignItems: "center", gap: 4 }}>
-                      <Phone size={10} />
-                      +{formatPhone(selectedLead.phone)}
-                      {selectedLead.city && ` · ${selectedLead.city}`}
-                      {selectedLead.state && `/${selectedLead.state}`}
-                    </div>
-                  </div>
+                  {(() => {
+                    const selName = getLeadDisplayName(selectedLead);
+                    const selAvatar = getLeadAvatarUrl(selectedLead);
+                    return (
+                      <>
+                        <div
+                          style={{
+                            width: 38,
+                            height: 38,
+                            borderRadius: "50%",
+                            background: selAvatar ? "transparent" : `linear-gradient(135deg, ${PURPLE}, #34c77b)`,
+                            color: "#fff",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            fontWeight: 800,
+                            fontSize: 13,
+                            flexShrink: 0,
+                            overflow: "hidden",
+                          }}
+                        >
+                          {selAvatar ? (
+                            <img
+                              src={selAvatar}
+                              alt={selName}
+                              style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                              onError={(e) => {
+                                (e.currentTarget as HTMLElement).style.display = "none";
+                              }}
+                            />
+                          ) : (
+                            getInitials(selName)
+                          )}
+                        </div>
+                        <div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <strong style={{ fontSize: 14, color: "#fff" }}>{selName}</strong>
+                            {selectedLead.ctwa_clid && (
+                              <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: "rgba(52,199,123,0.15)", color: "#34c77b", fontWeight: 700 }}>
+                                CTWA ✓
+                              </span>
+                            )}
+                            {selectedLead.source_id && !selectedLead.ctwa_clid && (
+                              <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: "rgba(123,57,252,0.15)", color: "#b394ff", fontWeight: 700 }}>
+                                AD
+                              </span>
+                            )}
+                            {hasPurchasedLead(selectedLead) && (
+                              <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: "rgba(255,215,0,0.15)", color: "#ffd700", fontWeight: 700 }}>
+                                💰 Cliente
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ fontSize: 11, color: TEXT_MUTED, display: "flex", alignItems: "center", gap: 4 }}>
+                            <Phone size={10} />
+                            +{formatPhone(selectedLead.phone)}
+                            {selectedLead.city && ` · ${selectedLead.city}`}
+                            {selectedLead.state && `/${selectedLead.state}`}
+                          </div>
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
 
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -1025,24 +1175,71 @@ export function ConversasClient({
                           </div>
                         ) : isImage ? (
                           /* Image bubble */
-                          <div
-                            style={{
-                              borderRadius: isFromMe ? "14px 14px 2px 14px" : "14px 14px 14px 2px",
-                              background: isFromMe ? "linear-gradient(135deg, #005c4b, #007a63)" : "rgba(30,24,50,0.95)",
-                              border: `1px solid ${isFromMe ? "rgba(52,199,123,0.3)" : BORDER}`,
-                              padding: "10px 14px",
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 8,
-                            }}
-                          >
-                            <ImageIcon size={16} style={{ color: isFromMe ? "#a7f3d0" : "#b394ff" }} />
-                            <span style={{ fontSize: 12, color: isFromMe ? "#fff" : "#ccc" }}>Imagem</span>
-                            <span style={{ marginLeft: "auto", fontSize: 10, color: isFromMe ? "#a7f3d0" : TEXT_MUTED }}>
-                              {timeStr}
-                              {isFromMe && <CheckCheck size={12} style={{ display: "inline", marginLeft: 4, color: "#38bdf8" }} />}
-                            </span>
-                          </div>
+                          (() => {
+                            const imageSrc =
+                              (m as any).base64 ||
+                              (m.text && (m.text.startsWith("data:image") || m.text.startsWith("http")) ? m.text : null);
+
+                            return (
+                              <div
+                                style={{
+                                  borderRadius: isFromMe ? "14px 14px 2px 14px" : "14px 14px 14px 2px",
+                                  background: isFromMe ? "linear-gradient(135deg, #005c4b, #007a63)" : "rgba(30,24,50,0.95)",
+                                  border: `1px solid ${isFromMe ? "rgba(52,199,123,0.3)" : BORDER}`,
+                                  padding: imageSrc ? "6px" : "10px 14px",
+                                  overflow: "hidden",
+                                }}
+                              >
+                                {imageSrc ? (
+                                  <>
+                                    <img
+                                      src={imageSrc}
+                                      alt="Foto enviada"
+                                      onClick={() => setLightboxUrl(imageSrc)}
+                                      title="Clique para ampliar"
+                                      style={{
+                                        maxWidth: "280px",
+                                        maxHeight: "240px",
+                                        borderRadius: "8px",
+                                        cursor: "zoom-in",
+                                        objectFit: "cover",
+                                        display: "block",
+                                      }}
+                                    />
+                                    {m.text && !m.text.startsWith("data:") && !m.text.startsWith("http") && (
+                                      <div style={{ padding: "6px 4px 2px", fontSize: 12, color: "#fff" }}>
+                                        {m.text}
+                                      </div>
+                                    )}
+                                    <div
+                                      style={{
+                                        display: "flex",
+                                        justifyContent: "flex-end",
+                                        alignItems: "center",
+                                        gap: 3,
+                                        marginTop: 4,
+                                        padding: "0 4px",
+                                        fontSize: 10,
+                                        color: isFromMe ? "#a7f3d0" : TEXT_MUTED,
+                                      }}
+                                    >
+                                      <span>{timeStr}</span>
+                                      {isFromMe && <CheckCheck size={12} style={{ color: "#38bdf8" }} />}
+                                    </div>
+                                  </>
+                                ) : (
+                                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                    <ImageIcon size={16} style={{ color: isFromMe ? "#a7f3d0" : "#b394ff" }} />
+                                    <span style={{ fontSize: 12, color: isFromMe ? "#fff" : "#ccc" }}>Imagem Recebida</span>
+                                    <span style={{ marginLeft: "auto", fontSize: 10, color: isFromMe ? "#a7f3d0" : TEXT_MUTED }}>
+                                      {timeStr}
+                                      {isFromMe && <CheckCheck size={12} style={{ display: "inline", marginLeft: 4, color: "#38bdf8" }} />}
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()
                         ) : (
                           /* Text bubble */
                           <div
@@ -1061,7 +1258,7 @@ export function ConversasClient({
                           >
                             {!isFromMe && idx === 0 && (
                               <div style={{ fontSize: 11, fontWeight: 700, color: "#7b9fff", marginBottom: 3 }}>
-                                {selectedLead.name || "Lead"}
+                                {getLeadDisplayName(selectedLead)}
                               </div>
                             )}
                             <div style={{ wordBreak: "break-word", whiteSpace: "pre-wrap" }}>{m.text}</div>
@@ -1411,48 +1608,68 @@ export function ConversasClient({
             {selectedLead ? (
               <>
                 {/* Contact Card */}
-                <div style={{ textAlign: "center" }}>
-                  <div
-                    style={{
-                      width: 60,
-                      height: 60,
-                      borderRadius: "50%",
-                      background: `linear-gradient(135deg, ${PURPLE}, #34c77b)`,
-                      color: "#fff",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontWeight: 800,
-                      fontSize: 20,
-                      margin: "0 auto 8px",
-                    }}
-                  >
-                    {getInitials(selectedLead.name)}
-                  </div>
-                  <div style={{ fontWeight: 800, fontSize: 14, color: "#fff" }}>{selectedLead.name || "Sem Nome"}</div>
-                  <div style={{ fontSize: 11, color: TEXT_MUTED, marginTop: 2 }}>
-                    {selectedLead.city ? `${selectedLead.city}${selectedLead.state ? `/${selectedLead.state}` : ""}` : "Localização não informada"}
-                  </div>
-                  <div
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 4,
-                      marginTop: 6,
-                      padding: "3px 10px",
-                      borderRadius: 999,
-                      background: selectedEvents.some((e) => e.event_name === "Purchase")
-                        ? "rgba(255,215,0,0.15)"
-                        : "rgba(123,57,252,0.15)",
-                      border: `1px solid ${selectedEvents.some((e) => e.event_name === "Purchase") ? "rgba(255,215,0,0.3)" : "rgba(123,57,252,0.3)"}`,
-                      fontSize: 10,
-                      fontWeight: 700,
-                      color: selectedEvents.some((e) => e.event_name === "Purchase") ? "#ffd700" : "#b394ff",
-                    }}
-                  >
-                    {selectedEvents.some((e) => e.event_name === "Purchase") ? "💰 Cliente" : "⏳ Atendimento"}
-                  </div>
-                </div>
+                {(() => {
+                  const selName = getLeadDisplayName(selectedLead);
+                  const selAvatar = getLeadAvatarUrl(selectedLead);
+                  const isClient = hasPurchasedLead(selectedLead);
+
+                  return (
+                    <div style={{ textAlign: "center" }}>
+                      <div
+                        style={{
+                          width: 64,
+                          height: 64,
+                          borderRadius: "50%",
+                          background: selAvatar ? "transparent" : `linear-gradient(135deg, ${PURPLE}, #34c77b)`,
+                          color: "#fff",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          fontWeight: 800,
+                          fontSize: 22,
+                          margin: "0 auto 8px",
+                          overflow: "hidden",
+                          border: `2px solid ${isClient ? "#ffd700" : PURPLE}`,
+                          boxShadow: "0 4px 14px rgba(0,0,0,0.4)",
+                        }}
+                      >
+                        {selAvatar ? (
+                          <img
+                            src={selAvatar}
+                            alt={selName}
+                            style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                            onError={(e) => {
+                              (e.currentTarget as HTMLElement).style.display = "none";
+                            }}
+                          />
+                        ) : (
+                          getInitials(selName)
+                        )}
+                      </div>
+                      <div style={{ fontWeight: 800, fontSize: 15, color: "#fff" }}>{selName}</div>
+                      <div style={{ fontSize: 11, color: TEXT_MUTED, marginTop: 2 }}>
+                        {selectedLead.city ? `${selectedLead.city}${selectedLead.state ? `/${selectedLead.state}` : ""}` : "Localização não informada"}
+                      </div>
+                      <div
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                          marginTop: 6,
+                          padding: "3px 10px",
+                          borderRadius: 999,
+                          background: isClient ? "rgba(255,215,0,0.15)" : "rgba(123,57,252,0.15)",
+                          border: `1px solid ${isClient ? "rgba(255,215,0,0.3)" : "rgba(123,57,252,0.3)"}`,
+                          fontSize: 10,
+                          fontWeight: 700,
+                          color: isClient ? "#ffd700" : "#b394ff",
+                        }}
+                      >
+                        {isClient ? "💰 Cliente (Compra Confirmada)" : "⏳ Atendimento Ativo"}
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 <div style={{ width: "100%", height: 1, background: BORDER }} />
 
@@ -1541,7 +1758,13 @@ export function ConversasClient({
                         </span>
                       ) : (
                         <span style={{ color: TEXT_MUTED, fontFamily: "inherit" }}>
-                          {selectedLead.source_id ? `Atribuído ao Anúncio #${selectedLead.source_id} ✓` : "Lead Orgânico"}
+                          {selectedLead.source_id ? (
+                            `Atribuído ao Anúncio #${selectedLead.source_id} ✓`
+                          ) : (
+                            <span style={{ color: "#9ca3af" }}>
+                              Origem Não Rastreada (Sem Clique Meta capturado)
+                            </span>
+                          )}
                         </span>
                       )}
                     </div>
@@ -1734,6 +1957,90 @@ export function ConversasClient({
           </div>
         )}
       </div>
+    {/* Modal Lightbox de Foto Ampliada */}
+    {lightboxUrl && (
+      <div
+        style={{
+          position: "fixed",
+          inset: 0,
+          background: "rgba(0, 0, 0, 0.88)",
+          backdropFilter: "blur(4px)",
+          zIndex: 99999,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "20px",
+        }}
+        onClick={() => setLightboxUrl(null)}
+      >
+        <div
+          style={{
+            position: "absolute",
+            top: 20,
+            right: 24,
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            zIndex: 100000,
+          }}
+        >
+          <a
+            href={lightboxUrl}
+            download="foto-whatsapp.jpg"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "8px 16px",
+              borderRadius: 8,
+              background: "rgba(255, 255, 255, 0.15)",
+              border: "1px solid rgba(255, 255, 255, 0.25)",
+              color: "#fff",
+              textDecoration: "none",
+              fontSize: 13,
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            ⬇ Baixar Imagem
+          </a>
+          <button
+            type="button"
+            onClick={() => setLightboxUrl(null)}
+            style={{
+              width: 38,
+              height: 38,
+              borderRadius: "50%",
+              background: "rgba(255, 255, 255, 0.2)",
+              border: "none",
+              color: "#fff",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+            title="Fechar (Esc)"
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        <img
+          src={lightboxUrl}
+          alt="Foto ampliada do WhatsApp"
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            maxWidth: "92vw",
+            maxHeight: "86vh",
+            borderRadius: 10,
+            boxShadow: "0 10px 40px rgba(0, 0, 0, 0.8)",
+            objectFit: "contain",
+          }}
+        />
+      </div>
+    )}
     </div>
   );
 }

@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="tmGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7b39fc" />
+      <stop offset="100%" stop-color="#34c77b" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#7b39fc" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+  <!-- Background circle -->
+  <rect width="64" height="64" rx="16" fill="#0d0a1e" />
+  <rect width="60" height="60" x="2" y="2" rx="14" fill="none" stroke="url(#tmGrad)" stroke-width="2" stroke-opacity="0.5" />
+  
+  <!-- Radar Target / Crosshairs -->
+  <circle cx="32" cy="32" r="22" fill="none" stroke="#7b39fc" stroke-width="2" stroke-opacity="0.4" stroke-dasharray="3 3"/>
+  <circle cx="32" cy="32" r="14" fill="none" stroke="#34c77b" stroke-width="2" stroke-opacity="0.6"/>
+  <circle cx="32" cy="32" r="6" fill="#34c77b" filter="url(#glow)"/>
+
+  <!-- WhatsApp Pulse / Lightning bolt -->
+  <path d="M30 14 L34 26 L42 26 L31 50 L34 35 L26 35 Z" fill="#ffd700" filter="url(#glow)"/>
+</svg>

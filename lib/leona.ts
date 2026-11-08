@@ -2,7 +2,27 @@ import { normalizePhone, ufFromPhone } from "./normalize";
 
 /** Campos do lead que o painel entende, com os nomes alternativos aceitos na entrada. */
 const FIELD_ALIASES: Record<string, string[]> = {
-  name: ["name", "nome", "first_name", "full_name", "customer_name", "nome_cliente", "nome_completo"],
+  name: [
+    "name",
+    "nome",
+    "first_name",
+    "full_name",
+    "customer_name",
+    "nome_cliente",
+    "nome_completo",
+    "pushname",
+    "push_name",
+    "notifyname",
+    "notify_name",
+    "verifiedname",
+    "verified_name",
+    "sender_name",
+    "sendername",
+    "profilename",
+    "profile_name",
+    "contact_name",
+    "contactname",
+  ],
   phone: ["phone", "phone_number", "number", "numero", "telefone", "lead_number", "whatsapp", "celular", "fone"],
   email: ["email", "e-mail", "e_mail"],
   city: ["city", "cidade", "local", "localidade"],

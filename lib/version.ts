@@ -1,12 +1,27 @@
 /**
  * Informações de versão e build do Track Manual.
  */
-export const APP_VERSION = "2.5.0";
-export const APP_RELEASE_NAME = "Track Manual Pro — WhatsApp Web & Advanced Attribution Edition";
+export const APP_VERSION = "2.6.0";
+export const APP_RELEASE_NAME = "Track Manual Pro — Favicon Customizável, Auto-Limpeza & Inbox Inteligente";
 export const APP_BUILD_DATE = "08/11/2026";
 export const APP_UPDATE_STATUS = "Atualizado";
 
 export const APP_CHANGELOG = [
+  {
+    version: "2.6.0",
+    date: "08/11/2026",
+    title: "Favicon Customizável, Recuperação de Nomes WhatsApp, Auto-Limpeza e Correção de Seleção",
+    highlights: [
+      "Favicon customizável nas Configurações com Upload de imagem, Preview em tempo real e 4 Presets estilizados",
+      "Auto-limpeza de mídias pesadas antigas com chave Liga/Desliga e botão de execução imediata",
+      "Recuperação automática de nomes e fotos de perfil dos contatos (pushName/notifyName do WhatsApp)",
+      "Correção crítica da seleção de contatos pelo link direto (/conversas?lead=ID) eliminando risco de troca de lead",
+      "Exibição de fotos reais de perfil do WhatsApp e Lightbox para zoom em fotos e comprovantes recebidos",
+      "Correção da contagem e consolidação de vendas pelo telefone do cliente em todas as abas",
+      "Classificação rigorosa de rastreio: substituição do falso 'Orgânico' por 'Origem Não Rastreada (Sem Clique Meta)'",
+      "Visualização de jornada de cliques Multi-Toque e deduplicação last-click aprimorada",
+    ],
+  },
   {
     version: "2.5.0",
     date: "08/11/2026",

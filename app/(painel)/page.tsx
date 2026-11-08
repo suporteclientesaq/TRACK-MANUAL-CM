@@ -7,12 +7,38 @@ import { DeleteLeadButton } from "./leads/DeleteLeadButton";
 import { ClientSelectorForTxt } from "@/components/ClientSelectorForTxt";
 import { QuickSaleButton } from "@/components/QuickSaleButton";
 import { SyncMetaButton } from "@/components/SyncMetaButton";
+import { ExportLeadsButton } from "@/components/ExportLeadsButton";
 import { adsFor, listClients, listLeads, sentForLeads } from "@/lib/store";
 import { eventLabel } from "@/lib/types";
 
 const PAGE_SIZE = 50;
 
 type Search = { cliente?: string; q?: string; filtro?: string; pagina?: string };
+
+function getDisplayName(lead: any): string {
+  if (lead.name && lead.name.trim() && lead.name.trim() !== "Sem Nome") {
+    return lead.name.trim();
+  }
+  const raw = lead.raw as Record<string, any> | null;
+  if (raw) {
+    if (typeof raw.pushName === "string" && raw.pushName.trim()) return raw.pushName.trim();
+    if (typeof raw.pushname === "string" && raw.pushname.trim()) return raw.pushname.trim();
+    if (typeof raw.notifyName === "string" && raw.notifyName.trim()) return raw.notifyName.trim();
+    if (typeof raw.verifiedName === "string" && raw.verifiedName.trim()) return raw.verifiedName.trim();
+    if (typeof raw.name === "string" && raw.name.trim() && raw.name.trim() !== "Sem Nome") return raw.name.trim();
+    if (raw.sender && typeof raw.sender.name === "string" && raw.sender.name.trim()) return raw.sender.name.trim();
+  }
+  return formatPhone(lead.phone);
+}
+
+function getAvatarOrThumb(lead: any): string | null {
+  if (lead.thumbnail_url) return lead.thumbnail_url;
+  const raw = lead.raw as Record<string, any> | null;
+  if (raw && typeof raw.profilePicUrl === "string" && raw.profilePicUrl.startsWith("http")) {
+    return raw.profilePicUrl;
+  }
+  return null;
+}
 
 export default async function LeadsPage({ searchParams }: { searchParams: Promise<Search> }) {
   const sp = await searchParams;
@@ -69,7 +95,21 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
           </div>
           <p className="muted small">Abra um lead para conferir os dados e enviar o evento ao Meta.</p>
         </div>
-        <div className="actions">
+        <div className="actions" style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
+          <ExportLeadsButton
+            leads={leads.map((l) => ({
+              name: getDisplayName(l),
+              phone: l.phone,
+              city: l.city,
+              state: l.state,
+              ctwa_clid: l.ctwa_clid,
+              source_id: l.source_id,
+              headline: l.headline,
+              first_seen_at: l.first_seen_at,
+              clientName: clientName.get(l.client_id),
+              hasPurchase: (sentByLead.get(l.id) || []).some((e) => e.event_name === "Purchase"),
+            }))}
+          />
           <Button asChild variant="outline">
             <Link href="/leads/novo">
               <Plus />
@@ -154,19 +194,22 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
               {leads.map((lead) => {
                 const ad = lead.source_id ? adByKey.get(`${lead.client_id}:${lead.source_id}`) : undefined;
                 const sent = sentByLead.get(lead.id) || [];
+                const displayName = getDisplayName(lead);
+                const photoUrl = getAvatarOrThumb(lead);
+
                 return (
                   <tr key={lead.id}>
                     <td>
-                      {lead.thumbnail_url ? (
+                      {photoUrl ? (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img className="thumb" src={lead.thumbnail_url} alt="" loading="lazy" referrerPolicy="no-referrer" />
+                        <img className="thumb" src={photoUrl} alt="" loading="lazy" referrerPolicy="no-referrer" style={{ borderRadius: "6px", objectFit: "cover" }} />
                       ) : (
                         <div className="thumb-empty" />
                       )}
                     </td>
                     <td>
                       <Link href={`/leads/${lead.id}`}>
-                        <strong>{lead.name || "Sem Nome"}</strong>
+                        <strong>{displayName}</strong>
                       </Link>
                       <div className="muted small" style={{ whiteSpace: "nowrap" }}>
                         {formatPhone(lead.phone)}
@@ -218,8 +261,8 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                           🎯 CTWA (AD) ✓
                         </span>
                       ) : (
-                        <span className="badge badge-muted" style={{ opacity: 0.65 }}>
-                          Orgânico
+                        <span className="badge badge-muted" style={{ opacity: 0.75 }} title="Sem clique ou anúncio Meta capturado">
+                          Não Rastreado
                         </span>
                       )}
                     </td>

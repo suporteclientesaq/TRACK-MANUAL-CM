@@ -505,10 +505,11 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
 
         console.log(`[Track Manual] Mensagem WhatsApp (${msg.key.fromMe ? "enviada" : "recebida"}) de ${parsed.lead.phone}! ctwa_clid: ${finalCtwa || "nenhum"}, adId: ${finalAdId || "nenhum"}`);
 
+        const pushName = (msg.pushName || "").trim();
         await ingestLead(
           clientId,
           {
-            name: parsed.lead.name,
+            name: pushName || parsed.lead.name || undefined,
             phone: parsed.lead.phone,
             ctwa_clid: finalCtwa,
             source_id: finalAdId,
@@ -528,6 +529,7 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
             fromMe: Boolean(msg.key.fromMe),
             ctwa_clid: finalCtwa,
             source_id: finalAdId,
+            pushName: pushName || undefined,
             contextInfo: (msg.message?.extendedTextMessage?.contextInfo || msg.message?.contextInfo || {}) as Record<string, unknown>,
           }
         );
@@ -537,21 +539,53 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
     }
   });
 
+  // Atualiza os nomes dos contatos em tempo real conforme chegam do WhatsApp
+  sock.ev.on("contacts.upsert", async (contacts) => {
+    try {
+      const { findLead, updateLead } = await import("./store");
+      for (const c of contacts) {
+        const cjid = c.id || "";
+        if (cjid.includes("@g.us") || cjid.includes("@broadcast")) continue;
+        const cphone = cjid.replace(/@.*$/, "").replace(/\D/g, "");
+        const cname = (c.notify || (c as any).name || (c as any).verifiedName || "").trim();
+        if (cphone && cname) {
+          const lead = await findLead(clientId, cphone);
+          if (lead && (!lead.name || lead.name === "Sem Nome")) {
+            await updateLead(lead.id, { name: cname });
+          }
+        }
+      }
+    } catch {}
+  });
+
   // Sincronização automática do histórico completo de conversas anteriores do celular
   sock.ev.on("messaging-history.set", async ({ chats, contacts, messages, isLatest }) => {
     console.log(`[Track Manual] Sincronizando histórico do WhatsApp: ${chats.length} chats, ${contacts.length} contatos, ${messages.length} mensagens.`);
     try {
-      // 1. Cria imediatamente todos os contatos e conversas existentes no celular
+      // Mapeia nomes reais dos contatos fornecidos pelo WhatsApp
+      const contactsMap = new Map<string, string>();
+      for (const c of contacts || []) {
+        const cjid = c.id || "";
+        const cphone = cjid.replace(/@.*$/, "").replace(/\D/g, "");
+        const cname = (c.notify || (c as any).name || (c as any).verifiedName || "").trim();
+        if (cphone && cname) {
+          contactsMap.set(cphone, cname);
+        }
+      }
+
+      // 1. Cria imediatamente todos os contatos e conversas existentes no celular com os nomes reais
       for (const chat of chats) {
         const jid = chat.id || "";
         if (jid.includes("@g.us") || jid.includes("@broadcast")) continue;
         const phone = jid.replace(/@.*$/, "").replace(/\D/g, "");
         if (!phone || phone.length < 8) continue;
 
+        const resolvedName = (chat.name || "").trim() || contactsMap.get(phone) || null;
+
         await ingestLead(
           clientId,
           {
-            name: chat.name || null,
+            name: resolvedName,
             phone,
           },
           "manual",

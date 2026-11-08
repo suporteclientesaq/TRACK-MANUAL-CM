@@ -1,5 +1,5 @@
 import { cookies } from "next/headers";
-import { isOnline, localPaths, stats, storeKind } from "@/lib/store";
+import { getSetting, isOnline, localPaths, stats, storeKind } from "@/lib/store";
 import { THEME_COOKIE, parsePrefs } from "@/lib/theme";
 import {
   APP_VERSION,
@@ -10,6 +10,7 @@ import {
 } from "@/lib/version";
 import { ChangePasswordForm } from "./ChangePasswordForm";
 import { ThemeForm } from "./ThemeForm";
+import { SystemSettingsForm } from "./SystemSettingsForm";
 import {
   CheckCircle2,
   Database,
@@ -26,6 +27,34 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
   const online = isOnline();
   const kind = storeKind();
   const prefs = parsePrefs((await cookies()).get(THEME_COOKIE)?.value);
+
+  const [
+    autoCleanup,
+    cleanupDays,
+    soundNotifications,
+    tabBadgeNotifications,
+    currencyFormat,
+    attributionWindowDays,
+    systemFaviconUrl,
+  ] = await Promise.all([
+    getSetting("auto_cleanup_media"),
+    getSetting("auto_cleanup_days"),
+    getSetting("sound_notifications"),
+    getSetting("tab_badge_notifications"),
+    getSetting("currency_format"),
+    getSetting("attribution_window_days"),
+    getSetting("system_favicon_url"),
+  ]);
+
+  const initialSettings = {
+    auto_cleanup_media: autoCleanup || "false",
+    auto_cleanup_days: cleanupDays || "30",
+    sound_notifications: soundNotifications || "true",
+    tab_badge_notifications: tabBadgeNotifications || "true",
+    currency_format: currencyFormat || "BRL",
+    attribution_window_days: attributionWindowDays || "7",
+    system_favicon_url: systemFaviconUrl || "/favicon.svg",
+  };
 
   return (
     <>
@@ -153,6 +182,11 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
             ))}
           </ul>
         </div>
+      </div>
+
+      <div className="card">
+        <h2>Configurações do Sistema, Auto-Limpeza e Notificações</h2>
+        <SystemSettingsForm initialSettings={initialSettings} />
       </div>
 
       <div className="card">

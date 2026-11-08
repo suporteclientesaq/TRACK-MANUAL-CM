@@ -37,6 +37,19 @@ export default async function LeadPage({
   const clidAge = daysSince(lead.clid_seen_at);
   const thumb = lead.thumbnail_url || ad?.thumbnail_url;
 
+  const raw = lead.raw as Record<string, any> | null;
+  let effectiveName = lead.name && lead.name.trim() !== "Sem Nome" ? lead.name.trim() : null;
+  if (!effectiveName && raw) {
+    effectiveName =
+      (typeof raw.pushName === "string" && raw.pushName.trim()) ||
+      (typeof raw.pushname === "string" && raw.pushname.trim()) ||
+      (typeof raw.notifyName === "string" && raw.notifyName.trim()) ||
+      (typeof raw.verifiedName === "string" && raw.verifiedName.trim()) ||
+      (raw.sender && typeof raw.sender.name === "string" && raw.sender.name.trim()) ||
+      null;
+  }
+  const displayName = effectiveName || "Sem Nome";
+
   // Atribuição last-click: determina se este lead é o vencedor do grupo de telefone
   const winner = resolveWinningLead(leadsForPhone.length > 0 ? leadsForPhone : [lead]);
   const isWinner = winner.id === lead.id;
@@ -47,7 +60,7 @@ export default async function LeadPage({
     <>
       <div className="page-head">
         <div>
-          <h1>{lead.name || "Sem Nome"}</h1>
+          <h1>{displayName}</h1>
           <p className="muted small">
             {formatPhone(lead.phone)} · {client?.name} · chegou em {formatDateTime(lead.first_seen_at)}{" "}
             {lead.origin === "leona" ? "pela Leona" : "(importado ou adicionado à mão)"}
@@ -82,55 +95,155 @@ export default async function LeadPage({
 
       {/* Banner de Atribuição Last-Click */}
       {leadsForPhone.length > 1 && (
-        <div
-          style={{
-            display: "flex",
-            alignItems: "flex-start",
-            gap: "10px",
-            padding: "12px 16px",
-            borderRadius: "10px",
-            background: isDuplicate
-              ? "linear-gradient(90deg, rgba(239, 90, 90, 0.1), rgba(21, 18, 29, 0.95))"
-              : "linear-gradient(90deg, rgba(52, 199, 123, 0.1), rgba(21, 18, 29, 0.95))",
-            border: `1px solid ${isDuplicate ? "rgba(239, 90, 90, 0.3)" : "rgba(52, 199, 123, 0.3)"}`,
-            fontSize: "13px",
-            color: isDuplicate ? "#ef9090" : "#34c77b",
-          }}
-        >
-          <GitMerge size={16} style={{ flexShrink: 0, marginTop: 2 }} />
-          <div>
-            {isDuplicate ? (
-              <>
-                <strong style={{ color: "#ef5a5a" }}>Atribuição: Lead Duplicado</strong>
-                <br />
-                <span style={{ color: "#9a92ad", fontSize: "12px" }}>
-                  Este número de telefone aparece em{" "}
-                  <strong style={{ color: "#ebe8f2" }}>{leadsForPhone.length} campanhas</strong>.
-                  A venda será atribuída ao lead mais recente com ctwa_clid{" "}
-                  {winner.source_id ? (
-                    <>
-                      (anúncio <code style={{ fontSize: "11px" }}>#{winner.source_id.slice(-6)}</code>)
-                    </>
-                  ) : null}
-                  . Este lead <strong style={{ color: "#ef5a5a" }}>não receberá crédito</strong> de conversão no
-                  dashboard para evitar duplicação.
-                </span>
-              </>
-            ) : (
-              <>
-                <strong style={{ color: "#34c77b" }}>Atribuição: Lead Vencedor ✓</strong>
-                <br />
-                <span style={{ color: "#9a92ad", fontSize: "12px" }}>
-                  Este número aparece em{" "}
-                  <strong style={{ color: "#ebe8f2" }}>{leadsForPhone.length} campanhas</strong>, mas este
-                  lead tem o clique mais recente (
-                  {winnerAttribution.model === "ctwa_last_click" ? "ctwa_clid" : "source_id"}) e{" "}
-                  <strong style={{ color: "#34c77b" }}>receberá o crédito</strong> da conversão no dashboard.
-                </span>
-              </>
-            )}
+        <>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "flex-start",
+              gap: "10px",
+              padding: "12px 16px",
+              borderRadius: "10px",
+              background: isDuplicate
+                ? "linear-gradient(90deg, rgba(239, 90, 90, 0.1), rgba(21, 18, 29, 0.95))"
+                : "linear-gradient(90deg, rgba(52, 199, 123, 0.1), rgba(21, 18, 29, 0.95))",
+              border: `1px solid ${isDuplicate ? "rgba(239, 90, 90, 0.3)" : "rgba(52, 199, 123, 0.3)"}`,
+              fontSize: "13px",
+              color: isDuplicate ? "#ef9090" : "#34c77b",
+            }}
+          >
+            <GitMerge size={16} style={{ flexShrink: 0, marginTop: 2 }} />
+            <div>
+              {isDuplicate ? (
+                <>
+                  <strong style={{ color: "#ef5a5a" }}>Atribuição: Lead Duplicado</strong>
+                  <br />
+                  <span style={{ color: "#9a92ad", fontSize: "12px" }}>
+                    Este número de telefone aparece em{" "}
+                    <strong style={{ color: "#ebe8f2" }}>{leadsForPhone.length} campanhas</strong>.
+                    A venda será atribuída ao lead mais recente com ctwa_clid{" "}
+                    {winner.source_id ? (
+                      <>
+                        (anúncio <code style={{ fontSize: "11px" }}>#{winner.source_id.slice(-6)}</code>)
+                      </>
+                    ) : null}
+                    . Este lead <strong style={{ color: "#ef5a5a" }}>não receberá crédito</strong> de conversão no
+                    dashboard para evitar duplicação.
+                  </span>
+                </>
+              ) : (
+                <>
+                  <strong style={{ color: "#34c77b" }}>Atribuição: Lead Vencedor ✓</strong>
+                  <br />
+                  <span style={{ color: "#9a92ad", fontSize: "12px" }}>
+                    Este número aparece em{" "}
+                    <strong style={{ color: "#ebe8f2" }}>{leadsForPhone.length} campanhas</strong>, mas este
+                    lead tem o clique mais recente (
+                    {winnerAttribution.model === "ctwa_last_click" ? "ctwa_clid" : "source_id"}) e{" "}
+                    <strong style={{ color: "#34c77b" }}>receberá o crédito</strong> da conversão no dashboard.
+                  </span>
+                </>
+              )}
+            </div>
           </div>
-        </div>
+
+          {/* Timeline Multi-Toque da Jornada do Lead */}
+          <div className="card" style={{ padding: "16px" }}>
+            <h3 style={{ margin: "0 0 12px", fontSize: "14px", fontWeight: 700, display: "flex", alignItems: "center", gap: "8px" }}>
+              <GitMerge size={15} style={{ color: "#b394ff" }} />
+              Jornada de Cliques Multi-Toque ({leadsForPhone.length} interações com anúncios)
+            </h3>
+            <div style={{ display: "flex", flexDirection: "column", gap: "10px", position: "relative", paddingLeft: "16px" }}>
+              {leadsForPhone
+                .slice()
+                .sort((a, b) => new Date(a.first_seen_at).getTime() - new Date(b.first_seen_at).getTime())
+                .map((lp, idx, arr) => {
+                  const isCurrent = lp.id === lead.id;
+                  const isWin = lp.id === winner.id;
+                  const isFirst = idx === 0;
+
+                  return (
+                    <div
+                      key={lp.id}
+                      style={{
+                        position: "relative",
+                        padding: "10px 14px",
+                        borderRadius: "8px",
+                        background: isCurrent ? "rgba(123, 57, 252, 0.12)" : "var(--surface)",
+                        border: `1px solid ${isCurrent ? "#7b39fc" : isWin ? "rgba(52, 199, 123, 0.4)" : "var(--border)"}`,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        flexWrap: "wrap",
+                        gap: "10px",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                        <span
+                          style={{
+                            width: "22px",
+                            height: "22px",
+                            borderRadius: "50%",
+                            background: isWin ? "#34c77b" : isFirst ? "#38bdf8" : "var(--surface-2)",
+                            color: isWin || isFirst ? "#000" : "var(--text-muted)",
+                            fontWeight: 800,
+                            fontSize: "11px",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            flexShrink: 0,
+                          }}
+                        >
+                          {idx + 1}
+                        </span>
+                        <div>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#fff" }}>
+                            {lp.headline || (lp.source_id ? `Anúncio #${lp.source_id}` : "Origem Não Rastreada (Sem Clique Meta)")}
+                          </div>
+                          <div className="muted small">
+                            {formatDateTime(lp.first_seen_at)} {lp.origin ? `· via ${lp.origin}` : ""}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        {isFirst && (
+                          <span className="badge badge-muted" style={{ fontSize: "10px" }}>
+                            1º Clique
+                          </span>
+                        )}
+                        {isWin && (
+                          <span
+                            className="badge badge-ok"
+                            style={{
+                              background: "rgba(52, 199, 123, 0.2)",
+                              color: "#34c77b",
+                              border: "1px solid rgba(52, 199, 123, 0.5)",
+                              fontWeight: 700,
+                              fontSize: "11px",
+                            }}
+                          >
+                            🏆 Vencedor da Atribuição
+                          </span>
+                        )}
+                        {!isCurrent && (
+                          <Link href={`/leads/${lp.id}`}>
+                            <Button size="sm" variant="outline" style={{ fontSize: "11px", height: "26px", padding: "0 8px" }}>
+                              Ver Este Registro →
+                            </Button>
+                          </Link>
+                        )}
+                        {isCurrent && (
+                          <span style={{ fontSize: "11px", color: "#b394ff", fontWeight: 700 }}>
+                            (Você está aqui)
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          </div>
+        </>
       )}
 
       <div className="grid-2">

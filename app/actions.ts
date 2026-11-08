@@ -1435,3 +1435,131 @@ export async function setLeadCtwaAction(
 
   return { ok: true, message: `✅ ctwa_clid salvo com sucesso!` };
 }
+
+// ---------------------------------------------------------------------------
+// Configurações Avançadas e Auto-Limpeza de Mídias
+// ---------------------------------------------------------------------------
+
+export async function saveSystemSettingsAction(
+  settings: Record<string, string>
+): Promise<{ ok: boolean; message: string }> {
+  "use server";
+  await requireAuth();
+  const { setSettings } = await import("@/lib/store");
+  await setSettings(settings);
+  revalidatePath("/configuracoes");
+  revalidatePath("/conversas");
+  revalidatePath("/dashboard");
+  return { ok: true, message: "Configurações do sistema salvas com sucesso!" };
+}
+
+export async function executeMediaCleanupAction(
+  daysThreshold = 30
+): Promise<{ ok: boolean; message: string; cleanedCount: number }> {
+  "use server";
+  await requireAuth();
+  const { listLeads, updateLead } = await import("@/lib/store");
+
+  const cutoff = Date.now() - daysThreshold * 86_400_000;
+  const leads = await listLeads({ limit: 500, offset: 0 });
+  let cleanedCount = 0;
+
+  for (const lead of leads) {
+    const raw = lead.raw as Record<string, any> | null;
+    if (!raw || !Array.isArray(raw.messages)) continue;
+
+    let modified = false;
+    const newMessages = raw.messages.map((m: any) => {
+      const msgTime = new Date(m.at || lead.first_seen_at).getTime();
+      // Se for mídia com base64 muito pesado e mais antigo que o limite
+      if (msgTime < cutoff && (m.base64 || (m.text && m.text.length > 5000 && m.text.startsWith("data:")))) {
+        modified = true;
+        cleanedCount++;
+        return {
+          ...m,
+          base64: undefined,
+          text: m.text?.startsWith("data:") ? "[Mídia arquivada pela auto-limpeza]" : m.text,
+          cleaned: true,
+        };
+      }
+      return m;
+    });
+
+    if (modified) {
+      await updateLead(lead.id, { raw: { ...raw, messages: newMessages } });
+    }
+  }
+
+  revalidatePath("/configuracoes");
+  revalidatePath("/conversas");
+
+  return {
+    ok: true,
+    cleanedCount,
+    message: cleanedCount > 0
+      ? `🧹 Limpeza concluída com sucesso! ${cleanedCount} mídia(s) pesada(s) arquivada(s) para liberar espaço no banco.`
+      : "✅ Nenhuma mídia pesada antiga encontrada para limpeza no momento. O banco já está otimizado!",
+  };
+}
+
+export async function autoRecoverLeadNamesAction(): Promise<{
+  ok: boolean;
+  recoveredCount: number;
+  message: string;
+}> {
+  "use server";
+  await requireAuth();
+  const { listLeads, updateLead } = await import("@/lib/store");
+
+  const leads = await listLeads({ limit: 1000, offset: 0 });
+  let recoveredCount = 0;
+
+  for (const lead of leads) {
+    // Se o lead já tem nome válido, pula
+    if (lead.name && lead.name.trim() && lead.name.trim() !== "Sem Nome") continue;
+
+    const raw = lead.raw as Record<string, any> | null;
+    if (!raw) continue;
+
+    // Procura em todos os possíveis campos do WhatsApp onde o nome pode estar escondido
+    let candidateName: string | null = null;
+
+    if (typeof raw.pushName === "string" && raw.pushName.trim()) candidateName = raw.pushName.trim();
+    else if (typeof raw.pushname === "string" && raw.pushname.trim()) candidateName = raw.pushname.trim();
+    else if (typeof raw.notifyName === "string" && raw.notifyName.trim()) candidateName = raw.notifyName.trim();
+    else if (typeof raw.notifyname === "string" && raw.notifyname.trim()) candidateName = raw.notifyname.trim();
+    else if (typeof raw.verifiedName === "string" && raw.verifiedName.trim()) candidateName = raw.verifiedName.trim();
+    else if (typeof raw.name === "string" && raw.name.trim() && raw.name.trim() !== "Sem Nome") candidateName = raw.name.trim();
+    else if (raw.sender && typeof raw.sender.name === "string" && raw.sender.name.trim()) candidateName = raw.sender.name.trim();
+    else if (Array.isArray(raw.messages)) {
+      for (const m of raw.messages) {
+        if (typeof m.senderName === "string" && m.senderName.trim()) {
+          candidateName = m.senderName.trim();
+          break;
+        }
+        if (typeof m.pushName === "string" && m.pushName.trim()) {
+          candidateName = m.pushName.trim();
+          break;
+        }
+      }
+    }
+
+    if (candidateName && candidateName.length >= 2) {
+      await updateLead(lead.id, { name: candidateName });
+      recoveredCount++;
+    }
+  }
+
+  revalidatePath("/");
+  revalidatePath("/conversas");
+  revalidatePath("/dashboard");
+
+  return {
+    ok: true,
+    recoveredCount,
+    message:
+      recoveredCount > 0
+        ? `✅ ${recoveredCount} nome(s) de contato(s) recuperado(s) com sucesso a partir dos metadados do WhatsApp!`
+        : "ℹ️ Todos os leads com nomes disponíveis já estão devidamente identificados.",
+  };
+}

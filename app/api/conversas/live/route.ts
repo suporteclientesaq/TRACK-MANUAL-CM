@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { requireAuth } from "@/lib/auth";
-import { listLeads, adsFor, sentForLeads } from "@/lib/store";
+import { listLeads, getLead, adsFor, sentForLeads } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -10,13 +10,22 @@ export async function GET(req: NextRequest) {
     const url = new URL(req.url);
     const clientId = url.searchParams.get("cliente") || null;
     const q = url.searchParams.get("q") || undefined;
+    const requestedLeadId = url.searchParams.get("lead") || null;
 
-    const leads = await listLeads({
+    let leads = await listLeads({
       clientId,
       q,
       offset: 0,
-      limit: 150,
+      limit: 1000,
     });
+
+    // Se um lead específico foi solicitado, garante que ele sempre esteja na lista
+    if (requestedLeadId && !leads.some((l) => l.id === requestedLeadId)) {
+      const single = await getLead(requestedLeadId);
+      if (single) {
+        leads = [single, ...leads];
+      }
+    }
 
     const [sentByLead, adByKey] = await Promise.all([
       sentForLeads(leads.map((l) => l.id)),

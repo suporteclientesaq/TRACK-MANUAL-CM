@@ -1,4 +1,4 @@
-import { listClients, listLeads, adsFor, sentForLeads } from "@/lib/store";
+import { listClients, listLeads, getLead, adsFor, sentForLeads } from "@/lib/store";
 import { ConversasClient } from "./ConversasClient";
 
 export const dynamic = "force-dynamic";
@@ -17,13 +17,21 @@ export default async function ConversasPage({
   const sp = await searchParams;
   const clients = await listClients();
 
-  // Busca até 200 leads recentes para a central de conversas
-  const leads = await listLeads({
+  // Busca todos os leads recentes para a central de conversas (limite ampliado para 1000)
+  let leads = await listLeads({
     clientId: sp.cliente || null,
     q: sp.q,
     offset: 0,
-    limit: 200,
+    limit: 1000,
   });
+
+  // Se a URL solicitou um lead específico, garante que ele sempre esteja na lista
+  if (sp.lead && !leads.some((l) => l.id === sp.lead)) {
+    const single = await getLead(sp.lead);
+    if (single) {
+      leads = [single, ...leads];
+    }
+  }
 
   const [sentByLead, adByKey] = await Promise.all([
     sentForLeads(leads.map((l) => l.id)),
