@@ -17,6 +17,7 @@ import {
   MessageCircle,
   MessageSquare,
   Mic,
+  Paperclip,
   Phone,
   RefreshCw,
   Search,
@@ -28,7 +29,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { pullCtwaFromPhoneAction, sendEventAction, sendWhatsAppMessageAction } from "@/app/actions";
+import { pullCtwaFromPhoneAction, sendEventAction, sendWhatsAppMessageAction, sendWhatsAppMediaAction } from "@/app/actions";
 import { Button } from "@/components/ui/button";
 import { formatDateTime, formatMoney, formatPhone } from "@/lib/format";
 import type { Lead } from "@/lib/types";
@@ -50,7 +51,32 @@ interface ConversasClientProps {
   initialSearchQuery: string;
 }
 
-type TabFilter = "todos" | "com-anuncio" | "com-venda" | "aguardando";
+type TabFilter = "todos" | "com-anuncio" | "com-venda" | "aguardando" | "pix";
+
+const QUICK_SLASH_COMMANDS = [
+  { trigger: "/ola", label: "👋 Olá!", text: "Olá! Tudo bem? Como posso te ajudar hoje?" },
+  { trigger: "/anuncio", label: "🎯 Vi seu Anúncio", text: "Olá! Vi que você veio pelo nosso anúncio. Gostaria de tirar alguma dúvida ou fechar seu pedido?" },
+  { trigger: "/pix", label: "💳 Chave PIX", text: "Segue nossa chave PIX para pagamento: [CHAVE PIX]. Assim que realizar o envio, me mande o comprovante por aqui!" },
+  { trigger: "/confirmado", label: "✅ Confirmado", text: "Pagamento e pedido confirmados com sucesso! Seja muito bem-vindo(a)!" },
+  { trigger: "/catalogo", label: "📦 Catálogo", text: "Aqui está o nosso catálogo de produtos com valores e promoções especiais!" },
+];
+
+function playNotificationSound() {
+  try {
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+    osc.frequency.setValueAtTime(880, ctx.currentTime + 0.1);
+    gain.gain.setValueAtTime(0.12, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.35);
+  } catch {}
+}
 
 function getInitials(name: string | null): string {
   return (name || "?")
@@ -138,8 +164,11 @@ export function ConversasClient({
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [showRightPanel, setShowRightPanel] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
+  const [sendingMedia, setSendingMedia] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const previousMsgsHashRef = useRef<string>("");
 
   // Live polling
   useEffect(() => {
@@ -153,6 +182,28 @@ export function ConversasClient({
         if (res.ok && active) {
           const json = await res.json();
           if (json.ok && Array.isArray(json.leads)) {
+            // Toca áudio suave e atualiza título da aba se houver mensagem nova de lead
+            let latestMsgSignature = "";
+            for (const l of json.leads) {
+              const r = l.raw as Record<string, any> | null;
+              if (r && Array.isArray(r.messages)) {
+                const lastM = r.messages[r.messages.length - 1];
+                if (lastM && !lastM.fromMe) {
+                  latestMsgSignature += `${l.id}:${lastM.at}:${lastM.text || ""}|`;
+                }
+              }
+            }
+
+            if (previousMsgsHashRef.current && latestMsgSignature && previousMsgsHashRef.current !== latestMsgSignature) {
+              playNotificationSound();
+              if (document.hidden) {
+                document.title = "💬 Nova Mensagem | Track Manual";
+              }
+            }
+            if (latestMsgSignature) {
+              previousMsgsHashRef.current = latestMsgSignature;
+            }
+
             setCurrentLeads(json.leads);
             if (json.adsData) setCurrentAdsData(json.adsData);
             if (json.eventsData) setCurrentEventsData(json.eventsData);
@@ -164,6 +215,7 @@ export function ConversasClient({
       }
     };
     const onFocus = () => {
+      document.title = "Conversas | Track Manual";
       fetchLive();
     };
     window.addEventListener("focus", onFocus);
@@ -188,6 +240,7 @@ export function ConversasClient({
     setTimeout(() => setCopiedKey(null), 2000);
   }, []);
 
+  const filteredLeads = useMemo(() => {
     return currentLeads
       .filter((lead) => {
         if (clientFilter && lead.client_id !== clientFilter) return false;
@@ -201,9 +254,17 @@ export function ConversasClient({
         }
         const hasPurchased = (currentEventsData[lead.id] || []).some((e) => e.event_name === "Purchase");
         const hasAd = Boolean(lead.ctwa_clid || lead.source_id);
+        const hasPix = () => {
+          const raw = lead.raw as Record<string, any> | null;
+          const msgs: any[] = Array.isArray(raw?.messages) ? raw!.messages : [];
+          const corpus = [lead.notes || "", ...msgs.map((m) => m.text || "")].join(" ").toLowerCase();
+          return corpus.includes("pix") || corpus.includes("chave") || corpus.includes("comprovante");
+        };
+
         if (activeTab === "com-anuncio" && !hasAd) return false;
         if (activeTab === "com-venda" && !hasPurchased) return false;
         if (activeTab === "aguardando" && hasPurchased) return false;
+        if (activeTab === "pix" && !hasPix()) return false;
         return true;
       })
       .sort((a, b) => {
@@ -273,6 +334,45 @@ export function ConversasClient({
     } finally {
       setSendingReply(false);
     }
+  };
+
+  const handleSelectMedia = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !selectedLead) return;
+    setSendingMedia(true);
+    setReplyError(null);
+
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const base64 = String(reader.result || "");
+        const res = await sendWhatsAppMediaAction(selectedLead.client_id, selectedLead.phone, {
+          base64,
+          mimetype: file.type || "application/octet-stream",
+          filename: file.name,
+          caption: replyText.trim() || undefined,
+        });
+        if (res.ok) {
+          setReplyText("");
+          const params = new URLSearchParams();
+          if (clientFilter) params.set("cliente", clientFilter);
+          if (searchQuery) params.set("q", searchQuery);
+          const ref = await fetch(`/api/conversas/live?${params.toString()}`, { cache: "no-store" });
+          if (ref.ok) {
+            const j = await ref.json();
+            if (j.ok && Array.isArray(j.leads)) setCurrentLeads(j.leads);
+          }
+        } else {
+          setReplyError(res.error || "Erro ao enviar arquivo.");
+        }
+      } catch (err) {
+        setReplyError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setSendingMedia(false);
+        if (fileInputRef.current) fileInputRef.current.value = "";
+      }
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleSendQuickSale = async () => {
@@ -365,12 +465,19 @@ export function ConversasClient({
     "com-anuncio": currentLeads.filter((l) => l.ctwa_clid || l.source_id).length,
     "com-venda": currentLeads.filter((l) => (currentEventsData[l.id] || []).some((e) => e.event_name === "Purchase")).length,
     aguardando: currentLeads.filter((l) => !(currentEventsData[l.id] || []).some((e) => e.event_name === "Purchase")).length,
+    pix: currentLeads.filter((l) => {
+      const raw = l.raw as Record<string, any> | null;
+      const msgs: any[] = Array.isArray(raw?.messages) ? raw!.messages : [];
+      const corpus = [l.notes || "", ...msgs.map((m) => m.text || "")].join(" ").toLowerCase();
+      return corpus.includes("pix") || corpus.includes("chave") || corpus.includes("comprovante");
+    }).length,
   }), [currentLeads, currentEventsData]);
 
   const tabs: { id: TabFilter; label: string }[] = [
     { id: "todos", label: "Todos" },
     { id: "aguardando", label: "Aguardando" },
     { id: "com-anuncio", label: "🎯 Anúncio" },
+    { id: "pix", label: "💳 PIX" },
     { id: "com-venda", label: "💰 Venda" },
   ];
 
@@ -1135,14 +1242,96 @@ export function ConversasClient({
                   ))}
                 </div>
 
+                {/* Atalho de Barra (/) Popup */}
+                {replyText.startsWith("/") && (
+                  <div
+                    style={{
+                      marginBottom: 8,
+                      background: "rgba(21, 17, 42, 0.98)",
+                      border: `1px solid ${PURPLE}`,
+                      borderRadius: 10,
+                      padding: "6px",
+                      boxShadow: "0 -4px 20px rgba(0,0,0,0.5)",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 4,
+                    }}
+                  >
+                    <div style={{ fontSize: 10, color: "#a855f7", fontWeight: 700, padding: "2px 6px" }}>
+                      ⚡ ATALHOS RÁPIDOS (digite ou clique)
+                    </div>
+                    {QUICK_SLASH_COMMANDS.filter((cmd) => cmd.trigger.startsWith(replyText.toLowerCase().trim())).map((cmd) => (
+                      <button
+                        key={cmd.trigger}
+                        type="button"
+                        onClick={() => {
+                          setReplyText(cmd.text);
+                          inputRef.current?.focus();
+                        }}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          padding: "6px 8px",
+                          borderRadius: 6,
+                          background: "rgba(255,255,255,0.04)",
+                          border: "none",
+                          color: "#fff",
+                          fontSize: 11,
+                          cursor: "pointer",
+                          textAlign: "left",
+                        }}
+                      >
+                        <span style={{ color: "#c4b5fd", fontWeight: 700 }}>{cmd.trigger} ({cmd.label})</span>
+                        <span style={{ color: TEXT_MUTED, fontSize: 10, marginLeft: 8, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 220 }}>
+                          {cmd.text}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
                 {/* Message input */}
                 <form onSubmit={handleSendMessage} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  {/* Hidden file input */}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    onChange={handleSelectMedia}
+                    style={{ display: "none" }}
+                    accept="image/*,application/pdf"
+                  />
+
+                  {/* Attachment button */}
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={sendingMedia || sendingReply}
+                    title="Enviar Imagem ou Arquivo (PDF)"
+                    style={{
+                      borderRadius: "50%",
+                      width: 38,
+                      height: 38,
+                      padding: 0,
+                      background: "rgba(255,255,255,0.06)",
+                      border: `1px solid ${BORDER}`,
+                      color: sendingMedia ? "#b394ff" : "#ccc",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexShrink: 0,
+                      cursor: sendingMedia ? "default" : "pointer",
+                    }}
+                  >
+                    {sendingMedia ? <Loader2 size={16} className="animate-spin" /> : <Paperclip size={16} />}
+                  </button>
+
                   <input
                     ref={inputRef}
                     type="text"
                     value={replyText}
                     onChange={(e) => setReplyText(e.target.value)}
-                    placeholder={`Responder para ${selectedLead.name || selectedLead.phone}...`}
+                    placeholder={`Responder para ${selectedLead.name || selectedLead.phone}... (digite / para atalhos)`}
                     disabled={sendingReply}
                     style={{
                       flex: 1,

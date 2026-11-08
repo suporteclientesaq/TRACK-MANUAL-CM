@@ -1,23 +1,34 @@
 /**
  * Informações de versão e build do Track Manual.
  */
-export const APP_VERSION = "2.2.0";
-export const APP_RELEASE_NAME = "Track Manual Pro — WhatsApp & Meta CAPI Edition";
-export const APP_BUILD_DATE = "06/11/2026";
+export const APP_VERSION = "2.5.0";
+export const APP_RELEASE_NAME = "Track Manual Pro — WhatsApp Web & Advanced Attribution Edition";
+export const APP_BUILD_DATE = "08/11/2026";
 export const APP_UPDATE_STATUS = "Atualizado";
 
 export const APP_CHANGELOG = [
   {
-    version: "2.2.0",
-    date: "06/11/2026",
-    title: "Suporte WAHA, Baileys Nativo Resiliente e Backup 1-Clique",
+    version: "2.5.0",
+    date: "08/11/2026",
+    title: "Envio de Mídia, Notificações Sonoras, Atalhos de Barra e Exportação Executiva",
     highlights: [
-      "Integração completa com WAHA (WhatsApp HTTP API) via Docker",
-      "Baileys Nativo aprimorado com auto-reconexão após quedas de rede",
-      "Decodificador Base64 e extrator de tags de anúncio no texto da mensagem",
-      "Atribuição manual de anúncio/campanha diretamente no detalhe do lead",
-      "Backup 1-clique do banco SQLite para download instantâneo",
-      "Exibição da versão ativa e status do sistema nas configurações",
+      "Envio de fotos, comprovantes e arquivos PDF diretamente pelo painel de conversas",
+      "Notificação sonora Web Audio e alerta no título da aba em novas mensagens de WhatsApp",
+      "Atalhos de barra (/) rápidos (/ola, /anuncio, /pix, /confirmado, /catalogo)",
+      "Filtro de funil avançado com aba exclusiva para leads com menção a PIX",
+      "Exportação Executiva em 1 clique (CSV / Excel formatado com ROAS e campanhas)",
+      "Impressão Executiva em PDF nativa pronta para apresentação a clientes",
+      "Blindagem definitiva de atribuição CTWA (AD) contra perdas em reinicializações",
+    ],
+  },
+  {
+    version: "2.4.0",
+    date: "08/11/2026",
+    title: "Blindagem de Rastreio CTWA e Ordenação em Tempo Real no Chat",
+    highlights: [
+      "Recuperação profunda de anúncios e criativos do WhatsApp",
+      "Auto-atribuição de ctwa_ad_ nos leads com source_id",
+      "Ordenação das conversas por atividade recente estilo WhatsApp Web",
     ],
   },
   {

@@ -814,6 +814,24 @@ export async function sendWhatsAppMessageAction(
   return res;
 }
 
+export async function sendWhatsAppMediaAction(
+  clientId: string,
+  phone: string,
+  media: {
+    base64: string;
+    mimetype: string;
+    filename?: string;
+    caption?: string;
+  }
+): Promise<{ ok: boolean; error?: string }> {
+  await requireAuth();
+  const { sendNativeWhatsAppMedia } = await import("@/lib/whatsapp-baileys");
+  const res = await sendNativeWhatsAppMedia(clientId, phone, media);
+  if (res.ok) {
+    revalidatePath("/conversas");
+  }
+  return res;
+}
 // ---------------------------------------------------------------------------
 // Importação de proposta via arquivo .TXT com Auto-Disparo de Compra
 // ---------------------------------------------------------------------------

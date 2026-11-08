@@ -8,9 +8,12 @@ import {
   Calendar,
   CheckCircle2,
   DollarSign,
+  Download,
+  FileSpreadsheet,
   GitMerge,
   Layers,
   MessageSquare,
+  Printer,
   Radio,
   RefreshCw,
   Search,
@@ -73,6 +76,68 @@ export function DashboardClient({ data }: DashboardClientProps) {
     navigator.clipboard.writeText(text);
     setCopiedReport(true);
     setTimeout(() => setCopiedReport(false), 3000);
+  };
+
+  const handleExportCsv = () => {
+    const periodLabels: Record<string, string> = {
+      hoje: "Hoje",
+      ontem: "Ontem",
+      "7d": "Ultimos 7 Dias",
+      "30d": "Ultimos 30 Dias",
+      mes: "Este Mes",
+      todos: "Historico Completo",
+    };
+    const periodLabel = periodLabels[currentData.filterPeriod] || currentData.filterPeriod;
+    const clientObj = currentData.clients.find((c) => c.id === currentData.filterClient);
+    const clientName = clientObj ? clientObj.name : "Todos os Clientes";
+
+    const lines: string[] = [];
+    lines.push(`"RELATORIO EXECUTIVO - TRACK MANUAL"`);
+    lines.push(`"Cliente";"${clientName}"`);
+    lines.push(`"Periodo";"${periodLabel}"`);
+    lines.push(`"Gerado em";"${new Date().toLocaleString("pt-BR")}"`);
+    lines.push("");
+
+    lines.push(`"RESUMO GERAL"`);
+    lines.push(`"Faturamento Total";"R$ ${currentData.kpis.revenue.toFixed(2)}"`);
+    lines.push(`"Investimento Meta";"R$ ${currentData.kpis.spend.toFixed(2)}"`);
+    lines.push(`"Lucro Estimado";"R$ ${currentData.kpis.profit.toFixed(2)}"`);
+    lines.push(`"ROAS Real";"${currentData.kpis.spend > 0 ? `${currentData.kpis.roas.toFixed(2)}x` : "100% Organico"}"`);
+    lines.push(`"Total de Leads (WhatsApp)";"${currentData.kpis.leads}"`);
+    lines.push(`"Vendas Aprovadas";"${currentData.kpis.purchases}"`);
+    lines.push(`"Ticket Medio";"R$ ${currentData.kpis.averageTicket.toFixed(2)}"`);
+    lines.push(`"Taxa de Conversao";"${currentData.kpis.conversionRate}%"`);
+    lines.push(`"Custo por Lead (CPL)";"R$ ${currentData.kpis.costPerLead.toFixed(2)}"`);
+    lines.push(`"Custo por Aquisicao (CPA)";"R$ ${currentData.kpis.cpa.toFixed(2)}"`);
+    lines.push("");
+
+    lines.push(`"DETALHAMENTO POR CAMPANHA"`);
+    lines.push(`"Campanha";"Status";"Gasto (R$)";"Leads";"Vendas";"Faturamento (R$)";"ROAS"`);
+    for (const c of currentData.campaigns) {
+      lines.push(`"${c.name}";"${c.status}";"${c.spend.toFixed(2)}";"${c.leads}";"${c.purchases}";"${c.revenue.toFixed(2)}";"${c.roas.toFixed(2)}x"`);
+    }
+    lines.push("");
+
+    lines.push(`"DETALHAMENTO POR ANUNCIO / CRIATIVO"`);
+    lines.push(`"Anuncio / Criativo";"ID Anuncio";"Campanha";"Conjunto";"Gasto (R$)";"Conversas";"Vendas";"Faturamento (R$)";"ROAS"`);
+    for (const a of currentData.ads) {
+      lines.push(`"${a.name}";"${a.id}";"${a.campaign_name}";"${a.adset_name}";"${a.spend.toFixed(2)}";"${a.conversations}";"${a.purchases}";"${a.revenue.toFixed(2)}";"${a.roas.toFixed(2)}x"`);
+    }
+
+    const csvContent = "\uFEFF" + lines.join("\r\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", `relatorio-executivo-${clientName.toLowerCase().replace(/\s+/g, "-")}-${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handlePrintReport = () => {
+    window.print();
   };
 
   // Sincroniza se a prop inicial mudar
@@ -432,6 +497,40 @@ export function DashboardClient({ data }: DashboardClientProps) {
                 Relatório WhatsApp
               </>
             )}
+          </Button>
+
+          {/* Botão Baixar CSV Executivo */}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleExportCsv}
+            style={{
+              borderColor: "rgba(56, 189, 248, 0.4)",
+              color: "#38bdf8",
+              background: "rgba(56, 189, 248, 0.08)",
+              fontWeight: 600,
+            }}
+            title="Baixar planilha executiva completa com ROAS e campanhas em CSV / Excel"
+          >
+            <Download size={14} />
+            Exportar CSV
+          </Button>
+
+          {/* Botão Imprimir / PDF */}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handlePrintReport}
+            style={{
+              borderColor: "rgba(255, 255, 255, 0.2)",
+              color: "#ebe8f2",
+              background: "rgba(255, 255, 255, 0.04)",
+              fontWeight: 600,
+            }}
+            title="Imprimir relatório executivo ou salvar em PDF"
+          >
+            <Printer size={14} />
+            PDF / Imprimir
           </Button>
         </div>
       </div>

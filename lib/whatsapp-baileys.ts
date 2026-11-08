@@ -697,6 +697,70 @@ export async function sendNativeWhatsAppMessage(
   }
 }
 
+/** Envia arquivo, foto ou documento pelo WhatsApp nativo do Track Manual */
+export async function sendNativeWhatsAppMedia(
+  clientId: string,
+  phone: string,
+  media: {
+    base64: string;
+    mimetype: string;
+    filename?: string;
+    caption?: string;
+  }
+): Promise<{ ok: boolean; error?: string }> {
+  const session = sessions.get(clientId);
+  if (!session || !session.socket || session.state !== "open") {
+    return { ok: false, error: "WhatsApp não está conectado para este cliente." };
+  }
+
+  try {
+    const cleanPhone = phone.replace(/\D/g, "");
+    const jid = `${cleanPhone}@s.whatsapp.net`;
+    const cleanB64 = media.base64.replace(/^data:.*?;base64,/, "");
+    const buffer = Buffer.from(cleanB64, "base64");
+
+    if (media.mimetype.startsWith("image/")) {
+      await session.socket.sendMessage(jid, {
+        image: buffer,
+        caption: media.caption || undefined,
+        mimetype: media.mimetype,
+      });
+    } else if (media.mimetype.startsWith("audio/")) {
+      await session.socket.sendMessage(jid, {
+        audio: buffer,
+        mimetype: media.mimetype,
+        ptt: true,
+      });
+    } else {
+      await session.socket.sendMessage(jid, {
+        document: buffer,
+        mimetype: media.mimetype,
+        fileName: media.filename || "arquivo.pdf",
+        caption: media.caption || undefined,
+      });
+    }
+
+    // Grava no histórico da conversa do lead
+    await ingestLead(
+      clientId,
+      { phone: cleanPhone },
+      "manual",
+      {
+        origin: "whatsapp-direto",
+        received_at: new Date().toISOString(),
+        instance: "baileys_nativo",
+        message_text: media.caption ? `📷 ${media.caption}` : `📎 [Arquivo: ${media.filename || "Mídia"}]`,
+        fromMe: true,
+        type: media.mimetype.startsWith("image/") ? "image" : media.mimetype.startsWith("audio/") ? "audio" : "document",
+      }
+    );
+
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export async function disconnectNativeWhatsApp(clientId: string): Promise<{ ok: boolean; error?: string }> {
   const session = sessions.get(clientId);
   if (session?.socket) {
