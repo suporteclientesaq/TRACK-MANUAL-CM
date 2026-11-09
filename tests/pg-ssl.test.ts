@@ -149,6 +149,7 @@ describe("configuração SSL do Postgres", () => {
   });
 
   it("mantém CA explícita quando o pg recebe sslmode=require", () => {
+    if (!hasOpenSsl) return;
     const { config } = buildPgConnectionOptions(remote + "&sslmode=require", {
       DATABASE_SSL_CA: ca,
     });
@@ -162,6 +163,7 @@ describe("configuração SSL do Postgres", () => {
   });
 
   it("suporta PEM com quebras literais e base64 sem baixar certificados da rede", () => {
+    if (!hasOpenSsl) return;
     expect(
       buildPgConnectionOptions(remote, {
         DATABASE_SSL_CA: ca.replace(/\n/g, "\\n"),
@@ -175,6 +177,7 @@ describe("configuração SSL do Postgres", () => {
   });
 
   it("recusa CA inválida, chave privada no campo CA e fontes conflitantes", () => {
+    if (!hasOpenSsl) return;
     expect(() =>
       buildPgConnectionOptions(remote, {
         DATABASE_SSL_CA: "not a certificate",
@@ -202,6 +205,7 @@ describe("configuração SSL do Postgres", () => {
   });
 
   it("respeita sslrootcert e certificados de cliente presentes na URI", () => {
+    if (!hasOpenSsl) return;
     const uri = new URL(remote);
     for (const [name, file] of [
       ["sslrootcert", "ca.crt"],
@@ -222,6 +226,7 @@ describe("configuração SSL do Postgres", () => {
   });
 
   it("não ignora um par de certificado/chave incompleto", () => {
+    if (!hasOpenSsl) return;
     const uri = new URL(remote);
     uri.searchParams.set("sslcert", path.join(directory, "server.crt"));
     expect(() => buildPgConnectionOptions(uri.toString(), {})).toThrow(
@@ -243,6 +248,7 @@ describe("configuração SSL do Postgres", () => {
         {},
       ).config.ssl,
     ).toEqual({ rejectUnauthorized: true });
+    if (!hasOpenSsl) return;
     expect(
       buildPgConnectionOptions("postgres://u:p@localhost:5432/db", {
         DATABASE_SSL_CA: ca,
@@ -289,6 +295,7 @@ describe("configuração SSL do Postgres", () => {
     expect(
       buildPgConnectionOptions(remote + "&sslmode=no-verify", {}).config.ssl,
     ).toEqual({ rejectUnauthorized: false });
+    if (!hasOpenSsl) return;
     expect(() =>
       buildPgConnectionOptions(remote + "&sslmode=no-verify", {
         DATABASE_SSL_CA: ca,

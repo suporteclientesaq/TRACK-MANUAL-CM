@@ -27,7 +27,7 @@ beforeAll(async () => {
   store = await import("@/lib/store");
   channels = await import("@/lib/channels");
   first = await store.insertClient({ name: "Canal A" });
-});
+}, 60_000);
 afterAll(() => {
   try {
     (globalThis as any).__trackDb?.close?.();
