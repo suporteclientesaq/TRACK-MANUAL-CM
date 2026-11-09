@@ -1,7 +1,9 @@
 import "server-only";
+import { extractBaileysProtobufAd } from "./ctwa";
 import makeWASocket, {
   DisconnectReason,
   useMultiFileAuthState,
+  downloadMediaMessage,
   type WASocket,
   type ConnectionState,
 } from "@whiskeysockets/baileys";
@@ -11,16 +13,23 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ingestLead } from "./ingest";
-import { parseEvolutionWebhook } from "./evolution";
+import {
+  parseEvolutionWebhook,
+  phoneFromWhatsAppJid,
+  whatsappTimestamp,
+} from "./evolution";
 import { getSetting, setSettings } from "./store";
 import { normalizePhone } from "./normalize";
+import { appSecret } from "./config";
+import { encrypt, decrypt } from "./crypto";
 
 export function isServerlessEnvironment(): boolean {
   return Boolean(
     process.env.NETLIFY ||
     process.env.AWS_LAMBDA_FUNCTION_NAME ||
     process.env.VERCEL ||
-    (typeof process.cwd === "function" && process.cwd().startsWith("/var/task"))
+    (typeof process.cwd === "function" &&
+      process.cwd().startsWith("/var/task")),
   );
 }
 
@@ -38,14 +47,24 @@ interface NativeSession {
 // Map global em Node.js para manter as sessões ativas através de hot-reloads e requisições
 const g = globalThis as unknown as {
   __nativeWhatsAppSessions?: Map<string, NativeSession>;
+  __nativeWhatsAppConnects?: Map<string, Promise<NativeConnectResult>>;
 };
 if (!g.__nativeWhatsAppSessions) {
   g.__nativeWhatsAppSessions = new Map<string, NativeSession>();
 }
 const sessions = g.__nativeWhatsAppSessions;
+const connects = (g.__nativeWhatsAppConnects ||= new Map());
+type NativeConnectResult = {
+  ok: boolean;
+  state: "open" | "connecting" | "close";
+  qrcode: string | null;
+  phone?: string | null;
+  error?: string;
+};
 
 function getBaseSessionDir(): string {
-  if (process.env.TRACK_DATA_DIR?.trim()) return process.env.TRACK_DATA_DIR.trim();
+  if (process.env.TRACK_DATA_DIR?.trim())
+    return process.env.TRACK_DATA_DIR.trim();
   if (isServerlessEnvironment()) {
     return path.join(os.tmpdir(), "track_data");
   }
@@ -77,10 +96,18 @@ async function backupSessionToDb(clientId: string): Promise<void> {
       }
     }
     if (Object.keys(bundle).length > 0) {
-      await setSettings({ [`wa_session_${clientId}`]: JSON.stringify(bundle) });
+      await setSettings({
+        [`wa_session_${clientId}`]: encrypt(
+          JSON.stringify(bundle),
+          await appSecret(),
+        ),
+      });
     }
   } catch (err) {
-    console.warn("[Track Manual] Aviso ao salvar backup de sessão do WhatsApp no banco:", err);
+    console.warn(
+      "[Track Manual] Aviso ao salvar backup de sessão do WhatsApp no banco:",
+      err,
+    );
   }
 }
 
@@ -94,15 +121,28 @@ async function restoreSessionFromDb(clientId: string): Promise<boolean> {
     const data = await getSetting(`wa_session_${clientId}`);
     if (!data) return false;
 
-    const bundle = JSON.parse(data) as Record<string, string>;
+    const bundle = JSON.parse(
+      data.startsWith("v1.") ? decrypt(data, await appSecret()) : data,
+    ) as Record<string, string>;
     for (const [filename, content] of Object.entries(bundle)) {
-      const fullPath = path.join(sessionDir, filename);
-      fs.writeFileSync(fullPath, content, "utf-8");
+      if (
+        !/^[a-zA-Z0-9_+=-]+\.json$/.test(filename) ||
+        typeof content !== "string"
+      )
+        continue;
+      const fullPath = path.resolve(sessionDir, filename);
+      if (path.dirname(fullPath) !== path.resolve(sessionDir)) continue;
+      fs.writeFileSync(fullPath, content, { encoding: "utf-8", mode: 0o600 });
     }
-    console.log(`[Track Manual] Sessão do WhatsApp do cliente ${clientId} restaurada com sucesso do Banco Postgres!`);
+    console.log(
+      `[Track Manual] Sessão do WhatsApp do cliente ${clientId} restaurada com sucesso do Banco Postgres!`,
+    );
     return true;
   } catch (err) {
-    console.warn("[Track Manual] Erro ao restaurar sessão do WhatsApp do banco:", err);
+    console.warn(
+      "[Track Manual] Erro ao restaurar sessão do WhatsApp do banco:",
+      err,
+    );
     return false;
   }
 }
@@ -121,15 +161,19 @@ function cleanSessionDir(clientId: string): void {
   setSettings({ [`wa_session_${clientId}`]: "" }).catch(() => {});
 }
 
-export async function getNativeWhatsAppStatus(clientId: string): Promise<{
+export async function getNativeWhatsAppStatus(
+  clientId: string,
+  options: { reconnect?: boolean } = {},
+): Promise<{
   ok: boolean;
   state: "open" | "connecting" | "close";
   qrcode: string | null;
   phone: string | null;
   name: string | null;
 }> {
-  let session = sessions.get(clientId);
-  if (session && session.state === "open") {
+  const session = sessions.get(clientId);
+  // A status read never reports a saved credential as an active connection.
+  if (session)
     return {
       ok: true,
       state: session.state,
@@ -137,171 +181,62 @@ export async function getNativeWhatsAppStatus(clientId: string): Promise<{
       phone: session.phone,
       name: session.name,
     };
-  }
-
-  // Se não está em memória, verifica se já existe uma sessão salva em disco ou no banco
-  const sessionDir = getSessionDir(clientId);
-  const credsFile = path.join(sessionDir, "creds.json");
-
-  // Se o arquivo creds.json não existe no disco local, tenta restaurar imediatamente do banco
-  if (!fs.existsSync(credsFile)) {
-    await restoreSessionFromDb(clientId).catch(() => {});
-  }
-
-  session = sessions.get(clientId);
-  if (session && session.state === "open") {
-    return {
-      ok: true,
-      state: session.state,
-      qrcode: session.qrcode,
-      phone: session.phone,
-      name: session.name,
-    };
-  }
-
-  if (fs.existsSync(credsFile)) {
-    try {
-      const creds = JSON.parse(fs.readFileSync(credsFile, "utf-8"));
-      if (creds?.me?.id) {
-        const phone = creds.me.id.split(":")[0].replace(/\D/g, "");
-        // Inicia a reconexão automática imediatamente se ainda não estiver ocorrendo
-        if (!isServerlessEnvironment()) {
-          const current = sessions.get(clientId);
-          if (!current || (!current.socket && !current.isConnecting)) {
-            connectNativeWhatsApp(clientId).catch((err) =>
-              console.warn("[Track Manual] Auto-start WhatsApp na consulta de status:", err)
-            );
-          }
-        }
-        return {
-          ok: true,
-          state: "open", // Preserva a indicação de conectado enquanto o Baileys retoma em background
-          qrcode: null,
-          phone,
-          name: creds.me.name || null,
-        };
-      }
-    } catch {
-      // json corrompido
+  if (options.reconnect !== false && !isServerlessEnvironment()) {
+    const safeId = clientId.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const credentials = path.join(
+      getBaseSessionDir(),
+      "whatsapp_sessions",
+      safeId,
+      "creds.json",
+    );
+    const saved =
+      fs.existsSync(credentials) ||
+      Boolean(await getSetting(`wa_session_${clientId}`));
+    if (saved) {
+      connectNativeWhatsApp(clientId).catch(() => {});
+      return {
+        ok: true,
+        state: "connecting",
+        qrcode: null,
+        phone: null,
+        name: null,
+      };
     }
   }
-
-  return {
-    ok: true,
-    state: session?.state || "close",
-    qrcode: session?.qrcode || null,
-    phone: session?.phone || null,
-    name: session?.name || null,
-  };
+  return { ok: true, state: "close", qrcode: null, phone: null, name: null };
 }
 
-function extractBaileysProtobufAd(rawMsg: Record<string, unknown> | undefined) {
-  let bctwa: string | null = null;
-  let bAdId: string | null = null;
-  let bAdTitle: string | null = null;
-  let bAdBody: string | null = null;
-  let bAdThumb: string | null = null;
-  let bAdUrl: string | null = null;
-
-  if (!rawMsg || typeof rawMsg !== "object") {
-    return { bctwa, bAdId, bAdTitle, bAdBody, bAdThumb, bAdUrl };
-  }
-
-  const msgTypes = [
-    rawMsg.extendedTextMessage,
-    rawMsg.imageMessage,
-    rawMsg.videoMessage,
-    rawMsg.documentMessage,
-    rawMsg.audioMessage,
-    rawMsg.stickerMessage,
-    rawMsg,
-  ] as Array<Record<string, unknown> | undefined>;
-
-  for (const msgObj of msgTypes) {
-    if (!msgObj || typeof msgObj !== "object") continue;
-    const ci = (msgObj.contextInfo || {}) as Record<string, unknown>;
-    if (!ci || typeof ci !== "object") continue;
-
-    const ear = (ci.externalAdReply || {}) as Record<string, unknown>;
-    if (ear && typeof ear === "object") {
-      if (!bAdId) {
-        const sid = ear.sourceId ?? ear.source_id ?? ear.adId ?? ear.ad_id;
-        if (sid) bAdId = String(sid).trim();
+/** One in-flight connection per client, including credential restoration awaits. */
+export function connectNativeWhatsApp(
+  clientId: string,
+): Promise<NativeConnectResult> {
+  const existing = connects.get(clientId);
+  if (existing) return existing;
+  const pending = establishNativeWhatsApp(clientId)
+    .catch((error: unknown) => {
+      const current = sessions.get(clientId);
+      if (current) {
+        current.isConnecting = false;
+        current.state = "close";
       }
-      if (!bAdTitle) {
-        const t = ear.title ?? ear.headline;
-        if (t) bAdTitle = String(t).trim();
-      }
-      if (!bAdBody) {
-        const b = ear.body ?? ear.ad_body;
-        if (b) bAdBody = String(b).trim();
-      }
-      if (!bAdThumb) {
-        const th = ear.thumbnailUrl ?? ear.thumbnail_url;
-        if (th) bAdThumb = String(th).trim();
-      }
-      if (!bAdUrl) {
-        const su = ear.sourceUrl ?? ear.source_url;
-        if (su) bAdUrl = String(su).trim();
-      }
-    }
-
-    const rawClid =
-      ci.ctwaClid ??
-      ci.conversionData ??
-      ci.ctwa_clid ??
-      ci.conversion_data ??
-      ear.ctwaClid ??
-      ear.ctwa_clid ??
-      ear.conversionData ??
-      null;
-
-    if (rawClid && !bctwa) {
-      if (Buffer.isBuffer(rawClid) || rawClid instanceof Uint8Array) {
-        const buf = Buffer.from(rawClid);
-        if (buf.length > 0) {
-          const utf8 = buf.toString("utf-8").trim();
-          const m = utf8.match(/([a-zA-Z0-9+/=_-]{20,})/);
-          if (m && m[1].length >= 20) {
-            bctwa = m[1];
-          } else {
-            const b64 = buf.toString("base64").trim();
-            if (b64 && b64.length >= 16) bctwa = b64;
-          }
-        }
-      } else if (typeof rawClid === "string" && rawClid.trim()) {
-        bctwa = rawClid.trim();
-        if (/^[A-Za-z0-9+/=]{24,}$/.test(bctwa) && !bctwa.includes(" ")) {
-          try {
-            const dec = Buffer.from(bctwa, "base64").toString("utf-8");
-            const m = dec.match(/([a-zA-Z0-9_-]{20,})/);
-            if (m) bctwa = m[1];
-          } catch {}
-        }
-      } else {
-        const s = String(rawClid).trim();
-        if (s && s !== "[object Object]" && s !== "null" && s !== "undefined") bctwa = s;
-      }
-    }
-
-    if (!bctwa && bAdUrl) {
-      try {
-        const u = new URL(bAdUrl);
-        const urlClid = u.searchParams.get("ctwa_clid") || u.searchParams.get("fbclid");
-        if (urlClid) bctwa = urlClid;
-      } catch {
-        const m = bAdUrl.match(/(?:ctwa_clid|fbclid)=([^&]+)/i);
-        if (m) bctwa = decodeURIComponent(m[1]);
-      }
-    }
-
-    if (bctwa && bAdId) break;
-  }
-
-  return { bctwa, bAdId, bAdTitle, bAdBody, bAdThumb, bAdUrl };
+      return {
+        ok: false,
+        state: "close" as const,
+        qrcode: null,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Não foi possível iniciar a sessão.",
+      };
+    })
+    .finally(() => {
+      if (connects.get(clientId) === pending) connects.delete(clientId);
+    });
+  connects.set(clientId, pending);
+  return pending;
 }
 
-export async function connectNativeWhatsApp(clientId: string): Promise<{
+async function establishNativeWhatsApp(clientId: string): Promise<{
   ok: boolean;
   state: "open" | "connecting" | "close";
   qrcode: string | null;
@@ -330,7 +265,7 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
   }
 
   // Se já está conectando com socket ativo, apenas aguarda ou devolve o QR existente sem destruir
-  if (session && session.isConnecting && session.socket) {
+  if (session && session.isConnecting) {
     if (session.qrcode) {
       return {
         ok: true,
@@ -342,7 +277,9 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
     const qrPromise = new Promise<string>((resolve) => {
       session!.qrWaiters.push(resolve);
     });
-    const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 8_000));
+    const timeoutPromise = new Promise<null>((resolve) =>
+      setTimeout(() => resolve(null), 8_000),
+    );
     const generatedQr = await Promise.race([qrPromise, timeoutPromise]);
     if (session.state === "open") {
       return { ok: true, state: "open", qrcode: null, phone: session.phone };
@@ -356,8 +293,10 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
 
   // Se já existia um socket antigo fechado, encerra limpo antes de abrir um novo
   if (session?.socket) {
+    const previousSocket = session.socket;
+    session.socket = null;
     try {
-      session.socket.end(undefined);
+      previousSocket.end(undefined);
     } catch {
       // ignora
     }
@@ -372,14 +311,17 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
       phone: null,
       name: null,
       qrWaiters: [],
-      isConnecting: false,
+      isConnecting: true,
     };
     sessions.set(clientId, session);
   }
 
+  session.state = "connecting";
+  session.isConnecting = true;
   const sessionDir = getSessionDir(clientId);
   await restoreSessionFromDb(clientId);
-  const { state: authState, saveCreds } = await useMultiFileAuthState(sessionDir);
+  const { state: authState, saveCreds } =
+    await useMultiFileAuthState(sessionDir);
 
   const sock = makeWASocket({
     auth: authState,
@@ -395,12 +337,14 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
   session.isConnecting = true;
 
   sock.ev.on("creds.update", async () => {
+    if (sessions.get(clientId)?.socket !== sock) return;
     await saveCreds();
     await backupSessionToDb(clientId);
   });
 
   // Monitora alterações de conexão e QR Code
   sock.ev.on("connection.update", async (update: Partial<ConnectionState>) => {
+    if (sessions.get(clientId)?.socket !== sock) return;
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
@@ -430,17 +374,25 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
       session!.state = "open";
       session!.qrcode = null;
       session!.isConnecting = false;
-      session!.phone = sock.user?.id ? sock.user.id.split(":")[0].replace(/\D/g, "") : null;
+      session!.phone = sock.user?.id
+        ? sock.user.id.split(":")[0].replace(/\D/g, "")
+        : null;
       session!.name = sock.user?.name || null;
-      console.log(`[Track Manual] WhatsApp Conectado com sucesso para cliente ${clientId}! Número: ${session!.phone}`);
+      console.log(
+        `[Track Manual] WhatsApp Conectado com sucesso para cliente ${clientId}! Número: ${session!.phone}`,
+      );
       backupSessionToDb(clientId).catch(() => {});
     }
 
     if (connection === "close") {
-      const statusCode = (lastDisconnect?.error as { output?: { statusCode?: number } })?.output?.statusCode;
+      const statusCode = (
+        lastDisconnect?.error as { output?: { statusCode?: number } }
+      )?.output?.statusCode;
       const isLoggedOut = statusCode === DisconnectReason.loggedOut;
 
-      console.log(`[Track Manual] WhatsApp desconectado (código ${statusCode}). LoggedOut: ${isLoggedOut}`);
+      console.log(
+        `[Track Manual] WhatsApp desconectado (código ${statusCode}). LoggedOut: ${isLoggedOut}`,
+      );
 
       session!.state = "close";
       session!.qrcode = null;
@@ -451,10 +403,14 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
         session!.phone = null;
         session!.name = null;
       } else if (!isServerlessEnvironment()) {
-        console.log(`[Track Manual] WhatsApp temporariamente desconectado. Reconectando em 3s...`);
+        console.log(
+          `[Track Manual] WhatsApp temporariamente desconectado. Reconectando em 3s...`,
+        );
         setTimeout(() => {
+          if (sessions.get(clientId) !== session || session?.socket !== sock)
+            return;
           connectNativeWhatsApp(clientId).catch((err) =>
-            console.warn("[Track Manual] Erro na auto-reconexão Baileys:", err)
+            console.warn("[Track Manual] Erro na auto-reconexão Baileys:", err),
           );
         }, 3000);
       }
@@ -463,18 +419,18 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
 
   // Captura inteligente de mensagens Click-to-WhatsApp
   sock.ev.on("messages.upsert", async ({ messages, type }: any) => {
-    if (type !== "notify") return;
+    if (sessions.get(clientId)?.socket !== sock || type !== "notify") return;
 
     for (const msg of messages) {
       try {
         if (!msg.message) continue;
         const remoteJid = msg.key.remoteJid || "";
-        if (remoteJid.includes("@g.us") || remoteJid.includes("@broadcast")) continue;
+        if (remoteJid.includes("@g.us") || remoteJid.includes("@broadcast"))
+          continue;
 
         // Extrai ctwa_clid e dados de anúncio diretamente do protobuf Baileys
-        const { bctwa, bAdId, bAdTitle, bAdBody, bAdThumb, bAdUrl } = extractBaileysProtobufAd(
-          msg.message as Record<string, unknown>
-        );
+        const { bctwa, bAdId, bAdTitle, bAdBody, bAdThumb, bAdUrl, bAdMedia } =
+          extractBaileysProtobufAd(msg.message as Record<string, unknown>);
 
         // Usa o parser que já trata todos os campos (CTWA, externalAdReply, headline, source_id)
         // Injeta os campos extraídos diretamente no data para garantir que o parser os capture
@@ -489,67 +445,143 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
           _baileys_source_url: bAdUrl,
         };
 
-        const parsed = parseEvolutionWebhook({
-          event: "messages.upsert",
-          data: msgData as unknown as Record<string, unknown>,
-        });
+        const parsed = parseEvolutionWebhook(
+          {
+            event: "messages.upsert",
+            data: msgData as unknown as Record<string, unknown>,
+          },
+          { includeOutgoing: true },
+        );
 
         if (!parsed.ok) continue;
 
         // Mescla campos extraídos diretamente do protobuf Baileys com o resultado do parser
-        const finalCtwa = bctwa || parsed.lead.ctwa_clid;
-        const finalAdId = bAdId || parsed.lead.source_id;
-        const finalAdTitle = bAdTitle || parsed.lead.headline;
-        const finalAdBody = bAdBody || parsed.lead.ad_body;
-        const finalAdThumb = bAdThumb || parsed.lead.thumbnail_url;
-        const finalAdUrl = bAdUrl || parsed.lead.source_url;
+        const hasDirectReferral = Boolean(
+          bctwa ||
+          bAdId ||
+          bAdUrl ||
+          bAdTitle ||
+          bAdBody ||
+          bAdThumb ||
+          bAdMedia,
+        );
+        const finalCtwa = hasDirectReferral ? bctwa : parsed.lead.ctwa_clid;
+        const finalAdId = hasDirectReferral ? bAdId : parsed.lead.source_id;
+        const finalAdTitle = hasDirectReferral
+          ? bAdTitle
+          : parsed.lead.headline;
+        const finalAdBody = hasDirectReferral ? bAdBody : parsed.lead.ad_body;
+        const finalAdThumb = hasDirectReferral
+          ? bAdThumb
+          : parsed.lead.thumbnail_url;
+        const finalAdUrl = hasDirectReferral ? bAdUrl : parsed.lead.source_url;
 
-        console.log(`[Track Manual] Mensagem WhatsApp (${msg.key.fromMe ? "enviada" : "recebida"}) de ${parsed.lead.phone}! ctwa_clid: ${finalCtwa || "nenhum"}, adId: ${finalAdId || "nenhum"}`);
+        console.log(
+          `[Track Manual] Mensagem WhatsApp (${msg.key.fromMe ? "enviada" : "recebida"}) de ${parsed.lead.phone}! ctwa_clid: ${finalCtwa || "nenhum"}, adId: ${finalAdId || "nenhum"}`,
+        );
 
-        const pushName = (msg.pushName || "").trim();
-        const isAudio = Boolean(msg.message?.audioMessage || msg.message?.voiceMessage);
+        const pushName = msg.key.fromMe ? "" : (msg.pushName || "").trim();
+        const isAudio = Boolean(
+          msg.message?.audioMessage || msg.message?.voiceMessage,
+        );
         const isImage = Boolean(msg.message?.imageMessage);
         const isDoc = Boolean(msg.message?.documentMessage);
-        const msgType = isAudio ? "audio" : isImage ? "image" : isDoc ? "document" : "text";
+        const msgType = isAudio
+          ? "audio"
+          : isImage
+            ? "image"
+            : isDoc
+              ? "document"
+              : "text";
 
         let profilePicUrl: string | null = null;
         try {
           if (sock && remoteJid && !msg.key.fromMe) {
-            profilePicUrl = await sock.profilePictureUrl(remoteJid, "image").catch(() => null);
+            profilePicUrl =
+              (await sock
+                .profilePictureUrl(remoteJid, "image")
+                .catch(() => null)) || null;
           }
         } catch {}
+
+        let attachmentBase64: string | null = null;
+        if (parsed.lead.type !== "text") {
+          try {
+            const fileLength =
+              msg.message?.audioMessage?.fileLength ||
+              msg.message?.imageMessage?.fileLength ||
+              msg.message?.videoMessage?.fileLength ||
+              msg.message?.documentMessage?.fileLength;
+            const size = Number(fileLength || 0);
+            if (!size || size <= 8 * 1024 * 1024) {
+              const attachment = await downloadMediaMessage(
+                msg,
+                "buffer",
+                {},
+                {
+                  logger: pino({ level: "silent" }),
+                  reuploadRequest: sock.updateMediaMessage,
+                },
+              );
+              if (attachment.length <= 8 * 1024 * 1024)
+                attachmentBase64 = attachment.toString("base64");
+            }
+          } catch {
+            // Text and metadata remain visible when an attachment expires or exceeds the local limit.
+          }
+        }
 
         await ingestLead(
           clientId,
           {
-            name: pushName || parsed.lead.name || undefined,
+            name: pushName || parsed.lead.name || null,
             phone: parsed.lead.phone,
             ctwa_clid: finalCtwa,
             source_id: finalAdId,
             source_url: finalAdUrl,
             thumbnail_url: finalAdThumb,
-            media_url: parsed.lead.media_url,
+            media_url: hasDirectReferral ? bAdMedia : parsed.lead.media_url,
             headline: finalAdTitle,
             ad_body: finalAdBody,
-            notes: parsed.lead.message_text ? `WhatsApp: "${parsed.lead.message_text}"` : null,
+            notes: parsed.lead.message_text
+              ? `WhatsApp: "${parsed.lead.message_text}"`
+              : null,
           },
           "manual",
           {
             origin: "whatsapp-direto",
-            received_at: new Date().toISOString(),
+            received_at:
+              whatsappTimestamp(msg.messageTimestamp) ||
+              new Date().toISOString(),
+            message_id: msg.key.id || null,
+            provider: "baileys",
             instance: "baileys_nativo",
-            message_text: parsed.lead.message_text || (isAudio ? "[Áudio do WhatsApp]" : isImage ? "[Foto do WhatsApp]" : "[Mídia]"),
+            message_text:
+              parsed.lead.message_text ||
+              (isAudio
+                ? "[Áudio do WhatsApp]"
+                : isImage
+                  ? "[Foto do WhatsApp]"
+                  : "[Mídia]"),
             fromMe: Boolean(msg.key.fromMe),
             ctwa_clid: finalCtwa,
             source_id: finalAdId,
             pushName: pushName || undefined,
-            type: msgType,
+            type: parsed.lead.type || msgType,
+            mimetype: parsed.lead.mimetype,
+            filename: parsed.lead.filename,
+            base64: attachmentBase64,
             ...(profilePicUrl ? { profilePicUrl } : {}),
-            contextInfo: (msg.message?.extendedTextMessage?.contextInfo || msg.message?.contextInfo || {}) as Record<string, unknown>,
-          }
+            contextInfo: (msg.message?.extendedTextMessage?.contextInfo ||
+              msg.message?.contextInfo ||
+              {}) as Record<string, unknown>,
+          },
         );
       } catch (err) {
-        console.error("[Track Manual] Erro ao processar mensagem do WhatsApp:", err);
+        console.error(
+          "[Track Manual] Erro ao processar mensagem do WhatsApp:",
+          err,
+        );
       }
     }
   });
@@ -561,8 +593,13 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
       for (const c of contacts) {
         const cjid = c.id || "";
         if (cjid.includes("@g.us") || cjid.includes("@broadcast")) continue;
-        const cphone = cjid.replace(/@.*$/, "").replace(/\D/g, "");
-        const cname = (c.notify || (c as any).name || (c as any).verifiedName || "").trim();
+        const cphone = phoneFromWhatsAppJid(cjid, c.phoneNumber);
+        const cname = (
+          c.notify ||
+          (c as any).name ||
+          (c as any).verifiedName ||
+          ""
+        ).trim();
         if (cphone && cname) {
           const lead = await findLead(clientId, cphone);
           if (lead && (!lead.name || lead.name === "Sem Nome")) {
@@ -574,111 +611,160 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
   });
 
   // Sincronização automática do histórico completo de conversas anteriores do celular
-  sock.ev.on("messaging-history.set", async ({ chats, contacts, messages, isLatest }: any) => {
-    console.log(`[Track Manual] Sincronizando histórico do WhatsApp: ${chats.length} chats, ${contacts.length} contatos, ${messages.length} mensagens.`);
-    try {
-      // Mapeia nomes reais dos contatos fornecidos pelo WhatsApp
-      const contactsMap = new Map<string, string>();
-      for (const c of contacts || []) {
-        const cjid = c.id || "";
-        const cphone = cjid.replace(/@.*$/, "").replace(/\D/g, "");
-        const cname = (c.notify || (c as any).name || (c as any).verifiedName || "").trim();
-        if (cphone && cname) {
-          contactsMap.set(cphone, cname);
+  sock.ev.on(
+    "messaging-history.set",
+    async ({ chats, contacts, messages, isLatest }: any) => {
+      console.log(
+        `[Track Manual] Sincronizando histórico do WhatsApp: ${chats.length} chats, ${contacts.length} contatos, ${messages.length} mensagens.`,
+      );
+      try {
+        // Mapeia nomes reais dos contatos fornecidos pelo WhatsApp
+        const contactsMap = new Map<string, string>();
+        for (const c of contacts || []) {
+          const cjid = c.id || "";
+          const cphone = phoneFromWhatsAppJid(cjid, c.phoneNumber);
+          const cname = (
+            c.notify ||
+            (c as any).name ||
+            (c as any).verifiedName ||
+            ""
+          ).trim();
+          if (cphone && cname) {
+            contactsMap.set(cphone, cname);
+          }
         }
+
+        // 1. Cria imediatamente todos os contatos e conversas existentes no celular com os nomes reais
+        for (const chat of chats) {
+          const jid = chat.id || "";
+          if (jid.includes("@g.us") || jid.includes("@broadcast")) continue;
+          const phone = phoneFromWhatsAppJid(jid, chat.phoneNumber);
+          if (!phone || phone.length < 8) continue;
+
+          const resolvedName =
+            (chat.name || "").trim() || contactsMap.get(phone) || null;
+
+          await ingestLead(
+            clientId,
+            {
+              name: resolvedName,
+              phone,
+            },
+            "manual",
+            {
+              origin: "whatsapp-direto",
+              received_at: new Date(
+                Number(chat.conversationTimestamp || 0) * 1000 || Date.now(),
+              ).toISOString(),
+              instance: "baileys_nativo",
+            },
+          ).catch(() => {});
+        }
+
+        // 2. Extrai mensagens históricas de todas as conversas
+        for (const msg of messages) {
+          if (!msg.message) continue;
+          const remoteJid = msg.key.remoteJid || "";
+          if (remoteJid.includes("@g.us") || remoteJid.includes("@broadcast"))
+            continue;
+
+          const {
+            bctwa,
+            bAdId,
+            bAdTitle,
+            bAdBody,
+            bAdThumb,
+            bAdUrl,
+            bAdMedia,
+          } = extractBaileysProtobufAd(msg.message as Record<string, unknown>);
+
+          const msgData = {
+            ...(msg as unknown as Record<string, unknown>),
+            _baileys_ctwa_clid: bctwa,
+            _baileys_source_id: bAdId,
+            _baileys_headline: bAdTitle,
+            _baileys_ad_body: bAdBody,
+            _baileys_thumbnail_url: bAdThumb,
+            _baileys_source_url: bAdUrl,
+          };
+
+          const parsed = parseEvolutionWebhook(
+            {
+              event: "messages.upsert",
+              data: msgData as unknown as Record<string, unknown>,
+            },
+            { includeOutgoing: true },
+          );
+          if (!parsed.ok) continue;
+
+          const hasDirectReferral = Boolean(
+            bctwa ||
+            bAdId ||
+            bAdUrl ||
+            bAdTitle ||
+            bAdBody ||
+            bAdThumb ||
+            bAdMedia,
+          );
+          const finalCtwa = hasDirectReferral ? bctwa : parsed.lead.ctwa_clid;
+          const finalAdId = hasDirectReferral ? bAdId : parsed.lead.source_id;
+          const finalAdTitle = hasDirectReferral
+            ? bAdTitle
+            : parsed.lead.headline;
+          const finalAdBody = hasDirectReferral ? bAdBody : parsed.lead.ad_body;
+          const finalAdThumb = hasDirectReferral
+            ? bAdThumb
+            : parsed.lead.thumbnail_url;
+          const finalAdUrl = hasDirectReferral
+            ? bAdUrl
+            : parsed.lead.source_url;
+
+          await ingestLead(
+            clientId,
+            {
+              name: parsed.lead.name,
+              phone: parsed.lead.phone,
+              ctwa_clid: finalCtwa,
+              source_id: finalAdId,
+              source_url: finalAdUrl,
+              thumbnail_url: finalAdThumb,
+              media_url: hasDirectReferral ? bAdMedia : parsed.lead.media_url,
+              headline: finalAdTitle,
+              ad_body: finalAdBody,
+              notes: parsed.lead.message_text
+                ? `WhatsApp: "${parsed.lead.message_text}"`
+                : null,
+            },
+            "manual",
+            {
+              origin: "whatsapp-direto",
+              received_at:
+                whatsappTimestamp(msg.messageTimestamp) ||
+                new Date().toISOString(),
+              message_id: msg.key.id || null,
+              provider: "baileys",
+              type: parsed.lead.type,
+              mimetype: parsed.lead.mimetype,
+              filename: parsed.lead.filename,
+              instance: "baileys_nativo",
+              message_text: parsed.lead.message_text,
+              fromMe: Boolean(msg.key.fromMe),
+              ctwa_clid: finalCtwa,
+              source_id: finalAdId,
+              contextInfo: (msg.message?.extendedTextMessage?.contextInfo ||
+                msg.message?.contextInfo ||
+                {}) as Record<string, unknown>,
+            },
+          );
+        }
+      } catch (err) {
+        console.warn("[Track Manual] Aviso ao sincronizar histórico:", err);
       }
-
-      // 1. Cria imediatamente todos os contatos e conversas existentes no celular com os nomes reais
-      for (const chat of chats) {
-        const jid = chat.id || "";
-        if (jid.includes("@g.us") || jid.includes("@broadcast")) continue;
-        const phone = jid.replace(/@.*$/, "").replace(/\D/g, "");
-        if (!phone || phone.length < 8) continue;
-
-        const resolvedName = (chat.name || "").trim() || contactsMap.get(phone) || null;
-
-        await ingestLead(
-          clientId,
-          {
-            name: resolvedName,
-            phone,
-          },
-          "manual",
-          {
-            origin: "whatsapp-direto",
-            received_at: new Date(Number(chat.conversationTimestamp || 0) * 1000 || Date.now()).toISOString(),
-            instance: "baileys_nativo",
-          }
-        ).catch(() => {});
-      }
-
-      // 2. Extrai mensagens históricas de todas as conversas
-      for (const msg of messages) {
-        if (!msg.message) continue;
-        const remoteJid = msg.key.remoteJid || "";
-        if (remoteJid.includes("@g.us") || remoteJid.includes("@broadcast")) continue;
-
-        const { bctwa, bAdId, bAdTitle, bAdBody, bAdThumb, bAdUrl } = extractBaileysProtobufAd(
-          msg.message as Record<string, unknown>
-        );
-
-        const msgData = {
-          ...(msg as unknown as Record<string, unknown>),
-          _baileys_ctwa_clid: bctwa,
-          _baileys_source_id: bAdId,
-          _baileys_headline: bAdTitle,
-          _baileys_ad_body: bAdBody,
-          _baileys_thumbnail_url: bAdThumb,
-          _baileys_source_url: bAdUrl,
-        };
-
-        const parsed = parseEvolutionWebhook({
-          event: "messages.upsert",
-          data: msgData as unknown as Record<string, unknown>,
-        });
-        if (!parsed.ok) continue;
-
-        const finalCtwa = bctwa || parsed.lead.ctwa_clid;
-        const finalAdId = bAdId || parsed.lead.source_id;
-        const finalAdTitle = bAdTitle || parsed.lead.headline;
-        const finalAdBody = bAdBody || parsed.lead.ad_body;
-        const finalAdThumb = bAdThumb || parsed.lead.thumbnail_url;
-        const finalAdUrl = bAdUrl || parsed.lead.source_url;
-
-        await ingestLead(
-          clientId,
-          {
-            name: parsed.lead.name,
-            phone: parsed.lead.phone,
-            ctwa_clid: finalCtwa,
-            source_id: finalAdId,
-            source_url: finalAdUrl,
-            thumbnail_url: finalAdThumb,
-            media_url: parsed.lead.media_url,
-            headline: finalAdTitle,
-            ad_body: finalAdBody,
-            notes: parsed.lead.message_text ? `WhatsApp: "${parsed.lead.message_text}"` : null,
-          },
-          "manual",
-          {
-            origin: "whatsapp-direto",
-            received_at: new Date(Number(msg.messageTimestamp || 0) * 1000 || Date.now()).toISOString(),
-            instance: "baileys_nativo",
-            message_text: parsed.lead.message_text,
-            fromMe: Boolean(msg.key.fromMe),
-            ctwa_clid: finalCtwa,
-            source_id: finalAdId,
-            contextInfo: (msg.message?.extendedTextMessage?.contextInfo || msg.message?.contextInfo || {}) as Record<string, unknown>,
-          }
-        );
-      }
-    } catch (err) {
-      console.warn("[Track Manual] Aviso ao sincronizar histórico:", err);
-    }
-  });
+    },
+  );
 
   // Aguarda até 10 segundos pelo primeiro QR code ou confirmação de conexão
-  if (session.state === "open") {
+  if ((session.state as NativeSession["state"]) === "open") {
     return { ok: true, state: "open", qrcode: null, phone: session.phone };
   }
   if (session.qrcode) {
@@ -689,7 +775,9 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
     session!.qrWaiters.push(resolve);
   });
 
-  const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 10_000));
+  const timeoutPromise = new Promise<null>((resolve) =>
+    setTimeout(() => resolve(null), 10_000),
+  );
 
   const generatedQr = await Promise.race([qrPromise, timeoutPromise]);
 
@@ -710,43 +798,64 @@ export async function connectNativeWhatsApp(clientId: string): Promise<{
   };
 }
 
-/** Envia mensagem de texto diretamente pelo WhatsApp nativo do Track Manual */
+/** Send success is independent from later local-history persistence. */
 export async function sendNativeWhatsAppMessage(
   clientId: string,
   phone: string,
-  text: string
-): Promise<{ ok: boolean; error?: string }> {
+  text: string,
+): Promise<{
+  ok: boolean;
+  error?: string;
+  warning?: string;
+  messageId?: string;
+}> {
   const session = sessions.get(clientId);
-  if (!session || !session.socket || session.state !== "open") {
-    return { ok: false, error: "WhatsApp não está conectado para este cliente." };
-  }
-
+  if (!session?.socket || session.state !== "open")
+    return {
+      ok: false,
+      error: "WhatsApp não está conectado para este cliente.",
+    };
+  const cleanPhone = normalizePhone(phone);
+  if (!cleanPhone || !text.trim())
+    return { ok: false, error: "Informe telefone e mensagem válidos." };
   try {
-    const cleanPhone = normalizePhone(phone) || phone.replace(/\D/g, "");
-    const jid = `${cleanPhone}@s.whatsapp.net`;
-    await session.socket.sendMessage(jid, { text });
-
-    // Grava no histórico da conversa do lead
-    await ingestLead(
-      clientId,
-      { phone: cleanPhone },
-      "manual",
-      {
+    const sent = await session.socket.sendMessage(
+      `${cleanPhone}@s.whatsapp.net`,
+      { text },
+    );
+    const messageId = sent?.key.id || undefined;
+    try {
+      await ingestLead(clientId, { phone: cleanPhone }, "manual", {
         origin: "whatsapp-direto",
-        received_at: new Date().toISOString(),
+        provider: "baileys",
+        message_id: messageId,
+        received_at:
+          whatsappTimestamp(sent?.messageTimestamp) || new Date().toISOString(),
         instance: "baileys_nativo",
         message_text: text,
         fromMe: true,
-      }
-    );
-
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        type: "text",
+      });
+      return { ok: true, messageId };
+    } catch {
+      return {
+        ok: true,
+        messageId,
+        warning:
+          "Mensagem enviada, mas o histórico não foi atualizado. Não reenvie para evitar duplicidade.",
+      };
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Não foi possível enviar a mensagem.",
+    };
   }
 }
 
-/** Envia arquivo, foto ou documento pelo WhatsApp nativo do Track Manual */
 export async function sendNativeWhatsAppMedia(
   clientId: string,
   phone: string,
@@ -755,63 +864,101 @@ export async function sendNativeWhatsAppMedia(
     mimetype: string;
     filename?: string;
     caption?: string;
-  }
-): Promise<{ ok: boolean; error?: string }> {
+  },
+): Promise<{
+  ok: boolean;
+  error?: string;
+  warning?: string;
+  messageId?: string;
+}> {
   const session = sessions.get(clientId);
-  if (!session || !session.socket || session.state !== "open") {
-    return { ok: false, error: "WhatsApp não está conectado para este cliente." };
-  }
-
+  if (!session?.socket || session.state !== "open")
+    return {
+      ok: false,
+      error: "WhatsApp não está conectado para este cliente.",
+    };
+  const cleanPhone = normalizePhone(phone);
+  if (!cleanPhone) return { ok: false, error: "Telefone inválido." };
+  const base64 = media.base64.replace(/^data:.*?;base64,/, "");
+  const buffer = Buffer.from(base64, "base64");
+  if (!buffer.length || buffer.length > 8 * 1024 * 1024)
+    return { ok: false, error: "Envie um arquivo de até 8 MB." };
+  const type = media.mimetype.startsWith("image/")
+    ? "image"
+    : media.mimetype.startsWith("audio/")
+      ? "audio"
+      : media.mimetype.startsWith("video/")
+        ? "video"
+        : "document";
   try {
-    const cleanPhone = normalizePhone(phone) || phone.replace(/\D/g, "");
     const jid = `${cleanPhone}@s.whatsapp.net`;
-    const cleanB64 = media.base64.replace(/^data:.*?;base64,/, "");
-    const buffer = Buffer.from(cleanB64, "base64");
-
-    if (media.mimetype.startsWith("image/")) {
-      await session.socket.sendMessage(jid, {
-        image: buffer,
-        caption: media.caption || undefined,
-        mimetype: media.mimetype,
-      });
-    } else if (media.mimetype.startsWith("audio/")) {
-      await session.socket.sendMessage(jid, {
-        audio: buffer,
-        mimetype: media.mimetype,
-        ptt: true,
-      });
-    } else {
-      await session.socket.sendMessage(jid, {
-        document: buffer,
-        mimetype: media.mimetype,
-        fileName: media.filename || "arquivo.pdf",
-        caption: media.caption || undefined,
-      });
-    }
-
-    // Grava no histórico da conversa do lead
-    await ingestLead(
-      clientId,
-      { phone: cleanPhone },
-      "manual",
-      {
+    const sent =
+      type === "image"
+        ? await session.socket.sendMessage(jid, {
+            image: buffer,
+            caption: media.caption,
+            mimetype: media.mimetype,
+          })
+        : type === "audio"
+          ? await session.socket.sendMessage(jid, {
+              audio: buffer,
+              mimetype: media.mimetype,
+              ptt: true,
+            })
+          : type === "video"
+            ? await session.socket.sendMessage(jid, {
+                video: buffer,
+                caption: media.caption,
+                mimetype: media.mimetype,
+              })
+            : await session.socket.sendMessage(jid, {
+                document: buffer,
+                mimetype: media.mimetype,
+                fileName: media.filename || "arquivo",
+                caption: media.caption,
+              });
+    const messageId = sent?.key.id || undefined;
+    try {
+      await ingestLead(clientId, { phone: cleanPhone }, "manual", {
         origin: "whatsapp-direto",
-        received_at: new Date().toISOString(),
+        provider: "baileys",
+        message_id: messageId,
+        received_at:
+          whatsappTimestamp(sent?.messageTimestamp) || new Date().toISOString(),
         instance: "baileys_nativo",
-        message_text: media.caption ? `📷 ${media.caption}` : `📎 [Arquivo: ${media.filename || "Mídia"}]`,
+        message_text: media.caption || media.filename || "Anexo enviado",
         fromMe: true,
-        type: media.mimetype.startsWith("image/") ? "image" : media.mimetype.startsWith("audio/") ? "audio" : "document",
-      }
-    );
-
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        type,
+        mimetype: media.mimetype,
+        filename: media.filename,
+        base64,
+      });
+      return { ok: true, messageId };
+    } catch {
+      return {
+        ok: true,
+        messageId,
+        warning:
+          "Arquivo enviado, mas o histórico não foi atualizado. Não reenvie para evitar duplicidade.",
+      };
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Não foi possível enviar o arquivo.",
+    };
   }
 }
 
-export async function disconnectNativeWhatsApp(clientId: string): Promise<{ ok: boolean; error?: string }> {
+export async function disconnectNativeWhatsApp(
+  clientId: string,
+): Promise<{ ok: boolean; error?: string }> {
   const session = sessions.get(clientId);
+  sessions.delete(clientId);
+  connects.delete(clientId);
   if (session?.socket) {
     try {
       await session.socket.logout();

@@ -4,114 +4,159 @@ import { hasPassword } from "@/lib/config";
 import { setupProblem } from "@/lib/store";
 import { StorageProblem } from "@/app/StorageProblem";
 import { Logo } from "@/app/Logo";
-import { EntrarButton } from "./EntrarButton";
-import { Hero } from "./Hero";
+import {
+  ArrowUpRight,
+  Check,
+  GitBranch,
+  MessageCircle,
+  ShieldCheck,
+  Sparkles,
+  UsersRound,
+} from "lucide-react";
 import { LoginForm, SetupForm } from "./LoginForm";
-
+import styles from "./Login.module.css";
 export const dynamic = "force-dynamic";
-
-const FEATURES = [
-  {
-    title: "Confira antes de enviar",
-    text: "Você vê exatamente o que vai para o Meta: evento, valor, ctwa_clid, telefone e dados com hash. Só depois aparece o botão de enviar.",
-  },
-  {
-    title: "Leads direto da Leona",
-    text: "O bloco de Integração da Leona manda nome, telefone e o clique do anúncio na hora em que o contato chega. Os antigos entram por CSV.",
-  },
-  {
-    title: "Histórico com resposta do Meta",
-    text: "Cada envio guarda o corpo enviado, o fbtrace_id e a resposta. Deu erro? Reenvia com o mesmo event_id, sem contar em dobro.",
-  },
-  {
-    title: "Vários clientes",
-    text: "Cada cliente tem pixel, token, Página e endereço de entrada próprios. Modo de teste por cliente antes de ir para produção.",
-  },
-];
-
-const STEPS = [
-  { n: "1", title: "Cadastre o cliente", text: "Pixel, token da API de Conversões, ID da Página e o código de Eventos de Teste." },
-  { n: "2", title: "Ligue a Leona", text: "Copie o endereço e o corpo mostrados no painel para o bloco de Integração do fluxo." },
-  { n: "3", title: "Confira e envie", text: "Abra o lead, escolha Compra, informe o valor, confira o evento e clique em enviar." },
-];
-
 export default async function LoginPage() {
   const problem = await setupProblem();
-  if (problem) return <StorageProblem message={problem.message} database={problem.database} sql={problem.sql} />;
-  const setup = !(await hasPassword());
-  if (!setup && (await isLoggedIn())) redirect("/");
-
+  if (problem)
+    return (
+      <StorageProblem
+        message={problem.message}
+        database={problem.database}
+        sql={problem.sql}
+      />
+    );
+  let setup: boolean;
+  try {
+    setup = !(await hasPassword());
+  } catch (error) {
+    return (
+      <StorageProblem
+        message={
+          error instanceof Error
+            ? error.message
+            : "Confira a configuração de acesso."
+        }
+        database={null}
+      />
+    );
+  }
+  if (!setup && (await isLoggedIn())) redirect("/dashboard");
   return (
-    <main className="landing">
-      <Hero setup={setup} />
-
-      <section id="entrar" className="landing-section landing-entrar">
-        <div className="glass-card">
-          <div className="flex items-center gap-2">
-            <Logo size={24} className="text-brand" />
-            <span className="font-ui text-[13px] font-semibold uppercase tracking-[1px] text-white/60">Track Manual</span>
+    <main className={styles.page}>
+      <section className={styles.story}>
+        <div className={styles.brand}>
+          <Logo size={28} />
+          <span>
+            track<strong>manual</strong>
+          </span>
+          <small>FLOW</small>
+        </div>
+        <div className={styles.storyMain}>
+          <span className={styles.kicker}>
+            <Sparkles size={13} />
+            RELACIONAMENTOS EM MOVIMENTO
+          </span>
+          <h1>
+            Um bom atendimento
+            <br />
+            muda <em>tudo.</em>
+          </h1>
+          <p>
+            Conecte conversas, organize oportunidades e acompanhe cada
+            resultado. Tudo no mesmo lugar.
+          </p>
+          <div className={styles.preview} aria-hidden="true">
+            <div className={styles.previewTop}>
+              <span />
+              <span />
+              <span />
+              <strong>Seu workspace, conectado.</strong>
+            </div>
+            <div className={styles.previewBody}>
+              <div className={styles.previewRail}>
+                <MessageCircle />
+                <UsersRound />
+                <GitBranch />
+              </div>
+              <div className={styles.previewChat}>
+                <span className={styles.previewDate}>
+                  Uma conversa. Muitas possibilidades.
+                </span>
+                <div className={styles.inbound}>
+                  Olá! Vi o anúncio e gostaria de saber mais.
+                  <small>09:41</small>
+                </div>
+                <div className={styles.outbound}>
+                  Que bom ter você por aqui! Vamos encontrar a melhor opção para
+                  você.
+                  <small>
+                    09:42 <Check size={10} />
+                  </small>
+                </div>
+                <span className={styles.previewSuccess}>
+                  <ShieldCheck size={13} />
+                  Contexto preservado. Próximo passo organizado.
+                </span>
+              </div>
+            </div>
           </div>
-          <h2 className="font-display text-[34px] font-normal leading-[1.1] text-white">{setup ? "Primeiro acesso" : "Entrar no painel"}</h2>
-          <p className="muted small">
+          <div className={styles.features}>
+            <span>
+              <Check size={13} />
+              Conversas organizadas
+            </span>
+            <span>
+              <Check size={13} />
+              Conversões conferidas
+            </span>
+          </div>
+        </div>
+        <div className={styles.storyFooter}>
+          Menos tarefas soltas. Mais conexões que fazem sentido.
+          <span>© {new Date().getFullYear()} Track Manual</span>
+        </div>
+      </section>
+      <section className={styles.entry}>
+        <div className={styles.topNote}>
+          <ShieldCheck size={14} />
+          Seu workspace. Seu acesso.
+        </div>
+        <div className={styles.formCard}>
+          <span className={styles.formIcon}>
+            <Logo size={27} />
+          </span>
+          <span className={styles.smallKicker}>
+            {setup ? "PRIMEIRO ACESSO" : "BOM TER VOCÊ DE VOLTA"}
+          </span>
+          <h2>
             {setup
-              ? "Crie a senha que você vai usar para entrar no painel. Ela fica guardada com hash, nunca em texto."
-              : "Entre com a senha do painel."}
+              ? "Seu próximo capítulo começa aqui."
+              : "Bem-vindo ao seu workspace."}
+          </h2>
+          <p>
+            {setup
+              ? "Crie a senha de administrador para começar a organizar seus atendimentos."
+              : "Entre com sua senha para continuar de onde parou."}
           </p>
           {setup ? <SetupForm /> : <LoginForm />}
+          <div className={styles.accessNote}>
+            <ShieldCheck size={13} />
+            <span>
+              Acesso restrito ao administrador.
+              <br />
+              Use uma senha exclusiva para este painel.
+            </span>
+          </div>
         </div>
+        <footer className={styles.entryFooter}>
+          <span>Track Manual · atendimento e conversões</span>
+          <span>
+            v3.0 · Flow
+            <ArrowUpRight size={11} />
+          </span>
+        </footer>
       </section>
-
-      <section id="recursos" className="landing-section">
-        <div className="landing-inner">
-          <p className="landing-kicker">Recursos</p>
-          <h2 className="landing-title">
-            Tudo o que a Leona não faz <em>e</em> o Meta exige
-          </h2>
-          <div className="landing-grid">
-            {FEATURES.map((f) => (
-              <div key={f.title} className="landing-card">
-                <h3>{f.title}</h3>
-                <p>{f.text}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section id="como-funciona" className="landing-section landing-alt">
-        <div className="landing-inner">
-          <p className="landing-kicker">Como funciona</p>
-          <h2 className="landing-title">Três passos, nenhuma surpresa</h2>
-          <div className="landing-steps">
-            {STEPS.map((s) => (
-              <div key={s.n} className="landing-step">
-                <span className="landing-step-n">{s.n}</span>
-                <div>
-                  <h3>{s.title}</h3>
-                  <p>{s.text}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="mt-8 flex justify-center">
-            <EntrarButton label={setup ? "Criar Minha Senha" : "Acessar o Painel"} />
-          </div>
-        </div>
-      </section>
-
-      <footer id="suporte" className="landing-footer">
-        <div className="landing-inner flex flex-col items-center gap-2 text-center">
-          <div className="flex items-center gap-2 text-white">
-            <Logo size={22} />
-            <span className="font-ui text-[15px] font-bold">Track Manual</span>
-          </div>
-          <p className="muted small">
-            Suporte: o passo a passo completo está no README do projeto. Problemas de conexão com o banco aparecem nesta
-            mesma tela, já com a explicação.
-          </p>
-          <p className="muted small">Continental MKT · painel de uso interno</p>
-        </div>
-      </footer>
     </main>
   );
 }

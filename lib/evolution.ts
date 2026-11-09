@@ -1,3 +1,4 @@
+import { selectReferralGroups } from "./ctwa";
 import { normalizePhone, ufFromPhone } from "./normalize";
 
 /**
@@ -18,16 +19,58 @@ export interface ParsedEvolutionLead {
   ad_body: string | null;
   message_text: string | null;
   instance: string | null;
+  fromMe: boolean;
+  message_id: string | null;
+  received_at: string | null;
+  type: "text" | "image" | "audio" | "video" | "document";
+  mimetype: string | null;
+  message_media_url: string | null;
+  base64: string | null;
+  filename: string | null;
+}
+
+/** LIDs identify a WhatsApp account, not a dialable phone number. */
+export function phoneFromWhatsAppJid(
+  jid: unknown,
+  alternate?: unknown,
+): string | null {
+  const value = typeof jid === "string" ? jid : "";
+  if (!value || /@(g\.us|broadcast|newsletter)$/.test(value)) return null;
+  if (value.endsWith("@lid")) {
+    const alt = typeof alternate === "string" ? alternate : "";
+    if (!alt || alt.endsWith("@lid")) return null;
+    return phoneFromWhatsAppJid(alt);
+  }
+  return normalizePhone(
+    value.replace(/@.*$/, "").split(":")[0].replace(/\D/g, ""),
+  );
+}
+
+export function whatsappTimestamp(value: unknown): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  const numeric =
+    typeof value === "object" && value && "low" in value
+      ? Number((value as { low: unknown }).low)
+      : Number(value);
+  const date =
+    Number.isFinite(numeric) && numeric > 0
+      ? new Date(numeric < 1e12 ? numeric * 1000 : numeric)
+      : new Date(String(value));
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
 }
 
 export function parseEvolutionWebhook(
-  payload: Record<string, unknown>
-): { ok: true; lead: ParsedEvolutionLead } | { ok: false; ignored?: boolean; error: string } {
+  payload: Record<string, unknown>,
+  options: { includeOutgoing?: boolean } = {},
+):
+  | { ok: true; lead: ParsedEvolutionLead }
+  | { ok: false; ignored?: boolean; error: string } {
   if (!payload || typeof payload !== "object") {
     return { ok: false, error: "Payload inválido ou vazio." };
   }
 
-  const instance = typeof payload.instance === "string" ? payload.instance : null;
+  const instance =
+    typeof payload.instance === "string" ? payload.instance : null;
 
   // Evolution API manda dados em "data", que pode ser objeto ou array
   let item = payload.data as Record<string, unknown> | undefined;
@@ -43,25 +86,51 @@ export function parseEvolutionWebhook(
   // Verifica chave da mensagem (remoteJid, fromMe)
   const key = (item.key || {}) as Record<string, unknown>;
   const fromMe = Boolean(key.fromMe || item.fromMe);
+  if (fromMe && !options.includeOutgoing) {
+    return {
+      ok: false,
+      ignored: true,
+      error: "Mensagem enviada pelo próprio número (fromMe: true).",
+    };
+  }
 
   const rawJid = String(key.remoteJid || item.remoteJid || item.phone || "");
   if (!rawJid) {
-    return { ok: false, error: "Nenhum remoteJid ou telefone encontrado no webhook." };
+    return {
+      ok: false,
+      error: "Nenhum remoteJid ou telefone encontrado no webhook.",
+    };
   }
 
   // Ignora mensagens de grupos (@g.us), status/stories (@broadcast)
   if (rawJid.includes("@g.us") || rawJid.includes("@broadcast")) {
-    return { ok: false, ignored: true, error: "Mensagem de grupo ou broadcast ignorada." };
+    return {
+      ok: false,
+      ignored: true,
+      error: "Mensagem de grupo ou broadcast ignorada.",
+    };
   }
 
-  const rawPhone = rawJid.replace(/@.*$/, "").replace(/\D/g, "");
-  const phone = normalizePhone(rawPhone);
+  const phone = phoneFromWhatsAppJid(
+    rawJid,
+    key.remoteJidAlt || item.remoteJidAlt || item.senderPn,
+  );
   if (!phone) {
-    return { ok: false, error: `Telefone inválido extraído do remoteJid: ${rawJid}` };
+    if (rawJid.endsWith("@lid"))
+      return {
+        ok: false,
+        ignored: true,
+        error: "Identificador LID sem telefone resolvido.",
+      };
+    return {
+      ok: false,
+      error: `Telefone inválido extraído do remoteJid: ${rawJid}`,
+    };
   }
 
-  const name =
-    typeof item.pushName === "string" && item.pushName.trim()
+  const name = fromMe
+    ? null
+    : typeof item.pushName === "string" && item.pushName.trim()
       ? item.pushName.trim()
       : typeof item.verifiedName === "string" && item.verifiedName.trim()
         ? item.verifiedName.trim()
@@ -76,7 +145,8 @@ export function parseEvolutionWebhook(
       (rawMessage.ephemeralMessage as Record<string, unknown>)?.message ||
       (rawMessage.viewOnceMessage as Record<string, unknown>)?.message ||
       (rawMessage.viewOnceMessageV2 as Record<string, unknown>)?.message ||
-      (rawMessage.documentWithCaptionMessage as Record<string, unknown>)?.message;
+      (rawMessage.documentWithCaptionMessage as Record<string, unknown>)
+        ?.message;
     if (inner && typeof inner === "object") {
       rawMessage = inner as Record<string, unknown>;
     } else {
@@ -89,11 +159,36 @@ export function parseEvolutionWebhook(
   const img = (rawMessage.imageMessage || {}) as Record<string, unknown>;
   const vid = (rawMessage.videoMessage || {}) as Record<string, unknown>;
   const doc = (rawMessage.documentMessage || {}) as Record<string, unknown>;
-  const btn = (rawMessage.buttonsResponseMessage || {}) as Record<string, unknown>;
-  const tpl = (rawMessage.templateButtonReplyMessage || {}) as Record<string, unknown>;
+  const btn = (rawMessage.buttonsResponseMessage || {}) as Record<
+    string,
+    unknown
+  >;
+  const tpl = (rawMessage.templateButtonReplyMessage || {}) as Record<
+    string,
+    unknown
+  >;
+  const aud = (rawMessage.audioMessage || {}) as Record<string, unknown>;
+  const messageType = rawMessage.imageMessage
+    ? "image"
+    : rawMessage.audioMessage
+      ? "audio"
+      : rawMessage.videoMessage
+        ? "video"
+        : rawMessage.documentMessage
+          ? "document"
+          : "text";
+  const attachment =
+    messageType === "image"
+      ? img
+      : messageType === "audio"
+        ? aud
+        : messageType === "video"
+          ? vid
+          : doc;
 
   const conversation =
-    typeof rawMessage.conversation === "string" && rawMessage.conversation.trim()
+    typeof rawMessage.conversation === "string" &&
+    rawMessage.conversation.trim()
       ? rawMessage.conversation.trim()
       : typeof ext.text === "string" && ext.text.trim()
         ? ext.text.trim()
@@ -103,159 +198,52 @@ export function parseEvolutionWebhook(
             ? vid.caption.trim()
             : typeof doc.caption === "string" && doc.caption.trim()
               ? doc.caption.trim()
-              : typeof btn.selectedButtonText === "string" && btn.selectedButtonText.trim()
+              : typeof btn.selectedButtonText === "string" &&
+                  btn.selectedButtonText.trim()
                 ? btn.selectedButtonText.trim()
-                : typeof tpl.selectedDisplayText === "string" && tpl.selectedDisplayText.trim()
+                : typeof tpl.selectedDisplayText === "string" &&
+                    tpl.selectedDisplayText.trim()
                   ? tpl.selectedDisplayText.trim()
                   : null;
 
-  // ctwaClid pode estar em vários lugares dependendo do tipo da mensagem
-  const contextInfo =
-    (ext.contextInfo as Record<string, unknown>) ||
-    (img.contextInfo as Record<string, unknown>) ||
-    (vid.contextInfo as Record<string, unknown>) ||
-    (doc.contextInfo as Record<string, unknown>) ||
-    (rawMessage.contextInfo as Record<string, unknown>) ||
-    (item.contextInfo as Record<string, unknown>) ||
-    {};
+  // A provider context is one referral. Never fill its missing click/ad fields
+  // with values from an unrelated context or from the webhook root.
+  const referral = selectReferralGroups([
+    ext.contextInfo,
+    img.contextInfo,
+    vid.contextInfo,
+    doc.contextInfo,
+    aud.contextInfo,
+    rawMessage.contextInfo,
+    item.contextInfo,
+    {
+      ctwa_clid: item._baileys_ctwa_clid,
+      source_id: item._baileys_source_id,
+      source_url: item._baileys_source_url,
+      thumbnail_url: item._baileys_thumbnail_url,
+      headline: item._baileys_headline,
+      ad_body: item._baileys_ad_body,
+    },
+    item,
+  ]);
+  const ctwa_clid = referral?.ctwa_clid || null;
+  let source_id = referral?.source_id || null;
+  const source_url = referral?.source_url || null;
+  const thumbnail_url = referral?.thumbnail_url || null;
+  const media_url = referral?.media_url || null;
+  const headline = referral?.headline || null;
+  const ad_body = referral?.ad_body || null;
 
-  // Dados do anúncio (externalAdReply)
-  const adReply =
-    (contextInfo.externalAdReply as Record<string, unknown>) ||
-    (item.externalAdReply as Record<string, unknown>) ||
-    {};
-
-  // CTWA Click ID com conversão de Buffer / Uint8Array / Base64 (Protobuf Baileys / Evolution)
-  const ctwaClidRaw =
-    contextInfo.ctwaClid ??
-    contextInfo.ctwa_clid ??
-    contextInfo.conversionData ??
-    contextInfo.conversion_data ??
-    adReply.ctwaClid ??
-    adReply.ctwa_clid ??
-    adReply.conversionData ??
-    adReply.conversion_data ??
-    item.ctwaClid ??
-    item.ctwa_clid ??
-    item._baileys_ctwa_clid ??
-    null;
-
-  let ctwa_clid: string | null = null;
-
-  if (ctwaClidRaw != null) {
-    if (Buffer.isBuffer(ctwaClidRaw) || ctwaClidRaw instanceof Uint8Array) {
-      const buf = Buffer.from(ctwaClidRaw);
-      if (buf.length > 0) {
-        // 1. Tenta extrair string legível se houver
-        const utf8 = buf.toString("utf-8").trim();
-        const m = utf8.match(/([a-zA-Z0-9+/=_-]{20,})/);
-        if (m && m[1].length >= 20) {
-          ctwa_clid = m[1];
-        } else {
-          // 2. Converte bytes brutos para Base64 (formato oficial do Meta para conversion_data)
-          const b64 = buf.toString("base64").trim();
-          if (b64 && b64.length >= 16) {
-            ctwa_clid = b64;
-          }
-        }
-      }
-    } else if (typeof ctwaClidRaw === "string" && ctwaClidRaw.trim()) {
-      const trimmed = ctwaClidRaw.trim();
-      // Se for base64 ou token alfanumérico
-      if (/^[A-Za-z0-9+/=_-]{16,}$/.test(trimmed)) {
-        ctwa_clid = trimmed;
-      } else {
-        ctwa_clid = trimmed;
-      }
-    } else {
-      const s = String(ctwaClidRaw).trim();
-      if (s && s !== "[object Object]" && s !== "null" && s !== "undefined") {
-        ctwa_clid = s;
-      }
-    }
-  }
-
-  // Se conversionData veio em Base64 separado ou string
-  if (!ctwa_clid && (contextInfo.conversionData || adReply.conversionData)) {
-    const rawConv = contextInfo.conversionData || adReply.conversionData;
-    if (Buffer.isBuffer(rawConv) || rawConv instanceof Uint8Array) {
-      ctwa_clid = Buffer.from(rawConv).toString("base64").trim();
-    } else if (typeof rawConv === "string" && rawConv.trim()) {
-      try {
-        const decoded = Buffer.from(rawConv, "base64").toString("utf-8");
-        const m = decoded.match(/([a-zA-Z0-9_-]{20,})/);
-        ctwa_clid = m ? m[1] : rawConv.trim();
-      } catch {
-        ctwa_clid = rawConv.trim();
-      }
-    }
-  }
-
-  const sourceIdRaw =
-    adReply.sourceId ??
-    adReply.source_id ??
-    adReply.adId ??
-    adReply.ad_id ??
-    item.sourceId ??
-    item.source_id;
-
-  let source_id: string | null = null;
-  if (sourceIdRaw != null) {
-    const s = String(sourceIdRaw).trim();
-    if (s && s !== "0" && s !== "null" && s !== "undefined") {
-      source_id = s;
-    }
-  }
-
-  const sourceUrlRaw = adReply.sourceUrl || adReply.source_url || item.source_url;
-  let source_url = typeof sourceUrlRaw === "string" && sourceUrlRaw.trim() ? sourceUrlRaw.trim() : null;
-
-  // Se ctwa_clid ou source_id não veio no contextInfo, tenta resgatar da URL do anúncio
-  if (source_url) {
-    try {
-      const u = new URL(source_url);
-      if (!ctwa_clid) {
-        ctwa_clid = u.searchParams.get("ctwa_clid") || u.searchParams.get("fbclid") || null;
-      }
-      if (!source_id) {
-        const urlAd = u.searchParams.get("ad_id") || u.searchParams.get("hsa_ad") || u.searchParams.get("ad");
-        if (urlAd) source_id = urlAd;
-      }
-    } catch {
-      if (!ctwa_clid) {
-        const m = source_url.match(/(?:ctwa_clid|fbclid)=([^&]+)/i);
-        if (m) ctwa_clid = decodeURIComponent(m[1]);
-      }
-      if (!source_id) {
-        const m = source_url.match(/(?:ad_id|hsa_ad)=(\d+)/i);
-        if (m) source_id = m[1];
-      }
-    }
-  }
-
-  // Rastreamento por TAG na Mensagem Pré-definida do Anúncio (Ex: [AD:120247299656290265] ou [REF:123456])
-  // Isso garante 100% de atribuição mesmo se o WhatsApp não mandar o ctwa_clid!
-  if (!source_id && conversation) {
+  // A tag is an ad reference only; it must not be paired with another context's click.
+  if (!referral && conversation) {
     const tagMatch =
-      conversation.match(/\[(?:AD|REF|COD|ANUNCIO|ID|ANÚNCIO)[:\s-]*(\d{6,})\]/i) ||
+      conversation.match(
+        /\[(?:AD|REF|COD|ANUNCIO|ID|ANÚNCIO)[:\s-]*(\d{6,})\]/i,
+      ) ||
       conversation.match(/(?:AD|REF|COD|ANUNCIO|ANÚNCIO)[:\s-]+(\d{6,})/i) ||
       conversation.match(/(?:hsa_ad|ad_id)=(\d{6,})/i);
-    if (tagMatch) {
-      source_id = tagMatch[1];
-    }
+    if (tagMatch) source_id = tagMatch[1];
   }
-
-  const thumbRaw = adReply.thumbnailUrl || adReply.thumbnail_url || item.thumbnail_url;
-  const thumbnail_url = typeof thumbRaw === "string" && thumbRaw.trim() ? thumbRaw.trim() : null;
-
-  const mediaRaw = adReply.mediaUrl || adReply.media_url || item.media_url;
-  const media_url = typeof mediaRaw === "string" && mediaRaw.trim() ? mediaRaw.trim() : null;
-
-  const titleRaw = adReply.title || adReply.headline || item.headline;
-  const headline = typeof titleRaw === "string" && titleRaw.trim() ? titleRaw.trim() : null;
-
-  const bodyRaw = adReply.body || adReply.ad_body || item.ad_body;
-  const ad_body = typeof bodyRaw === "string" && bodyRaw.trim() ? bodyRaw.trim() : null;
 
   return {
     ok: true,
@@ -271,6 +259,22 @@ export function parseEvolutionWebhook(
       ad_body,
       message_text: conversation,
       instance,
+      fromMe,
+      message_id:
+        typeof key.id === "string"
+          ? key.id
+          : typeof item.id === "string"
+            ? item.id
+            : null,
+      received_at: whatsappTimestamp(item.messageTimestamp || item.timestamp),
+      type: messageType,
+      mimetype:
+        typeof attachment.mimetype === "string" ? attachment.mimetype : null,
+      message_media_url:
+        typeof item.mediaUrl === "string" ? item.mediaUrl : null,
+      base64: typeof item.base64 === "string" ? item.base64 : null,
+      filename:
+        typeof attachment.fileName === "string" ? attachment.fileName : null,
     },
   };
 }
@@ -296,7 +300,7 @@ export function normalizeBaseUrl(url: string): string {
 
 export async function safeFetchJson<T = any>(
   url: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
 ): Promise<{ ok: boolean; status: number; data: T | null; error?: string }> {
   let res: Response;
   try {
@@ -318,7 +322,11 @@ export async function safeFetchJson<T = any>(
         error: `Tempo limite esgotado ao conectar a ${url} (12s). Verifique se o servidor está ativo e a porta aberta no firewall.`,
       };
     }
-    if (msg.includes("fetch failed") || msg.includes("ECONNREFUSED") || msg.includes("ENOTFOUND")) {
+    if (
+      msg.includes("fetch failed") ||
+      msg.includes("ECONNREFUSED") ||
+      msg.includes("ENOTFOUND")
+    ) {
       return {
         ok: false,
         status: 503,
@@ -326,7 +334,12 @@ export async function safeFetchJson<T = any>(
         error: `Não foi possível conectar ao servidor (${url}). Verifique se a Evolution API está em execução no endereço e porta informados.`,
       };
     }
-    return { ok: false, status: 500, data: null, error: `Erro de conexão: ${msg}` };
+    return {
+      ok: false,
+      status: 500,
+      data: null,
+      error: `Erro de conexão: ${msg}`,
+    };
   }
 
   const rawText = await res.text();
@@ -412,33 +425,40 @@ export async function evolutionGetState(config: EvolutionConfig): Promise<{
   const json = res.data as any;
   const state = json?.instance?.state || json?.state || "close";
   const phone = json?.instance?.ownerJid || json?.ownerJid || null;
-  return { ok: true, state, phone: phone ? String(phone).replace(/\D/g, "") : null };
+  return {
+    ok: true,
+    state,
+    phone: phone ? String(phone).replace(/\D/g, "") : null,
+  };
 }
 
 export async function evolutionSetWebhook(
   config: EvolutionConfig,
-  webhookUrl: string
+  webhookUrl: string,
 ): Promise<{ ok: boolean; error?: string }> {
   const base = normalizeBaseUrl(config.serverUrl);
-  const res = await safeFetchJson(`${base}/webhook/set/${encodeURIComponent(config.instanceName)}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      apikey: config.apiKey,
+  const res = await safeFetchJson(
+    `${base}/webhook/set/${encodeURIComponent(config.instanceName)}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        apikey: config.apiKey,
+      },
+      body: JSON.stringify({
+        enabled: true,
+        url: webhookUrl,
+        webhookByEvents: false,
+        events: ["MESSAGES_UPSERT"],
+      }),
     },
-    body: JSON.stringify({
-      enabled: true,
-      url: webhookUrl,
-      webhookByEvents: false,
-      events: ["MESSAGES_UPSERT"],
-    }),
-  });
+  );
   return { ok: res.ok, error: res.error };
 }
 
 export async function evolutionCreateOrConnect(
   config: EvolutionConfig,
-  webhookUrl?: string
+  webhookUrl?: string,
 ): Promise<{
   ok: boolean;
   state: "open" | "connecting" | "close";
@@ -460,7 +480,9 @@ export async function evolutionCreateOrConnect(
       ok: false,
       state: "close",
       qrcode: null,
-      error: current.error || "Não foi possível verificar a instância da Evolution API.",
+      error:
+        current.error ||
+        "Não foi possível verificar a instância da Evolution API.",
     };
   }
 
@@ -480,7 +502,12 @@ export async function evolutionCreateOrConnect(
     });
 
     if (!createRes.ok) {
-      return { ok: false, state: "close", qrcode: null, error: createRes.error };
+      return {
+        ok: false,
+        state: "close",
+        qrcode: null,
+        error: createRes.error,
+      };
     }
 
     if (webhookUrl) await evolutionSetWebhook(config, webhookUrl);
@@ -490,9 +517,12 @@ export async function evolutionCreateOrConnect(
   }
 
   // 3. Se já existe mas está desconectada, chama connect para obter novo QR Code
-  const connRes = await safeFetchJson(`${base}/instance/connect/${encodeURIComponent(config.instanceName)}`, {
-    headers: { apikey: config.apiKey },
-  });
+  const connRes = await safeFetchJson(
+    `${base}/instance/connect/${encodeURIComponent(config.instanceName)}`,
+    {
+      headers: { apikey: config.apiKey },
+    },
+  );
 
   if (!connRes.ok) {
     return { ok: false, state: "close", qrcode: null, error: connRes.error };
@@ -504,37 +534,106 @@ export async function evolutionCreateOrConnect(
   return { ok: true, state: "connecting", qrcode: qr };
 }
 
-export async function evolutionLogout(config: EvolutionConfig): Promise<{ ok: boolean; error?: string }> {
+export async function evolutionLogout(
+  config: EvolutionConfig,
+): Promise<{ ok: boolean; error?: string }> {
   const base = normalizeBaseUrl(config.serverUrl);
-  const res = await safeFetchJson(`${base}/instance/logout/${encodeURIComponent(config.instanceName)}`, {
-    method: "DELETE",
-    headers: { apikey: config.apiKey },
-  });
+  const res = await safeFetchJson(
+    `${base}/instance/logout/${encodeURIComponent(config.instanceName)}`,
+    {
+      method: "DELETE",
+      headers: { apikey: config.apiKey },
+    },
+  );
   return { ok: res.ok, error: res.error };
 }
 
 export async function evolutionSendMessage(
   config: EvolutionConfig,
   phone: string,
-  text: string
-): Promise<{ ok: boolean; error?: string }> {
+  text: string,
+): Promise<{ ok: boolean; error?: string; messageId?: string }> {
   const base = normalizeBaseUrl(config.serverUrl);
   const cleanPhone = phone.replace(/\D/g, "");
-  const res = await safeFetchJson(`${base}/message/sendText/${encodeURIComponent(config.instanceName)}`, {
-    method: "POST",
-    headers: {
-      apikey: config.apiKey,
-      "Content-Type": "application/json",
+  const res = await safeFetchJson(
+    `${base}/message/sendText/${encodeURIComponent(config.instanceName)}`,
+    {
+      method: "POST",
+      headers: {
+        apikey: config.apiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        number: cleanPhone,
+        text,
+      }),
     },
-    body: JSON.stringify({
-      number: cleanPhone,
-      text,
-    }),
-  });
+  );
   if (!res.ok) {
-    return { ok: false, error: res.error || "Erro ao enviar mensagem pela Evolution API." };
+    return {
+      ok: false,
+      error: res.error || "Erro ao enviar mensagem pela Evolution API.",
+    };
   }
-  return { ok: true };
+  return { ok: true, messageId: sentMessageId(res.data) };
 }
 
+export async function evolutionSendMedia(
+  config: EvolutionConfig,
+  phone: string,
+  media: {
+    base64: string;
+    mimetype: string;
+    filename?: string;
+    caption?: string;
+  },
+): Promise<{ ok: boolean; error?: string; messageId?: string }> {
+  const number = normalizePhone(phone);
+  if (!number) return { ok: false, error: "Telefone inválido." };
+  const base64 = media.base64.replace(/^data:.*?;base64,/, "");
+  if (!base64 || Buffer.byteLength(base64, "base64") > 8 * 1024 * 1024)
+    return { ok: false, error: "Envie um arquivo de até 8 MB." };
+  const audio = media.mimetype.startsWith("audio/");
+  const response = await safeFetchJson(
+    `${normalizeBaseUrl(config.serverUrl)}/message/${audio ? "sendWhatsAppAudio" : "sendMedia"}/${encodeURIComponent(config.instanceName)}`,
+    {
+      method: "POST",
+      headers: { apikey: config.apiKey, "Content-Type": "application/json" },
+      body: JSON.stringify(
+        audio
+          ? { number, audio: base64 }
+          : {
+              number,
+              mediatype: media.mimetype.startsWith("image/")
+                ? "image"
+                : media.mimetype.startsWith("video/")
+                  ? "video"
+                  : "document",
+              mimetype: media.mimetype,
+              caption: media.caption || "",
+              media: base64,
+              fileName: media.filename || "arquivo",
+            },
+      ),
+    },
+  );
+  return {
+    ok: response.ok,
+    error: response.error,
+    messageId: sentMessageId(response.data),
+  };
+}
 
+function sentMessageId(data: unknown): string | undefined {
+  if (!data || typeof data !== "object") return undefined;
+  const row = data as Record<string, unknown>;
+  const key =
+    row.key && typeof row.key === "object"
+      ? (row.key as Record<string, unknown>)
+      : {};
+  return typeof key.id === "string"
+    ? key.id
+    : typeof row.id === "string"
+      ? row.id
+      : undefined;
+}

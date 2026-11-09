@@ -1,199 +1,325 @@
 "use client";
 
-import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import type { ChangeEvent, FormEvent, ReactNode } from "react";
 import Link from "next/link";
 import {
+  ArrowDown,
+  ArrowLeft,
+  ArrowUpRight,
   BadgeCheck,
   Check,
-  CheckCheck,
+  ChevronDown,
   ChevronRight,
-  Clock,
+  CircleAlert,
+  Clock3,
   Copy,
-  DollarSign,
-  ExternalLink,
-  Flame,
+  Download,
+  FileText,
   Image as ImageIcon,
+  Info,
   Loader2,
+  Megaphone,
   MessageCircle,
-  MessageSquare,
-  Mic,
+  MessagesSquare,
+  MoreHorizontal,
   Paperclip,
   Phone,
+  Plus,
   RefreshCw,
   Search,
   Send,
+  ShieldCheck,
+  Sparkles,
   Tag,
-  TrendingUp,
-  User,
-  Volume2,
+  Users,
+  Wallet,
   X,
   Zap,
 } from "lucide-react";
-import { pullCtwaFromPhoneAction, sendEventAction, sendWhatsAppMessageAction, sendWhatsAppMediaAction, autoRecoverLeadNamesAction } from "@/app/actions";
-import { Button } from "@/components/ui/button";
+import {
+  previewEventAction,
+  pullCtwaFromPhoneAction,
+  saveLeadNotesAction,
+  sendEventAction,
+  sendWhatsAppMediaAction,
+  sendWhatsAppMessageAction,
+  setLeadAdAction,
+} from "@/app/actions";
+import type { EventFormInput, EventPreview } from "@/app/actions";
 import { formatDateTime, formatMoney, formatPhone } from "@/lib/format";
-import type { Lead } from "@/lib/types";
+import type { AdInfo, EventRow, Lead } from "@/lib/types";
+import { leadRaw, messagesFor, unansweredCount } from "./conversation-data";
+import type { ConversationMessage } from "./conversation-data";
+import styles from "./Conversas.module.css";
 
 interface ClientBasic {
   id: string;
   name: string;
   default_currency: string;
 }
-
 interface ConversasClientProps {
   clients: ClientBasic[];
   initialLeads: Lead[];
-  adsData: Record<string, any>;
-  eventsData: Record<string, any[]>;
+  adsData: Record<string, AdInfo>;
+  eventsData: Record<string, EventRow[]>;
   clientNameMap: Record<string, string>;
   initialSelectedLeadId: string | null;
   initialClientId: string;
   initialSearchQuery: string;
+  initialOpenThread?: boolean;
+  initialHasMore?: boolean;
+  initialUpdatedAt?: string;
+  initialSoundEnabled?: boolean;
+  initialBadgeEnabled?: boolean;
 }
-
-type TabFilter = "todos" | "nao-respondidas" | "com-anuncio" | "com-venda" | "aguardando" | "pix";
-
-function getUnansweredCount(lead: Lead): number {
-  const rawObj = (lead.raw && typeof lead.raw === "object") ? (lead.raw as Record<string, any>) : {};
-  const msgs = Array.isArray(rawObj.messages) ? rawObj.messages : [];
-  if (msgs.length === 0) return 0;
-
-  let count = 0;
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    if (msgs[i].fromMe) break;
-    count++;
-  }
-  return count;
+type InboxTab = "all" | "waiting" | "sold";
+type OriginFilter = "all" | "ad" | "organic" | "pix";
+interface LiveResponse {
+  ok: boolean;
+  leads?: Lead[];
+  adsData?: Record<string, AdInfo>;
+  eventsData?: Record<string, EventRow[]>;
+  hasMore?: boolean;
+  error?: string;
 }
-
-const QUICK_SLASH_COMMANDS = [
-  { trigger: "/ola", label: "👋 Olá!", text: "Olá! Tudo bem? Como posso te ajudar hoje?" },
-  { trigger: "/anuncio", label: "🎯 Vi seu Anúncio", text: "Olá! Vi que você veio pelo nosso anúncio. Gostaria de tirar alguma dúvida ou fechar seu pedido?" },
-  { trigger: "/pix", label: "💳 Chave PIX", text: "Segue nossa chave PIX para pagamento: [CHAVE PIX]. Assim que realizar o envio, me mande o comprovante por aqui!" },
-  { trigger: "/confirmado", label: "✅ Confirmado", text: "Pagamento e pedido confirmados com sucesso! Seja muito bem-vindo(a)!" },
-  { trigger: "/catalogo", label: "📦 Catálogo", text: "Aqui está o nosso catálogo de produtos com valores e promoções especiais!" },
+interface SaleIntent {
+  lead: Lead;
+  input: EventFormInput;
+  preview: EventPreview | null;
+}
+const SHORTCUTS = [
+  {
+    key: "/ola",
+    title: "Boas-vindas",
+    text: "Olá! Tudo bem? Sou da equipe de atendimento. Como posso ajudar você hoje?",
+  },
+  {
+    key: "/duvida",
+    title: "Tirar uma dúvida",
+    text: "Claro! Pode me contar um pouco mais sobre o que você precisa? Estou por aqui para ajudar.",
+  },
+  {
+    key: "/confirmado",
+    title: "Pagamento confirmado",
+    text: "Recebemos o seu pagamento. Seu pedido está confirmado! Obrigado pela confiança.",
+  },
 ];
+const stringValue = (value: unknown) =>
+  typeof value === "string" ? value : "";
+const realClick = (lead: Lead) =>
+  Boolean(lead.ctwa_clid && !lead.ctwa_clid.startsWith("ctwa_ad_"));
+const initials = (name: string) =>
+  name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join("")
+    .toUpperCase();
+const leadKey = (lead: Lead) =>
+  `${lead.client_id}:${lead.phone.replace(/\D/g, "")}`;
 
-function playNotificationSound() {
-  try {
-    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.type = "sine";
-    osc.frequency.setValueAtTime(587.33, ctx.currentTime);
-    osc.frequency.setValueAtTime(880, ctx.currentTime + 0.1);
-    gain.gain.setValueAtTime(0.12, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
-    osc.start();
-    osc.stop(ctx.currentTime + 0.35);
-  } catch {}
-}
-
-function getLeadDisplayName(lead: Lead | null | undefined): string {
-  if (!lead) return "Sem Nome";
-  if (lead.name && lead.name.trim() && lead.name.trim() !== "Sem Nome") {
+function displayName(lead: Lead) {
+  if (
+    lead.name?.trim() &&
+    lead.name.trim() !== "Sem Nome" &&
+    !/continental\s*studio/i.test(lead.name.trim())
+  )
     return lead.name.trim();
+  const raw = leadRaw(lead);
+  for (const key of [
+    "pushName",
+    "pushname",
+    "notifyName",
+    "verifiedName",
+    "name",
+  ]) {
+    const val = stringValue(raw[key]).trim();
+    if (val && val !== "Sem Nome" && !/continental\s*studio/i.test(val))
+      return val;
   }
-  const raw = lead.raw as Record<string, any> | null;
-  if (raw) {
-    if (typeof raw.pushName === "string" && raw.pushName.trim()) return raw.pushName.trim();
-    if (typeof raw.pushname === "string" && raw.pushname.trim()) return raw.pushname.trim();
-    if (typeof raw.notifyName === "string" && raw.notifyName.trim()) return raw.notifyName.trim();
-    if (typeof raw.verifiedName === "string" && raw.verifiedName.trim()) return raw.verifiedName.trim();
-    if (typeof raw.name === "string" && raw.name.trim() && raw.name.trim() !== "Sem Nome") return raw.name.trim();
-    if (raw.sender && typeof raw.sender.name === "string" && raw.sender.name.trim()) return raw.sender.name.trim();
-    if (Array.isArray(raw.messages)) {
-      for (let i = raw.messages.length - 1; i >= 0; i--) {
-        const m = raw.messages[i];
-        if (m && typeof m.senderName === "string" && m.senderName.trim()) return m.senderName.trim();
-        if (m && typeof m.pushName === "string" && m.pushName.trim()) return m.pushName.trim();
+  const msgs = messagesFor(lead);
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i] as Record<string, unknown>;
+    if (!m.fromMe) {
+      for (const k of ["senderName", "pushName", "notifyName", "name"]) {
+        const val = stringValue(m[k]).trim();
+        if (val && val !== "Sem Nome" && !/continental\s*studio/i.test(val))
+          return val;
       }
-    }
-  }
-  // Extrai nome de notas e propostas comerciais importadas (ex: "Cliente: Vilson Gregorio")
-  if (lead.notes) {
-    const m =
-      lead.notes.match(/(?:Cliente|Nome|Lead|Contato):\s*([^\n\r,•*#|]+)/i) ||
-      lead.notes.match(/👤\s*(?:\*\*)?(?:Cliente|Nome)?(?:\*\*)?:\s*([^\n\r,•*#|]+)/i);
-    if (m && m[1].trim() && !/pendente/i.test(m[1])) {
-      const extracted = m[1].trim().replace(/^[*_#\s]+|[*_#\s]+$/g, "");
-      if (extracted.length >= 2) return extracted;
     }
   }
   return formatPhone(lead.phone);
 }
-
-function getLeadAvatarUrl(lead: Lead | null | undefined): string | null {
-  if (!lead) return null;
-  const raw = lead.raw as Record<string, any> | null;
-  if (raw) {
-    if (typeof raw.profilePicUrl === "string" && raw.profilePicUrl.startsWith("http")) return raw.profilePicUrl;
-    if (typeof raw.profile_picture === "string" && raw.profile_picture.startsWith("http")) return raw.profile_picture;
-    if (typeof raw.avatarUrl === "string" && raw.avatarUrl.startsWith("http")) return raw.avatarUrl;
-    if (typeof raw.avatar === "string" && raw.avatar.startsWith("http")) return raw.avatar;
-    if (typeof raw.picture === "string" && raw.picture.startsWith("http")) return raw.picture;
+function avatarUrl(lead: Lead) {
+  const raw = leadRaw(lead);
+  for (const key of [
+    "profilePicUrl",
+    "profile_picture",
+    "avatarUrl",
+    "avatar",
+    "picture",
+  ]) {
+    if (/^https?:\/\//.test(stringValue(raw[key])))
+      return stringValue(raw[key]);
   }
   return null;
 }
-
-function getInitials(name: string | null): string {
-  return (name || "?")
-    .split(" ")
-    .map((p) => p[0])
-    .slice(0, 2)
-    .join("")
-    .toUpperCase();
+function timestamp(message: ConversationMessage, fallback: string) {
+  const raw = message.at || fallback;
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : Date.parse(fallback);
 }
-
-function getAvatarGradient(name: string | null): string {
-  const colors = [
-    "linear-gradient(135deg,#7b39fc,#a855f7)",
-    "linear-gradient(135deg,#2563eb,#7b39fc)",
-    "linear-gradient(135deg,#059669,#34c77b)",
-    "linear-gradient(135deg,#dc2626,#f97316)",
-    "linear-gradient(135deg,#0891b2,#38bdf8)",
-    "linear-gradient(135deg,#7c3aed,#ec4899)",
-    "linear-gradient(135deg,#b45309,#fbbf24)",
-  ];
-  const idx = (name || "?").charCodeAt(0) % colors.length;
-  return colors[idx];
+function latestTime(lead: Lead) {
+  const last = messagesFor(lead).at(-1);
+  return last ? timestamp(last, lead.updated_at) : Date.parse(lead.updated_at);
 }
-
-function timeAgo(isoString: string): string {
-  const diff = Date.now() - new Date(isoString).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return "agora";
-  if (mins < 60) return `${mins}min`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h`;
-  return `${Math.floor(hrs / 24)}d`;
+function timeLabel(value: number | string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "—"
+    : date.toLocaleTimeString("pt-BR", {
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZone: "America/Sao_Paulo",
+      });
 }
-
-// Detecta o tipo de mensagem para o ícone da lista
-function getMessageTypeIcon(lead: Lead): "audio" | "image" | "text" {
-  const raw = lead.raw as Record<string, any> | null;
-  if (!raw) return "text";
-  const msgs: any[] = Array.isArray(raw.messages) ? raw.messages : [];
-  const last = msgs[msgs.length - 1];
-  if (!last) return "text";
-  if (last.type === "audio" || last.isAudio) return "audio";
-  if (last.type === "image" || last.isImage) return "image";
-  return "text";
+function snippet(lead: Lead) {
+  const last = messagesFor(lead).at(-1);
+  if (last?.type === "audio") return "Mensagem de áudio";
+  if (last?.type === "image") return last.caption || "Imagem";
+  if (last?.type === "document") return last.filename || "Documento";
+  const text = last?.text || stringValue(leadRaw(lead).message_text);
+  return text && !text.startsWith("data:")
+    ? text
+    : "Nenhuma mensagem sincronizada";
 }
-
-function extractMessageText(lead: Lead): string {
-  const raw = lead.raw as Record<string, any> | null;
-  if (raw?.message_text && typeof raw.message_text === "string" && raw.message_text.trim()) {
-    return raw.message_text.trim();
-  }
-  if (lead.notes) {
-    const m = lead.notes.match(/(?:WhatsApp|msg|Msg):\s*"?([^"\n\r]+)"?/i);
-    if (m && m[1].trim()) return m[1].trim();
-    if (!lead.notes.includes("PROPOSTA")) return lead.notes.trim();
-  }
-  return "Olá! Gostaria de saber mais informações.";
+function mediaSource(message: ConversationMessage) {
+  const explicit = message.media_url || message.mediaUrl || message.url;
+  if (explicit && /^https?:\/\//.test(explicit)) return explicit;
+  const base64 =
+    message.base64 || (message.text?.startsWith("data:") ? message.text : "");
+  if (!base64) return null;
+  if (base64.startsWith("data:"))
+    return /^data:(image|audio|video)\/[\w.+-]+;base64,/.test(base64) ||
+      /^data:application\/pdf;base64,/.test(base64)
+      ? base64
+      : null;
+  const mime =
+    message.mimetype ||
+    message.mimeType ||
+    (message.type === "audio"
+      ? "audio/ogg"
+      : message.type === "image"
+        ? "image/jpeg"
+        : "application/octet-stream");
+  if (
+    !/^(image|audio|video)\/[\w.+-]+$/.test(mime) &&
+    mime !== "application/pdf"
+  )
+    return null;
+  return `data:${mime};base64,${base64}`;
+}
+function Avatar({ lead, large = false }: { lead: Lead; large?: boolean }) {
+  const url = avatarUrl(lead);
+  const name = displayName(lead);
+  const hue = [...name].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 5;
+  return (
+    <span
+      className={`${styles.avatar} ${large ? styles.avatarLarge : ""}`}
+      data-color={hue}
+    >
+      {url ? (
+        <img
+          src={url}
+          alt=""
+          onError={(event) => {
+            event.currentTarget.style.display = "none";
+          }}
+        />
+      ) : (
+        initials(name)
+      )}
+    </span>
+  );
+}
+function EmptyState({
+  icon,
+  title,
+  text,
+}: {
+  icon: ReactNode;
+  title: string;
+  text: string;
+}) {
+  return (
+    <div className={styles.empty}>
+      <span className={styles.emptyIcon}>{icon}</span>
+      <h3>{title}</h3>
+      <p>{text}</p>
+    </div>
+  );
+}
+function Modal({
+  open,
+  title,
+  children,
+  onClose,
+}: {
+  open: boolean;
+  title: string;
+  children: ReactNode;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+  useEffect(() => {
+    const dialog = ref.current;
+    if (!dialog) return;
+    if (open && !dialog.open) dialog.showModal();
+    if (!open && dialog.open) dialog.close();
+    return () => {
+      if (dialog.open) dialog.close();
+    };
+  }, [open]);
+  return (
+    <dialog
+      ref={ref}
+      className={styles.dialog}
+      aria-label={title}
+      onCancel={() => onCloseRef.current()}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onCloseRef.current();
+      }}
+    >
+      <div className={styles.dialogHeader}>
+        <div>
+          <span className={styles.eyebrow}>TRACK MANUAL</span>
+          <h2>{title}</h2>
+        </div>
+        <button
+          type="button"
+          className={styles.iconButton}
+          aria-label="Fechar"
+          onClick={onClose}
+        >
+          <X size={19} />
+        </button>
+      </div>
+      {children}
+    </dialog>
+  );
 }
 
 export function ConversasClient({
@@ -205,1912 +331,1904 @@ export function ConversasClient({
   initialSelectedLeadId,
   initialClientId,
   initialSearchQuery,
+  initialOpenThread = false,
+  initialHasMore = false,
+  initialUpdatedAt,
+  initialSoundEnabled = true,
+  initialBadgeEnabled = true,
 }: ConversasClientProps) {
-  const [currentLeads, setCurrentLeads] = useState<Lead[]>(initialLeads);
-  const [currentAdsData, setCurrentAdsData] = useState<Record<string, any>>(adsData);
-  const [currentEventsData, setCurrentEventsData] = useState<Record<string, any[]>>(eventsData);
-  const [selectedLeadId, setSelectedLeadId] = useState<string | null>(initialSelectedLeadId);
-  const [clientFilter, setClientFilter] = useState<string>(initialClientId);
-  const [searchQuery, setSearchQuery] = useState<string>(initialSearchQuery);
-  const [activeTab, setActiveTab] = useState<TabFilter>("todos");
-  const [replyText, setReplyText] = useState("");
-  const [sendingReply, setSendingReply] = useState(false);
-  const [replyError, setReplyError] = useState<string | null>(null);
-  const [saleValue, setSaleValue] = useState<string>("197,00");
-  const [sendingSale, setSendingSale] = useState(false);
-  const [saleNotice, setSaleNotice] = useState<string | null>(null);
-  const [pullingCtwa, setPullingCtwa] = useState(false);
+  const [leads, setLeads] = useState(initialLeads);
+  const [ads, setAds] = useState(adsData);
+  const [events, setEvents] = useState(eventsData);
+  const [selectedId, setSelectedId] = useState(initialSelectedLeadId);
+  const [clientId, setClientId] = useState(initialClientId);
+  const [query, setQuery] = useState(initialSearchQuery);
+  const deferredQuery = useDeferredValue(query);
+  const [tab, setTab] = useState<InboxTab>("all");
+  const [origin, setOrigin] = useState<OriginFilter>("all");
+  const [mobileView, setMobileView] = useState<"list" | "chat" | "details">(
+    initialOpenThread ? "chat" : "list",
+  );
+  const [showDetails, setShowDetails] = useState(true);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [sending, setSending] = useState<Record<string, boolean>>({});
+  const [messageErrors, setMessageErrors] = useState<Record<string, string>>(
+    {},
+  );
+  const [lastUpdated, setLastUpdated] = useState(initialUpdatedAt || "");
+  const [liveError, setLiveError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [hasMore, setHasMore] = useState(initialHasMore);
+  const [listLimit, setListLimit] = useState(100);
+  const [messageLimit, setMessageLimit] = useState(100);
+  const [newMessages, setNewMessages] = useState(false);
+  const [threadSearch, setThreadSearch] = useState("");
+  const [showThreadSearch, setShowThreadSearch] = useState(false);
+  const [showMenu, setShowMenu] = useState(false);
+  const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
+  const [noteSaving, setNoteSaving] = useState(false);
+  const [noteStatus, setNoteStatus] = useState<string | null>(null);
+  const [ctwaBusy, setCtwaBusy] = useState(false);
   const [ctwaNotice, setCtwaNotice] = useState<string | null>(null);
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [showRightPanel, setShowRightPanel] = useState(true);
-  const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [sendingMedia, setSendingMedia] = useState(false);
-  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
-  const chatEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const previousMsgsHashRef = useRef<string>("");
+  const [adInput, setAdInput] = useState("");
+  const [adBusy, setAdBusy] = useState(false);
+  const [showAdForm, setShowAdForm] = useState(false);
+  const [sale, setSale] = useState<SaleIntent | null>(null);
+  const [saleBusy, setSaleBusy] = useState(false);
+  const [saleConfirmed, setSaleConfirmed] = useState(false);
+  const [saleNotice, setSaleNotice] = useState<string | null>(null);
+  const [lightbox, setLightbox] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+  const etagRef = useRef("");
+  const listLimitRef = useRef(listLimit);
+  const chatRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const nearBottomRef = useRef(true);
+  const previousThreadRef = useRef("");
+  const inboundTimes = useRef(new Map<string, number>());
 
-  const handleManualRefresh = useCallback(async () => {
-    setIsRefreshing(true);
-    try {
-      // Dispara recuperação inteligente de nomes de contatos em segundo plano
-      autoRecoverLeadNamesAction().catch(() => {});
-      const params = new URLSearchParams();
-      if (clientFilter) params.set("cliente", clientFilter);
-      if (searchQuery) params.set("q", searchQuery);
-      if (selectedLeadId) params.set("lead", selectedLeadId);
-      const res = await fetch(`/api/conversas/live?${params.toString()}`, { cache: "no-store" });
-      if (res.ok) {
-        const json = await res.json();
-        if (json.ok && Array.isArray(json.leads)) {
-          setCurrentLeads(json.leads);
-          if (json.adsData) setCurrentAdsData(json.adsData);
-          if (json.eventsData) setCurrentEventsData(json.eventsData);
-          setLastUpdated(new Date());
-        }
-      }
-    } catch {
-      // silencioso
-    } finally {
-      setIsRefreshing(false);
+  useEffect(() => {
+    listLimitRef.current = listLimit;
+  }, [listLimit]);
+  useEffect(() => {
+    setClientId(initialClientId);
+    setQuery(initialSearchQuery);
+    setSelectedId(initialSelectedLeadId);
+    etagRef.current = "";
+  }, [initialClientId, initialSearchQuery, initialSelectedLeadId]);
+  useEffect(() => {
+    setLeads(initialLeads);
+    setAds(adsData);
+    setEvents(eventsData);
+  }, [initialLeads, adsData, eventsData]);
+  const selected = useMemo(
+    () => leads.find((lead) => lead.id === selectedId) || null,
+    [leads, selectedId],
+  );
+  const draft = selected ? drafts[selected.id] || "" : "";
+  const isSending = selected ? Boolean(sending[selected.id]) : false;
+  const selectedClient = selected
+    ? clients.find((client) => client.id === selected.client_id)
+    : null;
+  const selectedAd = selected?.source_id
+    ? ads[`${selected.client_id}:${selected.source_id}`]
+    : null;
+  const scopedEvents = useMemo(() => {
+    const map = new Map<string, EventRow[]>();
+    for (const lead of leads) {
+      const key = leadKey(lead);
+      const previous = map.get(key) || [];
+      map.set(key, [
+        ...previous,
+        ...(events[lead.id] || []).filter(
+          (event) => event.client_id === lead.client_id,
+        ),
+      ]);
     }
-  }, [clientFilter, searchQuery, selectedLeadId]);
-
-  // Live polling a cada 2 segundos estilo WhatsApp Web
-  useEffect(() => {
-    let active = true;
-    const fetchLive = async () => {
-      try {
-        const params = new URLSearchParams();
-        if (clientFilter) params.set("cliente", clientFilter);
-        if (searchQuery) params.set("q", searchQuery);
-        if (selectedLeadId) params.set("lead", selectedLeadId);
-        const res = await fetch(`/api/conversas/live?${params.toString()}`, { cache: "no-store" });
-        if (res.ok && active) {
-          const json = await res.json();
-          if (json.ok && Array.isArray(json.leads)) {
-            // Toca áudio suave e atualiza título da aba se houver mensagem nova de lead
-            let latestMsgSignature = "";
-            for (const l of json.leads) {
-              const r = l.raw as Record<string, any> | null;
-              if (r && Array.isArray(r.messages)) {
-                const lastM = r.messages[r.messages.length - 1];
-                if (lastM && !lastM.fromMe) {
-                  latestMsgSignature += `${l.id}:${lastM.at}:${lastM.text || ""}|`;
-                }
-              }
-            }
-
-            if (previousMsgsHashRef.current && latestMsgSignature && previousMsgsHashRef.current !== latestMsgSignature) {
-              playNotificationSound();
-              if (document.hidden) {
-                document.title = "💬 Nova Mensagem | Track Manual";
-              }
-            }
-            if (latestMsgSignature) {
-              previousMsgsHashRef.current = latestMsgSignature;
-            }
-
-            setCurrentLeads(json.leads);
-            if (json.adsData) setCurrentAdsData(json.adsData);
-            if (json.eventsData) setCurrentEventsData(json.eventsData);
-            setLastUpdated(new Date());
-          }
-        }
-      } catch {
-        // silencioso
-      }
-    };
-    const onFocus = () => {
-      document.title = "Conversas | Track Manual";
-      fetchLive();
-    };
-    window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", onFocus);
-    const interval = setInterval(fetchLive, 2000);
-    return () => {
-      active = false;
-      clearInterval(interval);
-      window.removeEventListener("focus", onFocus);
-      document.removeEventListener("visibilitychange", onFocus);
-    };
-  }, [clientFilter, searchQuery, selectedLeadId]);
-
-  // Auto scroll to bottom on new messages
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [selectedLeadId, currentLeads]);
-
-  const copyToClipboard = useCallback((text: string, key: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedKey(key);
-    setTimeout(() => setCopiedKey(null), 2000);
-  }, []);
-
-  // Mapeia compras por telefone consolidado para resolver divergências de vendas
-  const phoneEventsMap = useMemo(() => {
-    const map = new Map<string, any[]>();
-    for (const lead of currentLeads) {
-      const cleanPhone = lead.phone.replace(/\D/g, "");
-      const evs = currentEventsData[lead.id] || [];
-      if (evs.length > 0) {
-        const prev = map.get(cleanPhone) || [];
-        map.set(cleanPhone, [...prev, ...evs]);
-      }
+    for (const [key, rows] of map) {
+      const unique = new Map(
+        rows.map((event) => [`${event.event_name}:${event.event_id}`, event]),
+      );
+      map.set(key, [...unique.values()]);
     }
     return map;
-  }, [currentLeads, currentEventsData]);
+  }, [leads, events]);
+  const purchaseEvents = useCallback(
+    (lead: Lead) =>
+      (scopedEvents.get(leadKey(lead)) || []).filter(
+        (event) =>
+          event.status === "enviado" &&
+          !event.is_test &&
+          event.event_name === "Purchase",
+      ),
+    [scopedEvents],
+  );
+  const selectedEvents = selected
+    ? scopedEvents.get(leadKey(selected)) || []
+    : [];
+  const selectedPurchases = selected ? purchaseEvents(selected) : [];
+  const baseLeads = useMemo(
+    () =>
+      leads.filter((lead) => {
+        if (clientId && lead.client_id !== clientId) return false;
+        const search = deferredQuery.trim().toLocaleLowerCase("pt-BR");
+        if (
+          search &&
+          ![displayName(lead), lead.phone, lead.notes, lead.source_id]
+            .filter(Boolean)
+            .join(" ")
+            .toLocaleLowerCase("pt-BR")
+            .includes(search)
+        )
+          return false;
+        return true;
+      }),
+    [leads, clientId, deferredQuery],
+  );
+  const counts = useMemo(
+    () => ({
+      all: baseLeads.length,
+      waiting: baseLeads.filter((lead) => unansweredCount(lead) > 0).length,
+      sold: baseLeads.filter((lead) => purchaseEvents(lead).length > 0).length,
+    }),
+    [baseLeads, purchaseEvents],
+  );
+  const filtered = useMemo(
+    () =>
+      baseLeads
+        .filter((lead) => {
+          if (tab === "waiting" && unansweredCount(lead) === 0) return false;
+          if (tab === "sold" && purchaseEvents(lead).length === 0) return false;
+          if (origin === "ad" && !(lead.source_id || realClick(lead)))
+            return false;
+          if (origin === "organic" && (lead.source_id || realClick(lead)))
+            return false;
+          if (
+            origin === "pix" &&
+            !/pix|comprovante/i.test(
+              [
+                lead.notes || "",
+                ...messagesFor(lead).map((message) => message.text || ""),
+              ].join(" "),
+            )
+          )
+            return false;
+          return true;
+        })
+        .sort((a, b) => latestTime(b) - latestTime(a)),
+    [baseLeads, tab, origin, purchaseEvents],
+  );
+  const messages = useMemo(
+    () =>
+      selected
+        ? messagesFor(selected)
+            .slice()
+            .sort(
+              (a, b) =>
+                timestamp(a, selected.first_seen_at) -
+                timestamp(b, selected.first_seen_at),
+            )
+        : [],
+    [selected],
+  );
+  const messageSignature = messages.length
+    ? `${selected?.id}:${messages.length}:${messages.at(-1)?.id || messages.at(-1)?.at || ""}:${messages.at(-1)?.text || ""}`
+    : `${selected?.id}:empty`;
 
-  const hasPurchasedLead = useCallback(
-    (lead: Lead) => {
-      const byId = (currentEventsData[lead.id] || []).some((e) => e.event_name === "Purchase");
-      if (byId) return true;
-      const cleanPhone = lead.phone.replace(/\D/g, "");
-      return (phoneEventsMap.get(cleanPhone) || []).some((e) => e.event_name === "Purchase");
+  useEffect(() => {
+    let arrived = false;
+    for (const lead of leads) {
+      const incoming = messagesFor(lead)
+        .filter((message) => !message.fromMe)
+        .at(-1);
+      if (!incoming) continue;
+      const time = timestamp(incoming, lead.first_seen_at);
+      const before = inboundTimes.current.get(lead.id);
+      if (before !== undefined && time > before) arrived = true;
+      inboundTimes.current.set(lead.id, Math.max(before || 0, time));
+    }
+    if (arrived && initialSoundEnabled && window.AudioContext) {
+      const audio = new AudioContext();
+      const tone = audio.createOscillator();
+      const volume = audio.createGain();
+      tone.type = "sine";
+      tone.frequency.value = 660;
+      volume.gain.value = 0.035;
+      tone.connect(volume);
+      volume.connect(audio.destination);
+      void audio
+        .resume()
+        .then(() => {
+          tone.start();
+          tone.stop(audio.currentTime + 0.12);
+          tone.onended = () => {
+            void audio.close();
+          };
+        })
+        .catch(() => {
+          void audio.close();
+        });
+    }
+  }, [leads, initialSoundEnabled]);
+  useEffect(() => {
+    document.title =
+      (initialBadgeEnabled && counts.waiting
+        ? "(" + counts.waiting + ") "
+        : "") + "Conversas · Track Manual";
+    return () => {
+      document.title = "Track Manual";
+    };
+  }, [counts.waiting, initialBadgeEnabled]);
+
+  const refresh = useCallback(
+    async (manual = false) => {
+      if (document.hidden && !manual) return;
+      if (abortRef.current) {
+        if (!manual) return;
+        abortRef.current.abort();
+      }
+      const controller = new AbortController();
+      abortRef.current = controller;
+      if (manual) setRefreshing(true);
+      const params = new URLSearchParams({
+        summary: "1",
+        limit: String(listLimitRef.current),
+        message_limit: String(messageLimit),
+      });
+      if (clientId) params.set("cliente", clientId);
+      if (deferredQuery.trim()) params.set("q", deferredQuery.trim());
+      if (selectedId) params.set("lead", selectedId);
+      try {
+        const response = await fetch(`/api/conversas/live?${params}`, {
+          cache: "no-store",
+          signal: controller.signal,
+          headers: etagRef.current ? { "If-None-Match": etagRef.current } : {},
+        });
+        if (response.status === 304) {
+          setLastUpdated(new Date().toISOString());
+          setLiveError(null);
+          return;
+        }
+        if (response.status === 401)
+          throw new Error(
+            "Sua sessão expirou. Entre novamente para continuar.",
+          );
+        if (!response.ok)
+          throw new Error(
+            "Não foi possível atualizar as conversas. Os dados exibidos podem estar desatualizados.",
+          );
+        const json = (await response.json()) as LiveResponse;
+        if (!json.ok || !json.leads)
+          throw new Error(json.error || "A atualização não foi concluída.");
+        if (controller.signal.aborted) return;
+        etagRef.current = response.headers.get("etag") || "";
+        setLeads(json.leads);
+        if (json.adsData) setAds(json.adsData);
+        if (json.eventsData) setEvents(json.eventsData);
+        setHasMore(Boolean(json.hasMore));
+        setLastUpdated(new Date().toISOString());
+        setLiveError(null);
+      } catch (error) {
+        if (!controller.signal.aborted)
+          setLiveError(
+            error instanceof Error ? error.message : "Falha de conexão.",
+          );
+      } finally {
+        if (abortRef.current === controller) {
+          abortRef.current = null;
+          setRefreshing(false);
+        }
+      }
     },
-    [currentEventsData, phoneEventsMap]
+    [clientId, deferredQuery, selectedId, messageLimit],
   );
 
-  const filteredLeads = useMemo(() => {
-    return currentLeads
-      .filter((lead) => {
-        if (clientFilter && lead.client_id !== clientFilter) return false;
-        if (searchQuery.trim()) {
-          const q = searchQuery.toLowerCase().trim();
-          const nameMatch = (getLeadDisplayName(lead)).toLowerCase().includes(q);
-          const phoneMatch = lead.phone.includes(q);
-          const adMatch = lead.source_id?.includes(q);
-          const notesMatch = lead.notes?.toLowerCase().includes(q);
-          if (!nameMatch && !phoneMatch && !adMatch && !notesMatch) return false;
-        }
-        const hasPurchased = hasPurchasedLead(lead);
-        const hasAd = Boolean(lead.ctwa_clid || lead.source_id);
-        const hasPix = () => {
-          const raw = lead.raw as Record<string, any> | null;
-          const msgs: any[] = Array.isArray(raw?.messages) ? raw!.messages : [];
-          const corpus = [lead.notes || "", ...msgs.map((m) => m.text || "")].join(" ").toLowerCase();
-          return corpus.includes("pix") || corpus.includes("chave") || corpus.includes("comprovante");
-        };
-
-        if (activeTab === "nao-respondidas" && getUnansweredCount(lead) === 0) return false;
-        if (activeTab === "com-anuncio" && !hasAd) return false;
-        if (activeTab === "com-venda" && !hasPurchased) return false;
-        if (activeTab === "aguardando" && hasPurchased) return false;
-        if (activeTab === "pix" && !hasPix()) return false;
-        return true;
-      })
-      .sort((a, b) => {
-        const getLatestTime = (lead: Lead) => {
-          const rawObj = lead.raw && typeof lead.raw === "object" ? (lead.raw as Record<string, any>) : {};
-          const msgs = Array.isArray(rawObj.messages) ? rawObj.messages : [];
-          const last = msgs[msgs.length - 1];
-          if (last?.at) {
-            const t = new Date(last.at).getTime();
-            if (!isNaN(t)) return t;
-          }
-          const u = new Date(lead.updated_at).getTime();
-          if (!isNaN(u)) return u;
-          return new Date(lead.first_seen_at).getTime() || 0;
-        };
-        return getLatestTime(b) - getLatestTime(a);
-      });
-  }, [currentLeads, clientFilter, searchQuery, activeTab, hasPurchasedLead]);
-
-  // CRÍTICO: Se houver selectedLeadId, NUNCA substitui por outra pessoa se o lead existir na base!
-  const selectedLead = useMemo(() => {
-    if (selectedLeadId) {
-      const match = currentLeads.find((l) => l.id === selectedLeadId);
-      if (match) return match;
-    }
-    return filteredLeads[0] || currentLeads[0] || null;
-  }, [selectedLeadId, currentLeads, filteredLeads]);
-
-  const selectedAd = useMemo(() => {
-    if (!selectedLead || !selectedLead.source_id) return null;
-    return currentAdsData[`${selectedLead.client_id}:${selectedLead.source_id}`] || null;
-  }, [selectedLead, currentAdsData]);
-
-  const selectedEvents = useMemo(() => {
-    if (!selectedLead) return [];
-    const byId = currentEventsData[selectedLead.id] || [];
-    const cleanPhone = selectedLead.phone.replace(/\D/g, "");
-    const byPhone = phoneEventsMap.get(cleanPhone) || [];
-    const seen = new Set<string>();
-    const merged: any[] = [];
-    for (const ev of [...byId, ...byPhone]) {
-      if (!seen.has(ev.id)) {
-        seen.add(ev.id);
-        merged.push(ev);
+  useEffect(() => {
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    etagRef.current = "";
+    const tick = async () => {
+      await refresh();
+      if (active) timer = setTimeout(tick, 5000);
+    };
+    timer = setTimeout(tick, 200);
+    const onVisible = () => {
+      if (!document.hidden) {
+        clearTimeout(timer);
+        void tick();
       }
-    }
-    return merged.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-  }, [selectedLead, currentEventsData, phoneEventsMap]);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+      abortRef.current?.abort();
+      abortRef.current = null;
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [refresh, listLimit]);
 
-  const handleSendMessage = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!selectedLead || !replyText.trim() || sendingReply) return;
-    setSendingReply(true);
-    setReplyError(null);
-    const msgToSend = replyText.trim();
+  useEffect(() => {
+    const node = chatRef.current;
+    if (!node) return;
+    if (previousThreadRef.current !== selectedId) {
+      previousThreadRef.current = selectedId || "";
+      nearBottomRef.current = true;
+      node.scrollTop = node.scrollHeight;
+      setNewMessages(false);
+    } else if (nearBottomRef.current) {
+      node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
+    } else {
+      setNewMessages(true);
+    }
+  }, [messageSignature, selectedId]);
+
+  const chooseLead = (lead: Lead) => {
+    setSelectedId(lead.id);
+    setMobileView("chat");
+    setThreadSearch("");
+    setShowMenu(false);
+    setMessageLimit(100);
+    setCtwaNotice(null);
+    setNoteStatus(null);
+    setShowAdForm(false);
+  };
+  const changeClient = (value: string) => {
+    setClientId(value);
+    setSelectedId(null);
+    setMobileView("list");
+    setListLimit(100);
+    setMessageLimit(100);
+    const params = new URLSearchParams(window.location.search);
+    params.delete("lead");
+    if (value) params.set("cliente", value);
+    else params.delete("cliente");
+    window.history.replaceState(
+      null,
+      "",
+      "/conversas" + (params.size ? "?" + params : ""),
+    );
+  };
+  const setDraft = (value: string) => {
+    if (selected)
+      setDrafts((previous) => ({ ...previous, [selected.id]: value }));
+  };
+  const sendMessage = async (event?: FormEvent) => {
+    event?.preventDefault();
+    if (!selected || !draft.trim() || isSending) return;
+    const recipient = selected;
+    const content = draft.trim();
+    setSending((previous) => ({ ...previous, [recipient.id]: true }));
+    setMessageErrors((previous) => ({ ...previous, [recipient.id]: "" }));
     try {
-      const res = await sendWhatsAppMessageAction(selectedLead.client_id, selectedLead.phone, msgToSend);
-      if (res.ok) {
-        setReplyText("");
-        setCurrentLeads((prev) =>
-          prev.map((l) => {
-            if (l.id !== selectedLead.id) return l;
-            const rawObj = (l.raw && typeof l.raw === "object") ? (l.raw as Record<string, any>) : {};
-            const existingMessages = Array.isArray(rawObj.messages) ? rawObj.messages : [];
-            return {
-              ...l,
-              raw: {
-                ...rawObj,
-                messages: [
-                  ...existingMessages,
-                  { text: msgToSend, at: new Date().toISOString(), fromMe: true },
-                ],
-              },
-            };
-          })
+      const result = await sendWhatsAppMessageAction(
+        recipient.client_id,
+        recipient.phone,
+        content,
+      );
+      if (!result.ok)
+        throw new Error(
+          result.error ||
+            "Não foi possível enviar. Verifique a conexão do WhatsApp.",
         );
-      } else {
-        setReplyError(res.error || "Não foi possível enviar a mensagem. Verifique a conexão do WhatsApp.");
-      }
-    } catch (err) {
-      setReplyError(err instanceof Error ? err.message : String(err));
+      if (result.warning)
+        setMessageErrors((previous) => ({
+          ...previous,
+          [recipient.id]: result.warning!,
+        }));
+      setDrafts((previous) => ({
+        ...previous,
+        [recipient.id]:
+          previous[recipient.id]?.trim() === content
+            ? ""
+            : previous[recipient.id] || "",
+      }));
+      etagRef.current = "";
+      await refresh(true);
+    } catch (error) {
+      setMessageErrors((previous) => ({
+        ...previous,
+        [recipient.id]:
+          error instanceof Error ? error.message : "Falha no envio.",
+      }));
     } finally {
-      setSendingReply(false);
+      setSending((previous) => ({ ...previous, [recipient.id]: false }));
     }
   };
-
-  const handleSelectMedia = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !selectedLead) return;
-    setSendingMedia(true);
-    setReplyError(null);
-
-    const reader = new FileReader();
-    reader.onload = async () => {
-      try {
-        const base64 = String(reader.result || "");
-        const res = await sendWhatsAppMediaAction(selectedLead.client_id, selectedLead.phone, {
+  const sendMedia = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file || !selected || isSending) return;
+    const recipient = selected;
+    const caption = draft.trim();
+    if (file.size > 5 * 1024 * 1024) {
+      setMessageErrors((previous) => ({
+        ...previous,
+        [recipient.id]: "O arquivo deve ter no máximo 5 MB.",
+      }));
+      return;
+    }
+    setSending((previous) => ({ ...previous, [recipient.id]: true }));
+    setMessageErrors((previous) => ({ ...previous, [recipient.id]: "" }));
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () =>
+          reject(new Error("Não foi possível ler o arquivo."));
+        reader.readAsDataURL(file);
+      });
+      const result = await sendWhatsAppMediaAction(
+        recipient.client_id,
+        recipient.phone,
+        {
           base64,
           mimetype: file.type || "application/octet-stream",
           filename: file.name,
-          caption: replyText.trim() || undefined,
-        });
-        if (res.ok) {
-          setReplyText("");
-          const params = new URLSearchParams();
-          if (clientFilter) params.set("cliente", clientFilter);
-          if (searchQuery) params.set("q", searchQuery);
-          const ref = await fetch(`/api/conversas/live?${params.toString()}`, { cache: "no-store" });
-          if (ref.ok) {
-            const j = await ref.json();
-            if (j.ok && Array.isArray(j.leads)) setCurrentLeads(j.leads);
-          }
-        } else {
-          setReplyError(res.error || "Erro ao enviar arquivo.");
-        }
-      } catch (err) {
-        setReplyError(err instanceof Error ? err.message : String(err));
-      } finally {
-        setSendingMedia(false);
-        if (fileInputRef.current) fileInputRef.current.value = "";
-      }
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const handleSendQuickSale = async () => {
-    if (!selectedLead) return;
-    setSendingSale(true);
-    setSaleNotice(null);
-    try {
-      const res = await sendEventAction({
-        leadId: selectedLead.id,
-        eventName: "Purchase",
-        value: saleValue,
-        currency: "BRL",
-        contentName: selectedAd?.ad_name || selectedLead.headline || "Conversão WhatsApp",
-        eventTimeIso: new Date().toISOString(),
-      });
-      if (res.ok) {
-        setSaleNotice(`✅ Venda de R$ ${saleValue} enviada com sucesso ao Meta!`);
-      } else {
-        setSaleNotice(`❌ ${res.message || "Erro ao enviar conversão ao Meta."}`);
-      }
-    } catch (err) {
-      setSaleNotice(`❌ Falha: ${err instanceof Error ? err.message : String(err)}`);
+          caption: caption || undefined,
+        },
+      );
+      if (!result.ok)
+        throw new Error(result.error || "Não foi possível enviar o arquivo.");
+      if (result.warning)
+        setMessageErrors((previous) => ({
+          ...previous,
+          [recipient.id]: result.warning!,
+        }));
+      setDrafts((previous) => ({
+        ...previous,
+        [recipient.id]:
+          previous[recipient.id]?.trim() === caption
+            ? ""
+            : previous[recipient.id] || "",
+      }));
+      etagRef.current = "";
+      await refresh(true);
+    } catch (error) {
+      setMessageErrors((previous) => ({
+        ...previous,
+        [recipient.id]:
+          error instanceof Error ? error.message : "Falha no envio do arquivo.",
+      }));
     } finally {
-      setSendingSale(false);
+      setSending((previous) => ({ ...previous, [recipient.id]: false }));
     }
   };
-
-  const handlePullCtwa = async () => {
-    if (!selectedLead) return;
-    setPullingCtwa(true);
+  const saveNotes = async () => {
+    if (!selected || noteSaving) return;
+    const recipient = selected;
+    const notes = noteDrafts[recipient.id] ?? recipient.notes ?? "";
+    setNoteSaving(true);
+    setNoteStatus(null);
+    try {
+      const result = await saveLeadNotesAction(recipient.id, notes);
+      if (!result.ok) throw new Error(result.message);
+      setLeads((previous) =>
+        previous.map((lead) =>
+          lead.id === recipient.id ? { ...lead, notes } : lead,
+        ),
+      );
+      setNoteStatus(result.message);
+    } catch (error) {
+      setNoteStatus(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível salvar a anotação.",
+      );
+    } finally {
+      setNoteSaving(false);
+    }
+  };
+  const recoverCtwa = async () => {
+    if (!selected || ctwaBusy) return;
+    const recipient = selected;
+    setCtwaBusy(true);
     setCtwaNotice(null);
     try {
-      const res = await pullCtwaFromPhoneAction(selectedLead.id);
-      setCtwaNotice(res.message);
-      if (res.ok) {
-        // Dispara re-fetch live imediato para atualizar dados na hora
-        const params = new URLSearchParams();
-        if (clientFilter) params.set("cliente", clientFilter);
-        if (searchQuery) params.set("q", searchQuery);
-        const ref = await fetch(`/api/conversas/live?${params.toString()}`, { cache: "no-store" });
-        if (ref.ok) {
-          const json = await ref.json();
-          if (json.ok && Array.isArray(json.leads)) {
-            setCurrentLeads(json.leads);
-            if (json.adsData) setCurrentAdsData(json.adsData);
-          }
-        }
-      }
-    } catch (e) {
-      setCtwaNotice("Erro: " + String(e));
+      const result = await pullCtwaFromPhoneAction(recipient.id);
+      setCtwaNotice(result.message);
+      etagRef.current = "";
+      await refresh(true);
+    } catch (error) {
+      setCtwaNotice(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível recuperar o rastreio.",
+      );
     } finally {
-      setPullingCtwa(false);
+      setCtwaBusy(false);
     }
   };
-
-  // ============================================================
-  // STYLES helpers
-  // ============================================================
-  const css = {
-    root: {
-      display: "flex",
-      flexDirection: "column" as const,
-      height: "calc(100vh - 72px)",
-      minHeight: "680px",
-      background: "#080714",
-      color: "#e2e0f0",
-      fontFamily: "'Inter', system-ui, sans-serif",
-      overflow: "hidden",
-    } as React.CSSProperties,
-    grid: {
-      display: "grid",
-      gridTemplateColumns: showRightPanel ? "300px 1fr 300px" : "300px 1fr",
-      gap: 0,
-      flex: 1,
-      minHeight: 0,
-      overflow: "hidden",
-    } as React.CSSProperties,
+  const assignAd = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!selected || adBusy) return;
+    setAdBusy(true);
+    setCtwaNotice(null);
+    try {
+      const result = await setLeadAdAction(selected.id, adInput);
+      setCtwaNotice(result.message);
+      if (result.ok) {
+        setShowAdForm(false);
+        etagRef.current = "";
+        await refresh(true);
+      }
+    } catch (error) {
+      setCtwaNotice(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível vincular o anúncio.",
+      );
+    } finally {
+      setAdBusy(false);
+    }
   };
+  const openSale = () => {
+    if (!selected) return;
+    setSale({
+      lead: selected,
+      input: {
+        leadId: selected.id,
+        eventName: "Purchase",
+        value: "",
+        currency: selectedClient?.default_currency || "BRL",
+        contentName: "",
+        eventTimeIso: new Date().toISOString(),
+        idempotencyKey: crypto.randomUUID(),
+      },
+      preview: null,
+    });
+    setSaleConfirmed(false);
+    setSaleNotice(null);
+  };
+  const previewSale = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!sale || saleBusy) return;
+    const snapshot = { ...sale.input };
+    setSaleBusy(true);
+    setSaleNotice(null);
+    try {
+      const preview = await previewEventAction(snapshot);
+      setSale((previous) =>
+        previous ? { ...previous, input: snapshot, preview } : previous,
+      );
+    } catch (error) {
+      setSaleNotice(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível conferir a venda.",
+      );
+    } finally {
+      setSaleBusy(false);
+    }
+  };
+  const confirmSale = async () => {
+    if (
+      !sale?.preview?.ok ||
+      saleBusy ||
+      (sale.preview.alreadySent > 0 && !saleConfirmed)
+    )
+      return;
+    const snapshot = { ...sale.input, confirmNewSale: saleConfirmed };
+    setSaleBusy(true);
+    setSaleNotice(null);
+    try {
+      const result = await sendEventAction(snapshot);
+      setSaleNotice(result.message);
+      if (result.sent) {
+        setSale((previous) =>
+          previous
+            ? {
+                ...previous,
+                preview: null,
+                input: {
+                  ...previous.input,
+                  idempotencyKey: snapshot.idempotencyKey,
+                },
+              }
+            : previous,
+        );
+        etagRef.current = "";
+        await refresh(true);
+      }
+    } catch (error) {
+      setSaleNotice(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível registrar a venda.",
+      );
+    } finally {
+      setSaleBusy(false);
+    }
+  };
+  const copyPhone = async () => {
+    if (!selected) return;
+    try {
+      await navigator.clipboard.writeText(selected.phone);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setMessageErrors((previous) => ({
+        ...previous,
+        [selected.id]:
+          "Não foi possível copiar. O número está disponível nos detalhes do contato.",
+      }));
+    }
+  };
+  const exportConversation = () => {
+    if (!selected) return;
+    const content = [
+      `Conversa com ${displayName(selected)}`,
+      `Telefone: ${formatPhone(selected.phone)}`,
+      `Cliente: ${clientNameMap[selected.client_id] || "—"}`,
+      "",
+      ...messages.map(
+        (message) =>
+          `${formatDateTime(new Date(timestamp(message, selected.first_seen_at)).toISOString())} · ${message.fromMe ? "Equipe" : displayName(selected)}: ${message.text?.startsWith("data:") ? "[Mídia]" : message.text || `[${message.type || "mensagem"}]`}`,
+      ),
+    ].join("\n");
+    const url = URL.createObjectURL(
+      new Blob([content], { type: "text/plain;charset=utf-8" }),
+    );
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `conversa-${selected.phone}.txt`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setShowMenu(false);
+  };
+  const jumpToLatest = () => {
+    chatRef.current?.scrollTo({
+      top: chatRef.current.scrollHeight,
+      behavior: "smooth",
+    });
+    nearBottomRef.current = true;
+    setNewMessages(false);
+  };
+  const searchMatches = threadSearch.trim().toLocaleLowerCase("pt-BR");
+  const visibleMessages = searchMatches
+    ? messages.filter((message) =>
+        (message.text || message.caption || message.filename || "")
+          .toLocaleLowerCase("pt-BR")
+          .includes(searchMatches),
+      )
+    : messages;
+  const shortcuts = draft.startsWith("/")
+    ? SHORTCUTS.filter((shortcut) => shortcut.key.startsWith(draft.trim()))
+    : [];
+  const notesValue = selected
+    ? (noteDrafts[selected.id] ?? selected.notes ?? "")
+    : "";
+  const purchaseTotal = selectedPurchases.reduce(
+    (sum, event) => sum + (event.value || 0),
+    0,
+  );
 
-  const PURPLE = "#7b39fc";
-  const DARK_BG = "#0d0a1e";
-  const SURFACE = "#15112a";
-  const BORDER = "rgba(255,255,255,0.08)";
-  const TEXT_MUTED = "#6b6a85";
-  const GREEN = "#25D366";
-
-  // Tab counts
-  const tabCounts = useMemo(() => ({
-    todos: currentLeads.length,
-    "nao-respondidas": currentLeads.filter((l) => getUnansweredCount(l) > 0).length,
-    "com-anuncio": currentLeads.filter((l) => l.ctwa_clid || l.source_id).length,
-    "com-venda": currentLeads.filter((l) => hasPurchasedLead(l)).length,
-    aguardando: currentLeads.filter((l) => !hasPurchasedLead(l)).length,
-    pix: currentLeads.filter((l) => {
-      const raw = l.raw as Record<string, any> | null;
-      const msgs: any[] = Array.isArray(raw?.messages) ? raw!.messages : [];
-      const corpus = [l.notes || "", ...msgs.map((m) => m.text || "")].join(" ").toLowerCase();
-      return corpus.includes("pix") || corpus.includes("chave") || corpus.includes("comprovante");
-    }).length,
-  }), [currentLeads, hasPurchasedLead]);
-
-  const tabs: { id: TabFilter; label: string }[] = [
-    { id: "todos", label: "Todos" },
-    { id: "nao-respondidas", label: "📥 Não Respondidas" },
-    { id: "aguardando", label: "Aguardando" },
-    { id: "com-anuncio", label: "🎯 Anúncio" },
-    { id: "pix", label: "💳 PIX" },
-    { id: "com-venda", label: "💰 Venda" },
-  ];
-
-  // ============================================================
-  // RENDER
-  // ============================================================
   return (
-    <div style={css.root}>
-      {/* ══════════════ HEADER BAR ══════════════ */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "10px 18px",
-          background: SURFACE,
-          borderBottom: `1px solid ${BORDER}`,
-          flexShrink: 0,
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <MessageCircle size={18} style={{ color: PURPLE }} />
-          <span style={{ fontWeight: 800, fontSize: 15, color: "#fff" }}>Central de Conversas</span>
-          <span
-            style={{
-              fontSize: 10,
-              fontWeight: 700,
-              padding: "2px 8px",
-              borderRadius: 999,
-              background: "rgba(52, 199, 123, 0.15)",
-              color: "#34c77b",
-              border: "1px solid rgba(52, 199, 123, 0.3)",
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 4,
-            }}
-          >
-            <Zap size={9} />
-            LIVE
-          </span>
+    <div className={styles.workspace}>
+      <div className={styles.pageHeader}>
+        <div>
+          <div className={styles.eyebrow}>RELACIONAMENTO</div>
+          <h1>
+            Central de conversas <span>{counts.all}</span>
+          </h1>
+          <p>
+            Converse, acompanhe oportunidades e transforme atendimento em
+            resultado.
+          </p>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 10, color: TEXT_MUTED }}>
-            {lastUpdated.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-          </span>
+        <div className={styles.pageActions}>
           <button
             type="button"
-            onClick={handleManualRefresh}
-            disabled={isRefreshing}
-            title="Sincronizar conversas e recuperar nomes agora"
-            style={{
-              padding: "4px 10px",
-              borderRadius: 6,
-              border: `1px solid rgba(123, 57, 252, 0.35)`,
-              background: "rgba(123, 57, 252, 0.15)",
-              color: "#c9b8ff",
-              fontSize: 11,
-              fontWeight: 600,
-              cursor: isRefreshing ? "wait" : "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 5,
-            }}
+            className={styles.secondaryButton}
+            onClick={() => void refresh(true)}
+            disabled={refreshing}
           >
-            <RefreshCw size={11} style={{ animation: isRefreshing ? "spin 1s linear infinite" : "none" }} />
-            {isRefreshing ? "Sincronizando..." : "Sincronizar"}
+            <RefreshCw size={15} className={refreshing ? styles.spin : ""} />
+            <span>Atualizar</span>
           </button>
-          <button
-            type="button"
-            onClick={() => setShowRightPanel((v) => !v)}
-            style={{
-              padding: "4px 10px",
-              borderRadius: 6,
-              border: `1px solid ${BORDER}`,
-              background: "transparent",
-              color: TEXT_MUTED,
-              fontSize: 11,
-              cursor: "pointer",
-            }}
-          >
-            {showRightPanel ? "Ocultar Raio-X" : "Mostrar Raio-X"}
-          </button>
+          <Link href="/leads/novo" className={styles.primaryButton}>
+            <Plus size={16} />
+            Novo contato
+          </Link>
         </div>
       </div>
-
-      {/* ══════════════ MAIN 3-COLUMN GRID ══════════════ */}
-      <div style={css.grid}>
-
-        {/* ================================================================ */}
-        {/* COLUNA 1: LISTA DE CONVERSAS                                     */}
-        {/* ================================================================ */}
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            borderRight: `1px solid ${BORDER}`,
-            background: DARK_BG,
-            overflow: "hidden",
-          }}
-        >
-          {/* Search */}
-          <div style={{ padding: "10px 12px", borderBottom: `1px solid ${BORDER}`, flexShrink: 0 }}>
-            <div style={{ position: "relative", marginBottom: 8 }}>
-              <Search size={13} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: TEXT_MUTED }} />
-              <input
-                type="text"
-                placeholder="Buscar conversa..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                style={{
-                  width: "100%",
-                  padding: "7px 10px 7px 30px",
-                  borderRadius: 8,
-                  background: SURFACE,
-                  border: `1px solid ${BORDER}`,
-                  color: "#e2e0f0",
-                  fontSize: 12,
-                  outline: "none",
-                  boxSizing: "border-box",
-                }}
-              />
+      {liveError && (
+        <div className={styles.liveWarning} role="status">
+          <CircleAlert size={16} />
+          <span>{liveError}</span>
+          {liveError.includes("sessão") ? (
+            <Link href="/login">Entrar novamente</Link>
+          ) : (
+            <button type="button" onClick={() => void refresh(true)}>
+              Tentar novamente
+            </button>
+          )}
+        </div>
+      )}
+      <div
+        className={styles.inbox}
+        data-view={mobileView}
+        data-details={showDetails}
+      >
+        <aside className={styles.listPanel} aria-label="Lista de conversas">
+          <div className={styles.listHeading}>
+            <div>
+              <MessagesSquare size={20} />
+              <h2>Caixa de entrada</h2>
             </div>
-
-            {/* Filter Tabs */}
-            <div style={{ display: "flex", gap: 4, overflowX: "auto" }}>
-              {tabs.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => setActiveTab(t.id)}
-                  style={{
-                    padding: "3px 8px",
-                    borderRadius: 6,
-                    border: "none",
-                    background: activeTab === t.id ? PURPLE : "rgba(255,255,255,0.05)",
-                    color: activeTab === t.id ? "#fff" : TEXT_MUTED,
-                    fontSize: 10,
-                    fontWeight: 700,
-                    cursor: "pointer",
-                    whiteSpace: "nowrap",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 3,
-                    flexShrink: 0,
-                  }}
-                >
-                  {t.label}
-                  <span style={{ opacity: 0.7, fontSize: 9 }}>({tabCounts[t.id]})</span>
-                </button>
-              ))}
-            </div>
+            <Link
+              href="/leads/importar"
+              className={styles.iconButton}
+              title="Importar contatos"
+              aria-label="Importar contatos"
+            >
+              <Plus size={18} />
+            </Link>
           </div>
-
-          {/* Client filter */}
-          {clients.length > 1 && (
-            <div style={{ padding: "6px 12px", borderBottom: `1px solid ${BORDER}`, flexShrink: 0 }}>
+          <div className={styles.listFilters}>
+            <label className={styles.searchBox}>
+              <Search size={16} />
+              <input
+                aria-label="Buscar conversa"
+                placeholder="Buscar nome, número ou anúncio"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+              />
+              {query && (
+                <button
+                  type="button"
+                  onClick={() => setQuery("")}
+                  aria-label="Limpar busca"
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </label>
+            <label className={styles.clientSelect}>
+              <Users size={14} />
               <select
-                value={clientFilter}
-                onChange={(e) => setClientFilter(e.target.value)}
-                style={{
-                  width: "100%",
-                  padding: "5px 8px",
-                  borderRadius: 6,
-                  background: SURFACE,
-                  border: `1px solid ${BORDER}`,
-                  color: "#e2e0f0",
-                  fontSize: 11,
-                }}
+                aria-label="Filtrar por cliente"
+                value={clientId}
+                onChange={(event) => changeClient(event.target.value)}
               >
-                <option value="">Todos os Clientes</option>
-                {clients.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
+                <option value="">Todos os clientes</option>
+                {clients.map((client) => (
+                  <option key={client.id} value={client.id}>
+                    {client.name}
+                  </option>
                 ))}
               </select>
-            </div>
-          )}
-
-          {/* Contact List */}
-          <div style={{ flex: 1, overflowY: "auto", padding: "4px 0" }}>
-            {filteredLeads.length === 0 ? (
-              <div style={{ textAlign: "center", padding: "40px 16px", color: TEXT_MUTED, fontSize: 12 }}>
-                Nenhuma conversa encontrada.
-              </div>
+              <ChevronDown size={14} />
+            </label>
+          </div>
+          <div
+            className={styles.tabs}
+            role="tablist"
+            aria-label="Status das conversas"
+          >
+            {(
+              [
+                { id: "all", label: "Todas" },
+                { id: "waiting", label: "Aguardando" },
+                { id: "sold", label: "Com venda" },
+              ] as const
+            ).map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="tab"
+                aria-selected={tab === item.id}
+                onClick={() => setTab(item.id)}
+                className={tab === item.id ? styles.activeTab : ""}
+              >
+                {item.label}
+                <span>{counts[item.id]}</span>
+              </button>
+            ))}
+          </div>
+          <div className={styles.listCaption}>
+            <span>
+              {filtered.length} conversa{filtered.length === 1 ? "" : "s"}
+            </span>
+            <select
+              aria-label="Filtrar origem da conversa"
+              value={origin}
+              onChange={(event) =>
+                setOrigin(event.target.value as OriginFilter)
+              }
+            >
+              <option value="all">Todas as origens</option>
+              <option value="ad">Com anúncio</option>
+              <option value="organic">Sem anúncio</option>
+              <option value="pix">Menção a Pix</option>
+            </select>
+          </div>
+          <div className={styles.contactList}>
+            {filtered.length === 0 ? (
+              <EmptyState
+                icon={<Search size={25} />}
+                title="Nenhuma conversa"
+                text="Experimente outro filtro ou cadastre um novo contato."
+              />
             ) : (
-              filteredLeads.map((lead) => {
-                const isSelected = selectedLead?.id === lead.id;
-                const leadEvents = currentEventsData[lead.id] || [];
-                const purchase = leadEvents.find((e) => e.event_name === "Purchase");
-                const hasCtwa = Boolean(lead.ctwa_clid);
-                const hasAd = Boolean(lead.ctwa_clid || lead.source_id);
-                const msgType = getMessageTypeIcon(lead);
-                const snippet = extractMessageText(lead);
-                const rawObj = (lead.raw && typeof lead.raw === "object") ? (lead.raw as Record<string, any>) : {};
-                const msgs = Array.isArray(rawObj.messages) ? rawObj.messages : [];
-                const lastMsg = msgs[msgs.length - 1];
-                const lastTime = lastMsg?.at || lead.first_seen_at;
-
-                const displayName = getLeadDisplayName(lead);
-                const avatarUrl = getLeadAvatarUrl(lead);
-                const unansweredCount = getUnansweredCount(lead);
-
+              filtered.map((lead) => {
+                const waiting = unansweredCount(lead);
+                const sold = purchaseEvents(lead).length > 0;
                 return (
-                  <div
+                  <button
                     key={lead.id}
-                    onClick={() => { setSelectedLeadId(lead.id); setSaleNotice(null); }}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 10,
-                      padding: "10px 12px",
-                      cursor: "pointer",
-                      background: isSelected ? "rgba(123,57,252,0.14)" : "transparent",
-                      borderLeft: isSelected ? `3px solid ${PURPLE}` : "3px solid transparent",
-                      transition: "all 0.1s",
-                    }}
+                    type="button"
+                    onClick={() => chooseLead(lead)}
+                    className={`${styles.contact} ${selected?.id === lead.id ? styles.selectedContact : ""}`}
+                    aria-current={selected?.id === lead.id ? "true" : undefined}
                   >
-                    {/* Avatar com Foto Real ou Gradiente de Iniciais */}
-                    <div
-                      style={{
-                        width: 40,
-                        height: 40,
-                        borderRadius: "50%",
-                        background: avatarUrl ? "transparent" : (isSelected ? `linear-gradient(135deg, ${PURPLE}, #34c77b)` : getAvatarGradient(displayName)),
-                        color: "#fff",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        fontWeight: 800,
-                        fontSize: 13,
-                        flexShrink: 0,
-                        position: "relative",
-                        overflow: "hidden",
-                      }}
-                    >
-                      {avatarUrl ? (
-                        <img
-                          src={avatarUrl}
-                          alt={displayName}
-                          style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                          onError={(e) => {
-                            (e.currentTarget as HTMLElement).style.display = "none";
-                          }}
-                        />
-                      ) : (
-                        getInitials(displayName)
-                      )}
-                      {/* Online dot */}
-                      {isSelected && (
-                        <span style={{
-                          position: "absolute",
-                          bottom: 1,
-                          right: 1,
-                          width: 9,
-                          height: 9,
-                          borderRadius: "50%",
-                          background: "#34c77b",
-                          border: "2px solid #0d0a1e",
-                          zIndex: 2,
-                        }} />
-                      )}
-                    </div>
-
-                    {/* Info */}
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 1 }}>
-                        <span style={{ fontWeight: 700, fontSize: 12, color: isSelected ? "#fff" : "#ccc", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 120 }} title={displayName}>
-                          {displayName}
-                        </span>
-                        <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
-                          <span style={{ fontSize: 10, color: TEXT_MUTED }}>
-                            {timeAgo(lastTime)}
-                          </span>
-                          {unansweredCount > 0 && (
-                            <span
-                              style={{
-                                background: "#ef4444",
-                                color: "#fff",
-                                fontSize: 10,
-                                fontWeight: 800,
-                                padding: "1px 5px",
-                                borderRadius: 999,
-                                lineHeight: "14px",
-                                display: "inline-block",
-                                minWidth: 16,
-                                textAlign: "center",
-                              }}
-                              title={`${unansweredCount} mensagem(ns) aguardando resposta`}
-                            >
-                              {unansweredCount}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 2 }}>
-                        {msgType === "audio" && <Mic size={10} style={{ color: TEXT_MUTED, flexShrink: 0 }} />}
-                        {msgType === "image" && <ImageIcon size={10} style={{ color: TEXT_MUTED, flexShrink: 0 }} />}
-                        <span style={{ fontSize: 11, color: TEXT_MUTED, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {msgType === "audio" ? "Áudio" : msgType === "image" ? "Imagem" : snippet}
-                        </span>
-                      </div>
-
-                      {/* Badges */}
-                      <div style={{ display: "flex", gap: 3, flexWrap: "wrap", alignItems: "center" }}>
-                        {hasCtwa && (
-                          <span style={{ fontSize: 9, padding: "1px 4px", borderRadius: 3, background: "rgba(52,199,123,0.15)", color: "#34c77b", fontWeight: 700 }}>
-                            CTWA ✓
-                          </span>
+                    <Avatar lead={lead} />
+                    <span className={styles.contactMain}>
+                      <span className={styles.contactTop}>
+                        <strong>{displayName(lead)}</strong>
+                        <time suppressHydrationWarning>
+                          {timeLabel(latestTime(lead))}
+                        </time>
+                      </span>
+                      <span className={styles.contactSnippet}>
+                        {messagesFor(lead).at(-1)?.fromMe && (
+                          <Check size={13} />
                         )}
-                        {!hasCtwa && hasAd && (
-                          <span style={{ fontSize: 9, padding: "1px 4px", borderRadius: 3, background: "rgba(123,57,252,0.15)", color: "#b394ff", fontWeight: 700 }}>
-                            AD
-                          </span>
-                        )}
-                        {purchase ? (
-                          <span style={{ fontSize: 9, padding: "1px 4px", borderRadius: 3, background: "rgba(255,215,0,0.15)", color: "#ffd700", fontWeight: 700 }}>
-                            {formatMoney(purchase.value, purchase.currency || "BRL")}
-                          </span>
-                        ) : hasPurchasedLead(lead) ? (
-                          <span style={{ fontSize: 9, padding: "1px 4px", borderRadius: 3, background: "rgba(255,215,0,0.15)", color: "#ffd700", fontWeight: 700 }}>
-                            💰 Cliente
+                        {snippet(lead)}
+                      </span>
+                      <span className={styles.contactBottom}>
+                        <span className={styles.companyName}>
+                          {clientNameMap[lead.client_id] || "Cliente"}
+                        </span>
+                        {sold ? (
+                          <span className={styles.smallSuccess}>Venda</span>
+                        ) : lead.source_id || realClick(lead) ? (
+                          <span className={styles.smallTag}>
+                            <Megaphone size={10} />
+                            Anúncio
                           </span>
                         ) : (
-                          <span style={{ fontSize: 9, padding: "1px 4px", borderRadius: 3, background: "rgba(255,255,255,0.05)", color: TEXT_MUTED }}>
-                            Sem venda
-                          </span>
+                          <span className={styles.organicTag}>Orgânico</span>
                         )}
-                      </div>
-                    </div>
-                  </div>
+                      </span>
+                    </span>
+                    {waiting > 0 && (
+                      <span
+                        className={styles.unread}
+                        title={`${waiting} mensagens aguardando resposta`}
+                      >
+                        {waiting > 99 ? "99+" : waiting}
+                      </span>
+                    )}
+                  </button>
                 );
               })
             )}
+            {hasMore && (
+              <button
+                type="button"
+                className={styles.loadMore}
+                onClick={() =>
+                  setListLimit((previous) => Math.min(previous + 100, 1000))
+                }
+                disabled={listLimit >= 1000 || refreshing}
+              >
+                {listLimit >= 1000
+                  ? "Refine os filtros para ver mais contatos"
+                  : "Carregar mais conversas"}
+                <ChevronDown size={15} />
+              </button>
+            )}
           </div>
-        </div>
+          <div className={styles.listFooter}>
+            <span
+              className={`${styles.statusDot} ${liveError ? styles.staleDot : ""}`}
+            />
+            <span>
+              {liveError
+                ? "Atualização interrompida"
+                : "Sincronização automática"}
+            </span>
+            <time suppressHydrationWarning>
+              {lastUpdated ? timeLabel(lastUpdated) : "—"}
+            </time>
+          </div>
+        </aside>
 
-        {/* ================================================================ */}
-        {/* COLUNA 2: CHAT CENTRAL ESTILO WHATSAPP                          */}
-        {/* ================================================================ */}
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            overflow: "hidden",
-            background: "#0a0818",
-            backgroundImage: "radial-gradient(ellipse at 20% 50%, rgba(123,57,252,0.04) 0%, transparent 60%)",
-          }}
+        <section
+          className={styles.thread}
+          aria-label={
+            selected ? `Conversa com ${displayName(selected)}` : "Conversa"
+          }
         >
-          {selectedLead ? (
+          {selected ? (
             <>
-              {/* Chat Header */}
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  padding: "10px 16px",
-                  background: SURFACE,
-                  borderBottom: `1px solid ${BORDER}`,
-                  flexShrink: 0,
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  {(() => {
-                    const selName = getLeadDisplayName(selectedLead);
-                    const selAvatar = getLeadAvatarUrl(selectedLead);
-                    return (
-                      <>
-                        <div
-                          style={{
-                            width: 38,
-                            height: 38,
-                            borderRadius: "50%",
-                            background: selAvatar ? "transparent" : `linear-gradient(135deg, ${PURPLE}, #34c77b)`,
-                            color: "#fff",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            fontWeight: 800,
-                            fontSize: 13,
-                            flexShrink: 0,
-                            overflow: "hidden",
-                          }}
-                        >
-                          {selAvatar ? (
-                            <img
-                              src={selAvatar}
-                              alt={selName}
-                              style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                              onError={(e) => {
-                                (e.currentTarget as HTMLElement).style.display = "none";
-                              }}
-                            />
-                          ) : (
-                            getInitials(selName)
-                          )}
-                        </div>
-                        <div>
-                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                            <strong style={{ fontSize: 14, color: "#fff" }}>{selName}</strong>
-                            {selectedLead.ctwa_clid && (
-                              <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: "rgba(52,199,123,0.15)", color: "#34c77b", fontWeight: 700 }}>
-                                CTWA ✓
-                              </span>
-                            )}
-                            {selectedLead.source_id && !selectedLead.ctwa_clid && (
-                              <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: "rgba(123,57,252,0.15)", color: "#b394ff", fontWeight: 700 }}>
-                                AD
-                              </span>
-                            )}
-                            {hasPurchasedLead(selectedLead) && (
-                              <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: "rgba(255,215,0,0.15)", color: "#ffd700", fontWeight: 700 }}>
-                                💰 Cliente
-                              </span>
-                            )}
-                          </div>
-                          <div style={{ fontSize: 11, color: TEXT_MUTED, display: "flex", alignItems: "center", gap: 4 }}>
-                            <Phone size={10} />
-                            +{formatPhone(selectedLead.phone)}
-                            {selectedLead.city && ` · ${selectedLead.city}`}
-                            {selectedLead.state && `/${selectedLead.state}`}
-                          </div>
-                        </div>
-                      </>
-                    );
-                  })()}
+              <div className={styles.threadHeader}>
+                <button
+                  type="button"
+                  className={`${styles.iconButton} ${styles.mobileBack}`}
+                  aria-label="Voltar para conversas"
+                  onClick={() => setMobileView("list")}
+                >
+                  <ArrowLeft size={19} />
+                </button>
+                <Avatar lead={selected} />
+                <div className={styles.threadIdentity}>
+                  <h2>{displayName(selected)}</h2>
+                  <span>
+                    {formatPhone(selected.phone)}
+                    <i />
+                    {clientNameMap[selected.client_id] || "Cliente"}
+                  </span>
                 </div>
-
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <a
-                    href={`https://wa.me/${selectedLead.phone.replace(/\D/g, "")}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    title="Abrir no WhatsApp Web"
-                    style={{ textDecoration: "none" }}
+                <div className={styles.threadHeaderActions}>
+                  <button
+                    type="button"
+                    className={styles.iconButton}
+                    aria-label="Buscar nesta conversa"
+                    title="Buscar nesta conversa"
+                    onClick={() => setShowThreadSearch((previous) => !previous)}
                   >
-                    <button
-                      type="button"
-                      style={{
-                        padding: "5px 10px",
-                        borderRadius: 6,
-                        border: "1px solid rgba(37,211,102,0.4)",
-                        background: "transparent",
-                        color: GREEN,
-                        fontSize: 11,
-                        fontWeight: 700,
-                        cursor: "pointer",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 4,
-                      }}
-                    >
-                      <ExternalLink size={12} />
-                      WhatsApp Web
-                    </button>
-                  </a>
-                  <Button asChild size="sm" variant="outline" style={{ fontSize: 11 }}>
-                    <Link href={`/leads/${selectedLead.id}`}>
-                      Ver Lead
-                      <ChevronRight size={12} />
-                    </Link>
-                  </Button>
-                </div>
-              </div>
-
-              {/* Messages Area */}
-              <div
-                style={{
-                  flex: 1,
-                  overflowY: "auto",
-                  padding: "16px 20px",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 10,
-                }}
-              >
-                {/* CTWA Ad Card */}
-                {(selectedLead.source_id || selectedLead.ctwa_clid || selectedLead.headline || selectedAd) && (
-                  <div
-                    style={{
-                      maxWidth: 440,
-                      borderRadius: 12,
-                      background: "rgba(26,21,45,0.95)",
-                      border: "1px solid rgba(123,57,252,0.3)",
-                      overflow: "hidden",
-                      alignSelf: "flex-start",
-                      boxShadow: "0 6px 24px rgba(0,0,0,0.5)",
+                    <Search size={18} />
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.iconButton}
+                    aria-label="Detalhes do contato"
+                    title="Detalhes do contato"
+                    onClick={() => {
+                      if (window.matchMedia("(max-width: 1320px)").matches) {
+                        setShowDetails(true);
+                        setMobileView("details");
+                      } else {
+                        setShowDetails((previous) => !previous);
+                      }
                     }}
                   >
-                    {/* Green CTWA header like Leona */}
-                    <div
-                      style={{
-                        padding: "7px 12px",
-                        background: "linear-gradient(90deg, #064e3b, #065f46)",
-                        borderBottom: "1px solid rgba(52,199,123,0.3)",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 6,
-                      }}
+                    <Info size={18} />
+                  </button>
+                  <div className={styles.menuAnchor}>
+                    <button
+                      type="button"
+                      className={styles.iconButton}
+                      aria-label="Mais opções da conversa"
+                      aria-expanded={showMenu}
+                      onClick={() => setShowMenu((previous) => !previous)}
                     >
-                      <Flame size={12} style={{ color: "#34c77b" }} />
-                      <span style={{ fontSize: 11, fontWeight: 700, color: "#34c77b" }}>
-                        Conversão | Click-to-WhatsApp
-                      </span>
-                      {selectedLead.ctwa_clid ? (
-                        <span style={{ marginLeft: "auto", fontSize: 9, color: "#34c77b", background: "rgba(52,199,123,0.15)", padding: "1px 5px", borderRadius: 3, fontWeight: 700 }}>
-                          Mesmo anúncio ✓
-                        </span>
-                      ) : (
-                        <span style={{ marginLeft: "auto", fontSize: 9, color: "#b394ff", background: "rgba(123,57,252,0.15)", padding: "1px 5px", borderRadius: 3, fontWeight: 700 }}>
-                          AD Rastreado
-                        </span>
-                      )}
-                    </div>
-
-                    <div style={{ display: "flex", gap: 10, padding: 10 }}>
-                      {/* Ad creative thumbnail */}
-                      {(selectedLead.thumbnail_url || selectedAd?.thumbnail_url) ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={selectedLead.thumbnail_url || selectedAd?.thumbnail_url}
-                          alt="Criativo"
-                          style={{ width: 72, height: 72, borderRadius: 8, objectFit: "cover", flexShrink: 0 }}
-                        />
-                      ) : (
-                        <div style={{ width: 72, height: 72, borderRadius: 8, background: "rgba(123,57,252,0.1)", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                          <ImageIcon size={22} style={{ color: PURPLE, opacity: 0.5 }} />
-                        </div>
-                      )}
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 700, fontSize: 12, color: "#fff", marginBottom: 3 }}>
-                          {selectedLead.headline || selectedAd?.creative_title || selectedAd?.ad_name || "Anúncio Meta Ads"}
-                        </div>
-                        <div style={{ fontSize: 11, color: TEXT_MUTED, lineHeight: 1.4, maxHeight: 36, overflow: "hidden" }}>
-                          {selectedLead.ad_body || selectedAd?.creative_body || "Anúncio veiculado no Instagram/Facebook com destino ao WhatsApp."}
-                        </div>
-                        {(selectedAd?.campaign_name || selectedAd?.adset_name) && (
-                          <div style={{ fontSize: 10, color: "#34c77b", marginTop: 4, fontWeight: 600 }}>
-                            {selectedAd.campaign_name || "Campanha Meta"}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {selectedLead.ctwa_clid && (
-                      <div
-                        style={{
-                          padding: "5px 10px",
-                          background: "rgba(52,199,123,0.07)",
-                          borderTop: "1px solid rgba(52,199,123,0.15)",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                          fontSize: 10,
-                          color: "#34c77b",
-                        }}
-                      >
-                        <span>ctwa_clid capturado ✓</span>
-                        <span style={{ opacity: 0.7, fontFamily: "monospace" }}>
-                          {selectedLead.ctwa_clid.slice(0, 20)}...
-                        </span>
+                      <MoreHorizontal size={21} />
+                    </button>
+                    {showMenu && (
+                      <div className={styles.dropdown}>
+                        <Link href={`/leads/${selected.id}`}>
+                          <ArrowUpRight size={15} />
+                          Abrir cadastro completo
+                        </Link>
+                        <button type="button" onClick={exportConversation}>
+                          <Download size={15} />
+                          Exportar histórico exibido
+                        </button>
+                        <button type="button" onClick={() => void copyPhone()}>
+                          <Copy size={15} />
+                          {copied ? "Número copiado" : "Copiar número"}
+                        </button>
                       </div>
                     )}
                   </div>
-                )}
-
-                {/* Messages */}
-                {(() => {
-                  const rawObj = (selectedLead.raw && typeof selectedLead.raw === "object") ? (selectedLead.raw as Record<string, any>) : {};
-                  const messagesList: Array<{ text?: string; at: string; fromMe?: boolean; type?: string; isAudio?: boolean; isImage?: boolean }> =
-                    Array.isArray(rawObj.messages) && rawObj.messages.length > 0
-                      ? rawObj.messages
-                      : [{ text: extractMessageText(selectedLead), at: selectedLead.first_seen_at, fromMe: false }];
-
-                  return messagesList.map((m, idx) => {
-                    const isFromMe = Boolean(m.fromMe);
-                    const rawAt = m.at || selectedLead.first_seen_at;
-                    const dateObj = new Date(rawAt);
-                    const timeStr = isNaN(dateObj.getTime()) ? "12:00" : dateObj.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
-                    const isAudio = m.type === "audio" || m.isAudio;
-                    const isImage = m.type === "image" || m.isImage;
-
-                    return (
-                      <div
-                        key={idx}
-                        style={{
-                          maxWidth: 500,
-                          alignSelf: isFromMe ? "flex-end" : "flex-start",
-                        }}
-                      >
-                        {/* Audio bubble */}
-                        {isAudio ? (
-                          <div
-                            style={{
-                              borderRadius: isFromMe ? "14px 14px 2px 14px" : "14px 14px 14px 2px",
-                              background: isFromMe ? "linear-gradient(135deg, #005c4b, #007a63)" : "rgba(30,24,50,0.95)",
-                              border: `1px solid ${isFromMe ? "rgba(52,199,123,0.3)" : BORDER}`,
-                              padding: "10px 14px",
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 10,
-                              minWidth: 200,
-                            }}
-                          >
-                            <div
-                              style={{
-                                width: 34,
-                                height: 34,
-                                borderRadius: "50%",
-                                background: isFromMe ? "rgba(255,255,255,0.2)" : PURPLE,
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                flexShrink: 0,
-                                cursor: "pointer",
-                              }}
-                            >
-                              <Volume2 size={14} style={{ color: "#fff" }} />
-                            </div>
-                            {/* Waveform bars */}
-                            <div style={{ display: "flex", alignItems: "center", gap: 2, flex: 1 }}>
-                              {[4, 8, 12, 6, 14, 10, 7, 11, 9, 5, 13, 8, 6, 10, 4].map((h, i) => (
-                                <div key={i} style={{ width: 3, height: h, borderRadius: 2, background: isFromMe ? "rgba(255,255,255,0.5)" : "rgba(123,57,252,0.6)" }} />
-                              ))}
-                            </div>
-                            <div style={{ fontSize: 10, color: isFromMe ? "#a7f3d0" : TEXT_MUTED, flexShrink: 0 }}>
-                              <Mic size={10} style={{ display: "inline", marginRight: 2 }} />
-                              Áudio
-                            </div>
-                            <div style={{ fontSize: 10, color: isFromMe ? "#a7f3d0" : TEXT_MUTED, flexShrink: 0 }}>
-                              {timeStr}
-                              {isFromMe && <CheckCheck size={12} style={{ display: "inline", marginLeft: 4, color: "#38bdf8" }} />}
-                            </div>
-                          </div>
-                        ) : isImage ? (
-                          /* Image bubble */
-                          (() => {
-                            const imageSrc =
-                              (m as any).base64 ||
-                              (m.text && (m.text.startsWith("data:image") || m.text.startsWith("http")) ? m.text : null);
-
-                            return (
-                              <div
-                                style={{
-                                  borderRadius: isFromMe ? "14px 14px 2px 14px" : "14px 14px 14px 2px",
-                                  background: isFromMe ? "linear-gradient(135deg, #005c4b, #007a63)" : "rgba(30,24,50,0.95)",
-                                  border: `1px solid ${isFromMe ? "rgba(52,199,123,0.3)" : BORDER}`,
-                                  padding: imageSrc ? "6px" : "10px 14px",
-                                  overflow: "hidden",
-                                }}
-                              >
-                                {imageSrc ? (
-                                  <>
-                                    <img
-                                      src={imageSrc}
-                                      alt="Foto enviada"
-                                      onClick={() => setLightboxUrl(imageSrc)}
-                                      title="Clique para ampliar"
-                                      style={{
-                                        maxWidth: "280px",
-                                        maxHeight: "240px",
-                                        borderRadius: "8px",
-                                        cursor: "zoom-in",
-                                        objectFit: "cover",
-                                        display: "block",
-                                      }}
-                                    />
-                                    {m.text && !m.text.startsWith("data:") && !m.text.startsWith("http") && (
-                                      <div style={{ padding: "6px 4px 2px", fontSize: 12, color: "#fff" }}>
-                                        {m.text}
-                                      </div>
-                                    )}
-                                    <div
-                                      style={{
-                                        display: "flex",
-                                        justifyContent: "flex-end",
-                                        alignItems: "center",
-                                        gap: 3,
-                                        marginTop: 4,
-                                        padding: "0 4px",
-                                        fontSize: 10,
-                                        color: isFromMe ? "#a7f3d0" : TEXT_MUTED,
-                                      }}
-                                    >
-                                      <span>{timeStr}</span>
-                                      {isFromMe && <CheckCheck size={12} style={{ color: "#38bdf8" }} />}
-                                    </div>
-                                  </>
-                                ) : (
-                                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                    <ImageIcon size={16} style={{ color: isFromMe ? "#a7f3d0" : "#b394ff" }} />
-                                    <span style={{ fontSize: 12, color: isFromMe ? "#fff" : "#ccc" }}>Imagem Recebida</span>
-                                    <span style={{ marginLeft: "auto", fontSize: 10, color: isFromMe ? "#a7f3d0" : TEXT_MUTED }}>
-                                      {timeStr}
-                                      {isFromMe && <CheckCheck size={12} style={{ display: "inline", marginLeft: 4, color: "#38bdf8" }} />}
-                                    </span>
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })()
-                        ) : (
-                          /* Text bubble */
-                          <div
-                            style={{
-                              borderRadius: isFromMe ? "14px 14px 2px 14px" : "14px 14px 14px 2px",
-                              background: isFromMe
-                                ? "linear-gradient(135deg, #005c4b 0%, #007a63 100%)"
-                                : "rgba(26,21,45,0.95)",
-                              border: `1px solid ${isFromMe ? "rgba(52,199,123,0.25)" : "rgba(255,255,255,0.08)"}`,
-                              padding: "9px 13px",
-                              color: "#fff",
-                              fontSize: 13,
-                              lineHeight: 1.5,
-                              boxShadow: "0 3px 10px rgba(0,0,0,0.3)",
-                            }}
-                          >
-                            {!isFromMe && idx === 0 && (
-                              <div style={{ fontSize: 11, fontWeight: 700, color: "#7b9fff", marginBottom: 3 }}>
-                                {getLeadDisplayName(selectedLead)}
-                              </div>
-                            )}
-                            <div style={{ wordBreak: "break-word", whiteSpace: "pre-wrap" }}>{m.text}</div>
-                            <div
-                              style={{
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "flex-end",
-                                gap: 3,
-                                marginTop: 4,
-                                fontSize: 10,
-                                color: isFromMe ? "#a7f3d0" : TEXT_MUTED,
-                              }}
-                            >
-                              <span>{timeStr}</span>
-                              {isFromMe && <CheckCheck size={12} style={{ color: "#38bdf8" }} />}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  });
-                })()}
-
-                {/* CAPI Events in chat */}
-                {selectedEvents.map((ev) => (
-                  <div
-                    key={ev.id}
-                    style={{
-                      alignSelf: "center",
-                      maxWidth: 360,
-                      borderRadius: 10,
-                      background:
-                        ev.event_name === "Purchase"
-                          ? "linear-gradient(90deg, rgba(255,215,0,0.1), rgba(52,199,123,0.1))"
-                          : "rgba(56,189,248,0.08)",
-                      border:
-                        ev.event_name === "Purchase"
-                          ? "1px solid rgba(255,215,0,0.3)"
-                          : "1px solid rgba(56,189,248,0.25)",
-                      padding: "8px 14px",
-                      textAlign: "center",
-                      fontSize: 12,
-                    }}
-                  >
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontWeight: 700 }}>
-                      <BadgeCheck size={14} style={{ color: ev.event_name === "Purchase" ? "#ffd700" : "#38bdf8" }} />
-                      <span style={{ color: ev.event_name === "Purchase" ? "#ffd700" : "#38bdf8" }}>
-                        {ev.event_name === "Purchase"
-                          ? `COMPRA: ${formatMoney(ev.value, ev.currency || "BRL")}`
-                          : `Evento ${ev.event_name}`}
-                      </span>
-                    </div>
-                    <div style={{ fontSize: 10, color: TEXT_MUTED, marginTop: 2 }}>
-                      {formatDateTime(ev.created_at)} · Enviado ao Meta
-                    </div>
-                  </div>
-                ))}
-                <div ref={chatEndRef} />
+                </div>
               </div>
-
-              {/* Input Footer */}
-              <div
-                style={{
-                  background: SURFACE,
-                  borderTop: `1px solid ${BORDER}`,
-                  padding: "10px 14px",
-                  flexShrink: 0,
-                }}
-              >
-                {/* Quick CAPI sale row */}
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    marginBottom: 8,
-                    padding: "6px 10px",
-                    borderRadius: 8,
-                    background: "rgba(255,215,0,0.06)",
-                    border: "1px solid rgba(255,215,0,0.15)",
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: TEXT_MUTED }}>
-                    <DollarSign size={12} style={{ color: "#ffd700" }} />
-                    <span>Marcar Venda:</span>
-                    <span style={{ color: "#ffd700", fontWeight: 700 }}>R$</span>
-                    <input
-                      type="text"
-                      value={saleValue}
-                      onChange={(e) => setSaleValue(e.target.value)}
-                      placeholder="197,00"
-                      style={{
-                        width: 65,
-                        padding: "2px 6px",
-                        borderRadius: 5,
-                        background: "rgba(255,215,0,0.1)",
-                        border: "1px solid rgba(255,215,0,0.25)",
-                        color: "#ffd700",
-                        fontWeight: 700,
-                        fontSize: 12,
-                        textAlign: "center",
-                        outline: "none",
-                      }}
-                    />
-                  </div>
+              {showThreadSearch && (
+                <label className={styles.threadSearch}>
+                  <Search size={16} />
+                  <input
+                    aria-label="Buscar no histórico exibido"
+                    placeholder="Buscar no histórico exibido…"
+                    value={threadSearch}
+                    onChange={(event) => setThreadSearch(event.target.value)}
+                    autoFocus
+                  />
+                  <span>
+                    {searchMatches
+                      ? `${visibleMessages.length} resultado(s)`
+                      : ""}
+                  </span>
                   <button
                     type="button"
-                    onClick={handleSendQuickSale}
-                    disabled={sendingSale}
-                    style={{
-                      padding: "4px 12px",
-                      borderRadius: 6,
-                      border: "none",
-                      background: "linear-gradient(90deg, #ffd700, #ffaa00)",
-                      color: "#000",
-                      fontWeight: 800,
-                      fontSize: 11,
-                      cursor: sendingSale ? "not-allowed" : "pointer",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 4,
-                      opacity: sendingSale ? 0.7 : 1,
+                    className={styles.iconButton}
+                    aria-label="Fechar busca"
+                    onClick={() => {
+                      setShowThreadSearch(false);
+                      setThreadSearch("");
                     }}
                   >
-                    {sendingSale ? <Loader2 size={12} className="animate-spin" /> : <Zap size={12} />}
-                    Enviar CAPI
+                    <X size={16} />
                   </button>
+                </label>
+              )}
+              {(selected.source_id || realClick(selected)) && (
+                <div className={styles.originBanner}>
+                  <span>
+                    <Megaphone size={16} />
+                  </span>
+                  <div>
+                    <strong>
+                      {selectedAd?.campaign_name ||
+                        selected.headline ||
+                        "Conversa iniciada por anúncio"}
+                    </strong>
+                    <p>
+                      {realClick(selected)
+                        ? "Identificador de clique recebido"
+                        : "Anúncio identificado · clique ainda não confirmado"}
+                    </p>
+                  </div>
+                  {selected.source_url &&
+                    /^https?:\/\//.test(selected.source_url) && (
+                      <a
+                        href={selected.source_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        aria-label="Abrir anúncio de origem"
+                      >
+                        <ArrowUpRight size={18} />
+                      </a>
+                    )}
                 </div>
-
-                {saleNotice && (
-                  <div
-                    style={{
-                      marginBottom: 8,
-                      padding: "5px 10px",
-                      borderRadius: 6,
-                      background: saleNotice.startsWith("✅") ? "rgba(52,199,123,0.1)" : "rgba(239,68,68,0.1)",
-                      border: `1px solid ${saleNotice.startsWith("✅") ? "rgba(52,199,123,0.3)" : "rgba(239,68,68,0.3)"}`,
-                      fontSize: 11,
-                      color: saleNotice.startsWith("✅") ? "#34c77b" : "#ef4444",
-                    }}
-                  >
-                    {saleNotice}
+              )}
+              <div
+                ref={chatRef}
+                className={styles.timeline}
+                onScroll={(event) => {
+                  const node = event.currentTarget;
+                  nearBottomRef.current =
+                    node.scrollHeight - node.scrollTop - node.clientHeight <
+                    100;
+                  if (nearBottomRef.current) setNewMessages(false);
+                }}
+              >
+                {Boolean(leadRaw(selected).conversation_has_more) &&
+                  !searchMatches && (
+                    <button
+                      type="button"
+                      className={styles.historyButton}
+                      onClick={() =>
+                        setMessageLimit((previous) =>
+                          Math.min(previous + 100, 1000),
+                        )
+                      }
+                      disabled={messageLimit >= 1000 || refreshing}
+                    >
+                      <Clock3 size={14} />
+                      {messageLimit >= 1000
+                        ? "Limite de histórico exibido atingido"
+                        : "Carregar mensagens anteriores"}
+                    </button>
+                  )}
+                <div className={styles.historyNotice}>
+                  <ShieldCheck size={12} />
+                  Histórico sincronizado do WhatsApp · acesso restrito à sua
+                  equipe
+                </div>
+                {visibleMessages.length === 0 ? (
+                  <EmptyState
+                    icon={<MessageCircle size={29} />}
+                    title={
+                      searchMatches
+                        ? "Nenhuma mensagem encontrada"
+                        : "Sua próxima conversa começa aqui"
+                    }
+                    text={
+                      searchMatches
+                        ? "Experimente outra palavra no histórico carregado."
+                        : "As mensagens recebidas e enviadas aparecerão neste histórico após a sincronização."
+                    }
+                  />
+                ) : (
+                  visibleMessages.map((message, index) => {
+                    const at = new Date(
+                      timestamp(message, selected.first_seen_at),
+                    );
+                    const previous = visibleMessages[index - 1];
+                    const dateKey = at.toLocaleDateString("pt-BR", {
+                      timeZone: "America/Sao_Paulo",
+                    });
+                    const previousKey = previous
+                      ? new Date(
+                          timestamp(previous, selected.first_seen_at),
+                        ).toLocaleDateString("pt-BR", {
+                          timeZone: "America/Sao_Paulo",
+                        })
+                      : "";
+                    const source = mediaSource(message);
+                    const isImage =
+                      message.type === "image" ||
+                      Boolean(source?.startsWith("data:image/"));
+                    const isAudio =
+                      message.type === "audio" ||
+                      Boolean(source?.startsWith("data:audio/"));
+                    const isVideo =
+                      message.type === "video" ||
+                      Boolean(source?.startsWith("data:video/"));
+                    const isDocument =
+                      message.type === "document" || message.type === "file";
+                    const text =
+                      message.text && !message.text.startsWith("data:")
+                        ? message.text
+                        : message.caption;
+                    return (
+                      <div
+                        key={
+                          message.id ||
+                          message.message_id ||
+                          `${message.at}:${index}`
+                        }
+                      >
+                        {dateKey !== previousKey && (
+                          <div className={styles.daySeparator}>
+                            <span>{dateKey}</span>
+                          </div>
+                        )}
+                        <div
+                          className={`${styles.messageRow} ${message.fromMe ? styles.outgoingRow : ""}`}
+                        >
+                          <div
+                            className={`${styles.bubble} ${message.fromMe ? styles.outgoing : ""}`}
+                          >
+                            {!message.fromMe && (
+                              <span className={styles.bubbleName}>
+                                {displayName(selected).split(" ")[0]}
+                              </span>
+                            )}
+                            {isAudio ? (
+                              source ? (
+                                <audio
+                                  controls
+                                  preload="none"
+                                  src={source}
+                                  aria-label={`Áudio ${message.fromMe ? "enviado" : "recebido"}`}
+                                />
+                              ) : (
+                                <div className={styles.unavailableMedia}>
+                                  <CircleAlert size={18} />
+                                  <span>
+                                    Áudio sem arquivo disponível
+                                    <small>
+                                      O provedor ainda não sincronizou esta
+                                      mídia.
+                                    </small>
+                                  </span>
+                                </div>
+                              )
+                            ) : isImage ? (
+                              source ? (
+                                <button
+                                  type="button"
+                                  className={styles.imageButton}
+                                  onClick={() => setLightbox(source)}
+                                  aria-label="Ampliar imagem"
+                                >
+                                  <img
+                                    src={source}
+                                    alt={
+                                      message.caption || "Imagem da conversa"
+                                    }
+                                    loading="lazy"
+                                  />
+                                </button>
+                              ) : (
+                                <div className={styles.unavailableMedia}>
+                                  <ImageIcon size={20} />
+                                  <span>
+                                    Imagem não disponível
+                                    <small>
+                                      Sincronize a mídia no provedor de origem.
+                                    </small>
+                                  </span>
+                                </div>
+                              )
+                            ) : isVideo ? (
+                              source ? (
+                                <video src={source} controls preload="none" />
+                              ) : (
+                                <div className={styles.unavailableMedia}>
+                                  <FileText size={19} />
+                                  Vídeo não disponível
+                                </div>
+                              )
+                            ) : isDocument ? (
+                              source ? (
+                                <a
+                                  href={source}
+                                  download={message.filename || "documento"}
+                                  className={styles.documentLink}
+                                >
+                                  <FileText size={24} />
+                                  <span>
+                                    {message.filename || "Documento"}
+                                    <small>Baixar arquivo</small>
+                                  </span>
+                                  <Download size={16} />
+                                </a>
+                              ) : (
+                                <div className={styles.unavailableMedia}>
+                                  <FileText size={20} />
+                                  <span>
+                                    {message.filename || "Documento"}
+                                    <small>Arquivo não sincronizado</small>
+                                  </span>
+                                </div>
+                              )
+                            ) : null}
+                            {text &&
+                              !(isAudio && /^\[?áudio/i.test(text)) &&
+                              !(isImage && /^\[?imagem/i.test(text)) && (
+                                <p>{text}</p>
+                              )}
+                            {!text &&
+                              !isAudio &&
+                              !isImage &&
+                              !isVideo &&
+                              !isDocument && (
+                                <p>Mensagem sem conteúdo de texto.</p>
+                              )}
+                            <div className={styles.bubbleMeta}>
+                              <time suppressHydrationWarning>
+                                {timeLabel(at.getTime())}
+                              </time>
+                              {message.fromMe && (
+                                <span title="Mensagem enviada pelo atendimento. Leitura não confirmada.">
+                                  <Check size={13} />
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+                {!searchMatches && selectedEvents.length > 0 && (
+                  <div className={styles.eventHistory}>
+                    {selectedEvents
+                      .slice()
+                      .sort(
+                        (a, b) =>
+                          Date.parse(a.created_at) - Date.parse(b.created_at),
+                      )
+                      .map((event) => (
+                        <div
+                          className={styles.eventPill}
+                          key={`${event.event_name}:${event.event_id}`}
+                        >
+                          <BadgeCheck size={14} />
+                          <span>
+                            {event.event_name === "Purchase"
+                              ? "Compra"
+                              : event.event_name}{" "}
+                            {event.value !== null
+                              ? formatMoney(
+                                  event.value,
+                                  event.currency ||
+                                    selectedClient?.default_currency ||
+                                    "BRL",
+                                )
+                              : ""}
+                            {event.is_test ? " · Teste" : ""}
+                            <small>
+                              {formatDateTime(event.created_at)} ·{" "}
+                              {event.status === "enviado"
+                                ? "Recebido pela Meta"
+                                : "Envio com erro"}
+                            </small>
+                          </span>
+                        </div>
+                      ))}
                   </div>
                 )}
-
-                {/* Respostas Rápidas / Templates */}
-                <div style={{ display: "flex", gap: 6, marginBottom: 8, overflowX: "auto", paddingBottom: 2 }}>
-                  {[
-                    { label: "👋 Olá!", text: "Olá! Tudo bem? Como posso te ajudar hoje?" },
-                    { label: "🎯 Vi seu Anúncio", text: "Olá! Vi que você veio pelo nosso anúncio. Gostaria de tirar alguma dúvida ou fechar seu pedido?" },
-                    { label: "💳 Chave PIX", text: "Segue nossa chave PIX para pagamento: [CHAVE PIX]. Assim que realizar o envio, me mande o comprovante por aqui!" },
-                    { label: "✅ Confirmado", text: "Pagamento e pedido confirmados com sucesso! Seja muito bem-vindo(a)!" },
-                  ].map((chip, i) => (
-                    <button
-                      key={i}
-                      type="button"
-                      onClick={() => {
-                        setReplyText(chip.text);
-                        inputRef.current?.focus();
-                      }}
-                      style={{
-                        padding: "3px 8px",
-                        borderRadius: 12,
-                        background: "rgba(123,57,252,0.12)",
-                        border: "1px solid rgba(123,57,252,0.3)",
-                        color: "#c4b5fd",
-                        fontSize: 10,
-                        cursor: "pointer",
-                        whiteSpace: "nowrap",
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 3,
-                      }}
-                    >
-                      {chip.label}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Atalho de Barra (/) Popup */}
-                {replyText.startsWith("/") && (
-                  <div
-                    style={{
-                      marginBottom: 8,
-                      background: "rgba(21, 17, 42, 0.98)",
-                      border: `1px solid ${PURPLE}`,
-                      borderRadius: 10,
-                      padding: "6px",
-                      boxShadow: "0 -4px 20px rgba(0,0,0,0.5)",
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 4,
-                    }}
-                  >
-                    <div style={{ fontSize: 10, color: "#a855f7", fontWeight: 700, padding: "2px 6px" }}>
-                      ⚡ ATALHOS RÁPIDOS (digite ou clique)
+              </div>
+              {newMessages && (
+                <button
+                  type="button"
+                  className={styles.newMessages}
+                  onClick={jumpToLatest}
+                >
+                  <ArrowDown size={15} />
+                  Ir às mensagens recentes
+                </button>
+              )}
+              <div className={styles.composerArea}>
+                {messageErrors[selected.id] && (
+                  <div role="alert" className={styles.messageError}>
+                    <CircleAlert size={15} />
+                    {messageErrors[selected.id]}
+                  </div>
+                )}
+                {shortcuts.length > 0 && (
+                  <div className={styles.shortcuts}>
+                    <div>
+                      <Zap size={14} />
+                      Respostas rápidas
                     </div>
-                    {QUICK_SLASH_COMMANDS.filter((cmd) => cmd.trigger.startsWith(replyText.toLowerCase().trim())).map((cmd) => (
+                    {shortcuts.map((shortcut) => (
                       <button
-                        key={cmd.trigger}
                         type="button"
+                        key={shortcut.key}
                         onClick={() => {
-                          setReplyText(cmd.text);
+                          setDraft(shortcut.text);
                           inputRef.current?.focus();
                         }}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                          padding: "6px 8px",
-                          borderRadius: 6,
-                          background: "rgba(255,255,255,0.04)",
-                          border: "none",
-                          color: "#fff",
-                          fontSize: 11,
-                          cursor: "pointer",
-                          textAlign: "left",
-                        }}
                       >
-                        <span style={{ color: "#c4b5fd", fontWeight: 700 }}>{cmd.trigger} ({cmd.label})</span>
-                        <span style={{ color: TEXT_MUTED, fontSize: 10, marginLeft: 8, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 220 }}>
-                          {cmd.text}
-                        </span>
+                        <strong>{shortcut.key}</strong>
+                        <span>{shortcut.title}</span>
                       </button>
                     ))}
                   </div>
                 )}
-
-                {/* Message input */}
-                <form onSubmit={handleSendMessage} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  {/* Hidden file input */}
+                <div className={styles.composerLabel}>
+                  <span>
+                    <span className={styles.statusDot} />
+                    Resposta pelo WhatsApp
+                  </span>
+                  <button type="button" onClick={openSale}>
+                    <Wallet size={13} />
+                    Registrar venda
+                  </button>
+                </div>
+                <form
+                  className={styles.composer}
+                  onSubmit={(event) => void sendMessage(event)}
+                >
                   <input
-                    ref={fileInputRef}
+                    ref={fileRef}
                     type="file"
-                    onChange={handleSelectMedia}
-                    style={{ display: "none" }}
-                    accept="image/*,application/pdf"
+                    accept="image/*,audio/*,video/*,.pdf,.txt,.csv,.doc,.docx,.xls,.xlsx"
+                    hidden
+                    onChange={(event) => void sendMedia(event)}
                   />
-
-                  {/* Attachment button */}
                   <button
                     type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={sendingMedia || sendingReply}
-                    title="Enviar Imagem ou Arquivo (PDF)"
-                    style={{
-                      borderRadius: "50%",
-                      width: 38,
-                      height: 38,
-                      padding: 0,
-                      background: "rgba(255,255,255,0.06)",
-                      border: `1px solid ${BORDER}`,
-                      color: sendingMedia ? "#b394ff" : "#ccc",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      flexShrink: 0,
-                      cursor: sendingMedia ? "default" : "pointer",
-                    }}
+                    className={styles.attachButton}
+                    aria-label="Anexar arquivo de até 5 MB"
+                    title="Anexar arquivo · até 5 MB"
+                    onClick={() => fileRef.current?.click()}
+                    disabled={isSending}
                   >
-                    {sendingMedia ? <Loader2 size={16} className="animate-spin" /> : <Paperclip size={16} />}
+                    <Paperclip size={20} />
                   </button>
-
-                  <input
+                  <textarea
                     ref={inputRef}
-                    type="text"
-                    value={replyText}
-                    onChange={(e) => setReplyText(e.target.value)}
-                    placeholder={`Responder para ${selectedLead.name || selectedLead.phone}... (digite / para atalhos)`}
-                    disabled={sendingReply}
-                    style={{
-                      flex: 1,
-                      padding: "9px 14px",
-                      borderRadius: 20,
-                      background: "rgba(255,255,255,0.05)",
-                      border: `1px solid ${BORDER}`,
-                      color: "#fff",
-                      fontSize: 13,
-                      outline: "none",
+                    rows={2}
+                    aria-label={`Responder para ${displayName(selected)}`}
+                    placeholder={`Responder para ${displayName(selected).split(" ")[0]}…`}
+                    value={draft}
+                    onChange={(event) => setDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (
+                        event.key === "Enter" &&
+                        !event.shiftKey &&
+                        !event.nativeEvent.isComposing
+                      ) {
+                        event.preventDefault();
+                        if (shortcuts.length === 1) setDraft(shortcuts[0].text);
+                        else void sendMessage();
+                      }
                     }}
                   />
                   <button
                     type="submit"
-                    disabled={sendingReply || !replyText.trim()}
-                    title="Enviar mensagem via WhatsApp"
-                    style={{
-                      borderRadius: "50%",
-                      width: 38,
-                      height: 38,
-                      padding: 0,
-                      background: replyText.trim() ? GREEN : "rgba(255,255,255,0.08)",
-                      border: "none",
-                      color: "#fff",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      flexShrink: 0,
-                      cursor: replyText.trim() ? "pointer" : "default",
-                      transition: "background 0.2s",
-                    }}
+                    className={styles.sendButton}
+                    disabled={isSending || !draft.trim()}
+                    aria-label={
+                      isSending ? "Enviando mensagem" : "Enviar mensagem"
+                    }
                   >
-                    {sendingReply ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+                    {isSending ? (
+                      <Loader2 size={19} className={styles.spin} />
+                    ) : (
+                      <Send size={18} />
+                    )}
                   </button>
                 </form>
+                <div className={styles.composerHint}>
+                  <span>
+                    <kbd>Enter</kbd> envia · <kbd>Shift + Enter</kbd> nova linha
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDraft("/");
+                      inputRef.current?.focus();
+                    }}
+                  >
+                    <Zap size={12} />
+                    Atalhos
+                  </button>
+                </div>
+              </div>
+            </>
+          ) : (
+            <EmptyState
+              icon={<MessagesSquare size={35} />}
+              title="Tudo começa com uma boa conversa"
+              text="Selecione um contato à esquerda para acompanhar o histórico e continuar o atendimento."
+            />
+          )}
+        </section>
 
-                {replyError && (
-                  <div style={{ fontSize: 11, color: "#ef4444", marginTop: 6, padding: "0 4px" }}>
-                    ⚠️ {replyError}
+        <aside className={styles.detailsPanel} aria-label="Detalhes do contato">
+          {selected ? (
+            <>
+              <div className={styles.detailsHeading}>
+                <h2>Detalhes do contato</h2>
+                <button
+                  type="button"
+                  className={styles.iconButton}
+                  aria-label="Fechar detalhes"
+                  onClick={() => {
+                    setShowDetails(false);
+                    setMobileView("chat");
+                  }}
+                >
+                  <X size={17} />
+                </button>
+              </div>
+              <div className={styles.profile}>
+                <Avatar lead={selected} large />
+                <h3>{displayName(selected)}</h3>
+                <span>{clientNameMap[selected.client_id] || "Cliente"}</span>
+                <div className={styles.profileTags}>
+                  <span
+                    className={
+                      selectedPurchases.length > 0
+                        ? styles.successTag
+                        : styles.neutralTag
+                    }
+                  >
+                    {selectedPurchases.length > 0
+                      ? "Cliente"
+                      : unansweredCount(selected) > 0
+                        ? "Aguardando resposta"
+                        : "Em atendimento"}
+                  </span>
+                  {realClick(selected) && (
+                    <span className={styles.trackingTag}>
+                      <ShieldCheck size={11} />
+                      CTWA recebido
+                    </span>
+                  )}
+                </div>
+                <Link
+                  href={`/leads/${selected.id}`}
+                  className={styles.profileLink}
+                >
+                  Abrir cadastro completo
+                  <ArrowUpRight size={13} />
+                </Link>
+              </div>
+              <div className={styles.detailSection}>
+                <h3>
+                  <Users size={14} />
+                  Informações
+                </h3>
+                <div className={styles.infoRow}>
+                  <span>Telefone</span>
+                  <div>
+                    {formatPhone(selected.phone)}
+                    <button
+                      type="button"
+                      className={styles.tinyButton}
+                      onClick={() => void copyPhone()}
+                      aria-label="Copiar telefone"
+                    >
+                      {copied ? <Check size={13} /> : <Copy size={13} />}
+                    </button>
                   </div>
+                </div>
+                <div className={styles.infoRow}>
+                  <span>E-mail</span>
+                  <div>{selected.email || "Não informado"}</div>
+                </div>
+                <div className={styles.infoRow}>
+                  <span>Localização</span>
+                  <div>
+                    {[selected.city, selected.state]
+                      .filter(Boolean)
+                      .join(", ") || "Não informada"}
+                  </div>
+                </div>
+                <div className={styles.infoRow}>
+                  <span>Primeiro contato</span>
+                  <div>
+                    {new Date(selected.first_seen_at).toLocaleDateString(
+                      "pt-BR",
+                      { timeZone: "America/Sao_Paulo" },
+                    )}
+                  </div>
+                </div>
+              </div>
+              <div className={styles.detailSection}>
+                <div className={styles.sectionTitle}>
+                  <h3>
+                    <Megaphone size={14} />
+                    Origem da conversa
+                  </h3>
+                  <button
+                    type="button"
+                    className={styles.tinyButton}
+                    title="Recuperar rastreio recebido"
+                    aria-label="Recuperar rastreio recebido"
+                    onClick={() => void recoverCtwa()}
+                    disabled={ctwaBusy}
+                  >
+                    {ctwaBusy ? (
+                      <Loader2 size={13} className={styles.spin} />
+                    ) : (
+                      <RefreshCw size={13} />
+                    )}
+                  </button>
+                </div>
+                {selected.source_id || realClick(selected) ? (
+                  <div className={styles.adCard}>
+                    {selected.thumbnail_url || selectedAd?.thumbnail_url ? (
+                      <img
+                        src={
+                          selected.thumbnail_url ||
+                          selectedAd?.thumbnail_url ||
+                          ""
+                        }
+                        alt="Criativo do anúncio de origem"
+                        loading="lazy"
+                      />
+                    ) : (
+                      <div className={styles.adPlaceholder}>
+                        <Megaphone size={23} />
+                        <span>Meta Ads</span>
+                      </div>
+                    )}
+                    <div>
+                      <span className={styles.adLabel}>
+                        ANÚNCIO IDENTIFICADO
+                      </span>
+                      <strong>
+                        {selectedAd?.ad_name ||
+                          selected.headline ||
+                          "Anúncio de origem"}
+                      </strong>
+                      <p>
+                        {selectedAd?.campaign_name ||
+                          selected.ad_body ||
+                          "Campanha não sincronizada"}
+                      </p>
+                      <span className={styles.adId}>
+                        ID: {selected.source_id || "Não informado"}
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className={styles.organicCard}>
+                    <MessageCircle size={19} />
+                    <strong>Origem sem anúncio</strong>
+                    <p>Nenhum anúncio identificado nos dados recebidos.</p>
+                  </div>
+                )}
+                <p className={styles.attributionHelp}>
+                  {realClick(selected)
+                    ? "Token de clique preservado. O recebimento do evento não garante atribuição pela Meta."
+                    : "Identificar um anúncio não substitui o token de clique CTWA."}
+                </p>
+                <button
+                  type="button"
+                  className={styles.textButton}
+                  onClick={() => {
+                    setShowAdForm((previous) => !previous);
+                    setAdInput(selected.source_id || "");
+                  }}
+                >
+                  {showAdForm ? "Cancelar vínculo" : "Vincular anúncio"}
+                  <ChevronRight size={13} />
+                </button>
+                {showAdForm && (
+                  <form
+                    onSubmit={(event) => void assignAd(event)}
+                    className={styles.adForm}
+                  >
+                    <input
+                      aria-label="ID do anúncio"
+                      placeholder="ID numérico do anúncio"
+                      value={adInput}
+                      onChange={(event) => setAdInput(event.target.value)}
+                      inputMode="numeric"
+                      required
+                    />
+                    <button
+                      type="submit"
+                      className={styles.secondaryButton}
+                      disabled={adBusy}
+                    >
+                      {adBusy ? "Salvando…" : "Salvar anúncio"}
+                    </button>
+                  </form>
+                )}
+                {ctwaNotice && (
+                  <p className={styles.inlineNotice} role="status">
+                    {ctwaNotice}
+                  </p>
+                )}
+              </div>
+              <div className={styles.detailSection}>
+                <h3>
+                  <Wallet size={14} />
+                  Relacionamento
+                </h3>
+                <div className={styles.revenueRow}>
+                  <div>
+                    <span>Compras registradas</span>
+                    <strong>
+                      {formatMoney(
+                        purchaseTotal,
+                        selectedClient?.default_currency || "BRL",
+                      )}
+                    </strong>
+                  </div>
+                  <span>
+                    {selectedPurchases.length} venda
+                    {selectedPurchases.length === 1 ? "" : "s"}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className={styles.saleButton}
+                  onClick={openSale}
+                >
+                  <Plus size={15} />
+                  Registrar uma venda
+                </button>
+              </div>
+              <div className={styles.detailSection}>
+                <div className={styles.sectionTitle}>
+                  <h3>
+                    <FileText size={14} />
+                    Anotações internas
+                  </h3>
+                  <span className={styles.privateLabel}>Só sua equipe</span>
+                </div>
+                <textarea
+                  aria-label="Anotações internas do contato"
+                  placeholder="Contexto, preferências e próximos passos…"
+                  value={notesValue}
+                  onChange={(event) =>
+                    setNoteDrafts((previous) => ({
+                      ...previous,
+                      [selected.id]: event.target.value,
+                    }))
+                  }
+                  rows={4}
+                />
+                <button
+                  type="button"
+                  className={styles.noteSave}
+                  onClick={() => void saveNotes()}
+                  disabled={noteSaving || notesValue === (selected.notes || "")}
+                >
+                  {noteSaving ? "Salvando…" : "Salvar anotação"}
+                  <Check size={13} />
+                </button>
+                {noteStatus && (
+                  <p className={styles.inlineNotice} role="status">
+                    {noteStatus}
+                  </p>
                 )}
               </div>
             </>
           ) : (
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                justifyContent: "center",
-                height: "100%",
-                color: TEXT_MUTED,
-                gap: 12,
-              }}
-            >
-              <MessageSquare size={48} style={{ opacity: 0.2 }} />
-              <span style={{ fontSize: 13 }}>Selecione uma conversa na lista</span>
-            </div>
+            <EmptyState
+              icon={<Info size={25} />}
+              title="Contexto do contato"
+              text="Os detalhes e a origem aparecerão aqui quando você abrir uma conversa."
+            />
           )}
-        </div>
+        </aside>
+      </div>
 
-        {/* ================================================================ */}
-        {/* COLUNA 3: DOSSIER / RAIO-X DE ATRIBUIÇÃO                       */}
-        {/* ================================================================ */}
-        {showRightPanel && (
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              borderLeft: `1px solid ${BORDER}`,
-              background: DARK_BG,
-              overflowY: "auto",
-              padding: "14px 14px",
-              gap: 14,
-            }}
+      <Modal
+        open={Boolean(sale)}
+        title="Registrar uma venda"
+        onClose={() => {
+          if (!saleBusy) setSale(null);
+        }}
+      >
+        {sale && (
+          <form
+            onSubmit={(event) => void previewSale(event)}
+            className={styles.saleForm}
           >
-            {selectedLead ? (
-              <>
-                {/* Contact Card */}
-                {(() => {
-                  const selName = getLeadDisplayName(selectedLead);
-                  const selAvatar = getLeadAvatarUrl(selectedLead);
-                  const isClient = hasPurchasedLead(selectedLead);
-
-                  return (
-                    <div style={{ textAlign: "center" }}>
-                      <div
-                        style={{
-                          width: 64,
-                          height: 64,
-                          borderRadius: "50%",
-                          background: selAvatar ? "transparent" : `linear-gradient(135deg, ${PURPLE}, #34c77b)`,
-                          color: "#fff",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          fontWeight: 800,
-                          fontSize: 22,
-                          margin: "0 auto 8px",
-                          overflow: "hidden",
-                          border: `2px solid ${isClient ? "#ffd700" : PURPLE}`,
-                          boxShadow: "0 4px 14px rgba(0,0,0,0.4)",
-                        }}
-                      >
-                        {selAvatar ? (
-                          <img
-                            src={selAvatar}
-                            alt={selName}
-                            style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                            onError={(e) => {
-                              (e.currentTarget as HTMLElement).style.display = "none";
-                            }}
-                          />
-                        ) : (
-                          getInitials(selName)
-                        )}
-                      </div>
-                      <div style={{ fontWeight: 800, fontSize: 15, color: "#fff" }}>{selName}</div>
-                      <div style={{ fontSize: 11, color: TEXT_MUTED, marginTop: 2 }}>
-                        {selectedLead.city ? `${selectedLead.city}${selectedLead.state ? `/${selectedLead.state}` : ""}` : "Localização não informada"}
-                      </div>
-                      <div
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 4,
-                          marginTop: 6,
-                          padding: "3px 10px",
-                          borderRadius: 999,
-                          background: isClient ? "rgba(255,215,0,0.15)" : "rgba(123,57,252,0.15)",
-                          border: `1px solid ${isClient ? "rgba(255,215,0,0.3)" : "rgba(123,57,252,0.3)"}`,
-                          fontSize: 10,
-                          fontWeight: 700,
-                          color: isClient ? "#ffd700" : "#b394ff",
-                        }}
-                      >
-                        {isClient ? "💰 Cliente (Compra Confirmada)" : "⏳ Atendimento Ativo"}
-                      </div>
-                    </div>
-                  );
-                })()}
-
-                <div style={{ width: "100%", height: 1, background: BORDER }} />
-
-                {/* Contact Details */}
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  <div style={{ fontSize: 10, color: TEXT_MUTED, fontWeight: 700, textTransform: "uppercase" as const, letterSpacing: 1 }}>
-                    Dados de Contato
-                  </div>
-
-                  <div style={{ padding: "8px 10px", borderRadius: 8, background: SURFACE, border: `1px solid ${BORDER}` }}>
-                    <div style={{ fontSize: 10, color: TEXT_MUTED, marginBottom: 2 }}>Telefone</div>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                      <span style={{ fontSize: 12, color: "#fff", fontWeight: 600 }}>+{formatPhone(selectedLead.phone)}</span>
-                      <div style={{ display: "flex", gap: 4 }}>
-                        <button
-                          type="button"
-                          onClick={() => copyToClipboard(selectedLead.phone, "phone")}
-                          style={{ background: "none", border: "none", color: TEXT_MUTED, cursor: "pointer", padding: 2 }}
-                          title="Copiar"
-                        >
-                          {copiedKey === "phone" ? <Check size={12} style={{ color: "#34c77b" }} /> : <Copy size={12} />}
-                        </button>
-                        <a
-                          href={`https://wa.me/${selectedLead.phone.replace(/\D/g, "")}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          <button type="button" style={{ background: "none", border: "none", color: GREEN, cursor: "pointer", padding: 2 }}>
-                            <MessageCircle size={12} />
-                          </button>
-                        </a>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div style={{ padding: "8px 10px", borderRadius: 8, background: SURFACE, border: `1px solid ${BORDER}` }}>
-                    <div style={{ fontSize: 10, color: TEXT_MUTED, marginBottom: 2 }}>Cliente / Origem</div>
-                    <div style={{ fontSize: 12, color: "#fff", fontWeight: 600 }}>
-                      {clientNameMap[selectedLead.client_id] || "—"}
-                    </div>
-                  </div>
-
-                  <div style={{ padding: "8px 10px", borderRadius: 8, background: SURFACE, border: `1px solid ${BORDER}` }}>
-                    <div style={{ fontSize: 10, color: TEXT_MUTED, marginBottom: 2 }}>Primeiro contato</div>
-                    <div style={{ fontSize: 11, color: "#c4c0d9" }}>{formatDateTime(selectedLead.first_seen_at)}</div>
-                  </div>
+            <div className={styles.saleRecipient}>
+              <Avatar lead={sale.lead} />
+              <div>
+                <strong>{displayName(sale.lead)}</strong>
+                <span>
+                  {clientNameMap[sale.lead.client_id]} ·{" "}
+                  {formatPhone(sale.lead.phone)}
+                </span>
+              </div>
+            </div>
+            <label>
+              Valor da venda
+              <span className={styles.moneyInput}>
+                <span>{sale.input.currency}</span>
+                <input
+                  aria-label="Valor da venda"
+                  placeholder="0,00"
+                  inputMode="decimal"
+                  required
+                  disabled={saleBusy || Boolean(sale.preview)}
+                  value={sale.input.value}
+                  onChange={(event) =>
+                    setSale((previous) =>
+                      previous
+                        ? {
+                            ...previous,
+                            input: {
+                              ...previous.input,
+                              value: event.target.value,
+                            },
+                          }
+                        : previous,
+                    )
+                  }
+                />
+              </span>
+            </label>
+            <label>
+              Produto ou serviço
+              <input
+                placeholder="Ex.: Plano mensal, pedido #123"
+                disabled={saleBusy || Boolean(sale.preview)}
+                value={sale.input.contentName}
+                onChange={(event) =>
+                  setSale((previous) =>
+                    previous
+                      ? {
+                          ...previous,
+                          input: {
+                            ...previous.input,
+                            contentName: event.target.value,
+                          },
+                        }
+                      : previous,
+                  )
+                }
+              />
+            </label>
+            <div className={styles.saleExplanation}>
+              <ShieldCheck size={17} />
+              <p>
+                Você confere os dados antes do envio. Esta ação registra uma
+                conversão na Meta; ela não envia mensagem ao contato.
+              </p>
+            </div>
+            {sale.preview && (
+              <div className={styles.previewPanel}>
+                <div className={styles.previewHeading}>
+                  <BadgeCheck size={18} />
+                  <strong>
+                    {sale.preview.isTest
+                      ? "Evento de teste"
+                      : "Conferência antes de enviar"}
+                  </strong>
                 </div>
-
-                <div style={{ width: "100%", height: 1, background: BORDER }} />
-
-                {/* Attribution / CTWA */}
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  <div style={{ fontSize: 10, color: TEXT_MUTED, fontWeight: 700, textTransform: "uppercase" as const, letterSpacing: 1 }}>
-                    Atribuição Meta Ads
-                  </div>
-
-                  {/* ctwa_clid */}
-                  <div style={{ padding: "8px 10px", borderRadius: 8, background: SURFACE, border: `1px solid ${selectedLead.ctwa_clid ? "rgba(52,199,123,0.3)" : BORDER}` }}>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 2 }}>
-                      <span style={{ fontSize: 10, color: TEXT_MUTED, fontWeight: 700 }}>CTWA_CLID</span>
-                      {selectedLead.ctwa_clid && (
-                        <button
-                          type="button"
-                          onClick={() => copyToClipboard(selectedLead.ctwa_clid!, "ctwa")}
-                          style={{ background: "none", border: "none", color: "#34c77b", cursor: "pointer", fontSize: 10, display: "flex", alignItems: "center", gap: 2 }}
-                        >
-                          {copiedKey === "ctwa" ? <Check size={10} /> : <Copy size={10} />}
-                          {copiedKey === "ctwa" ? "Copiado" : "Copiar"}
-                        </button>
-                      )}
-                    </div>
-                    <div
-                      style={{
-                        fontSize: 10,
-                        color: selectedLead.ctwa_clid ? "#34c77b" : TEXT_MUTED,
-                        wordBreak: "break-all" as const,
-                        fontFamily: "monospace",
-                      }}
-                    >
-                      {selectedLead.ctwa_clid ? (
-                        <span>
-                          {selectedLead.ctwa_clid}{" "}
-                          <span style={{ fontSize: 9, opacity: 0.85 }}>
-                            {selectedLead.ctwa_clid.startsWith("ctwa_ad_") ? "(Atribuído por Anúncio ✓)" : "(Token Meta ✓)"}
-                          </span>
-                        </span>
-                      ) : (
-                        <span style={{ color: TEXT_MUTED, fontFamily: "inherit" }}>
-                          {selectedLead.source_id ? (
-                            `Atribuído ao Anúncio #${selectedLead.source_id} ✓`
-                          ) : (
-                            <span style={{ color: "#9ca3af" }}>
-                              Origem Não Rastreada (Sem Clique Meta capturado)
-                            </span>
-                          )}
-                        </span>
-                      )}
-                    </div>
-
-                    <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
-                      <button
-                        type="button"
-                        onClick={handlePullCtwa}
-                        disabled={pullingCtwa}
-                        style={{
-                          background: "rgba(123,57,252,0.12)",
-                          border: "1px solid rgba(123,57,252,0.3)",
-                          color: "#c4b5fd",
-                          borderRadius: 6,
-                          padding: "4px 8px",
-                          fontSize: 10,
-                          cursor: pullingCtwa ? "default" : "pointer",
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 4,
-                          fontWeight: 600,
-                          width: "fit-content",
-                        }}
-                      >
-                        {pullingCtwa ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
-                        {selectedLead.ctwa_clid ? "Atualizar Atribuição / CTWA" : "🎯 Puxar CTWA / Anúncio"}
-                      </button>
-                      {ctwaNotice && (
-                        <div
-                          style={{
-                            fontSize: 10,
-                            padding: "4px 6px",
-                            borderRadius: 4,
-                            background: ctwaNotice.includes("✅") || ctwaNotice.includes("🎯") ? "rgba(52,199,123,0.1)" : "rgba(239,68,68,0.1)",
-                            color: ctwaNotice.includes("✅") || ctwaNotice.includes("🎯") ? "#34c77b" : "#ef4444",
-                            lineHeight: 1.3,
-                          }}
-                        >
-                          {ctwaNotice}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* source_id / ad_id */}
-                  {selectedLead.source_id && (
-                    <div style={{ padding: "8px 10px", borderRadius: 8, background: SURFACE, border: `1px solid ${BORDER}` }}>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 2 }}>
-                        <span style={{ fontSize: 10, color: TEXT_MUTED, fontWeight: 700 }}>AD_ID</span>
-                        <button
-                          type="button"
-                          onClick={() => copyToClipboard(selectedLead.source_id!, "adid")}
-                          style={{ background: "none", border: "none", color: "#b394ff", cursor: "pointer", fontSize: 10, display: "flex", alignItems: "center", gap: 2 }}
-                        >
-                          {copiedKey === "adid" ? <Check size={10} /> : <Copy size={10} />}
-                        </button>
-                      </div>
-                      <div style={{ fontSize: 10, color: "#b394ff", fontFamily: "monospace" }}>{selectedLead.source_id}</div>
-                    </div>
-                  )}
-
-                  {/* Ad data from Meta */}
-                  {selectedAd && (
-                    <>
-                      <div style={{ padding: "8px 10px", borderRadius: 8, background: SURFACE, border: `1px solid ${BORDER}` }}>
-                        <div style={{ fontSize: 10, color: TEXT_MUTED, marginBottom: 2 }}>Campanha</div>
-                        <div style={{ fontSize: 11, color: "#fff", fontWeight: 600 }}>
-                          {selectedAd.campaign_name || "—"}
-                        </div>
-                      </div>
-                      <div style={{ padding: "8px 10px", borderRadius: 8, background: SURFACE, border: `1px solid ${BORDER}` }}>
-                        <div style={{ fontSize: 10, color: TEXT_MUTED, marginBottom: 2 }}>Conjunto</div>
-                        <div style={{ fontSize: 11, color: "#c4c0d9" }}>{selectedAd.adset_name || "—"}</div>
-                      </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-                        <div style={{ padding: "7px 8px", borderRadius: 8, background: SURFACE, border: `1px solid ${BORDER}` }}>
-                          <div style={{ fontSize: 9, color: TEXT_MUTED }}>Gasto</div>
-                          <div style={{ fontSize: 12, fontWeight: 700, color: "#34c77b", marginTop: 1 }}>
-                            {formatMoney(selectedAd.spend ?? 0, "BRL")}
-                          </div>
-                        </div>
-                        <div style={{ padding: "7px 8px", borderRadius: 8, background: SURFACE, border: `1px solid ${BORDER}` }}>
-                          <div style={{ fontSize: 9, color: TEXT_MUTED }}>Cliques</div>
-                          <div style={{ fontSize: 12, fontWeight: 700, color: "#38bdf8", marginTop: 1 }}>
-                            {selectedAd.conversations ?? selectedAd.clicks ?? "—"}
-                          </div>
-                        </div>
-                      </div>
-                    </>
-                  )}
-
-                  {/* Ad thumbnail in dossier */}
-                  {(selectedLead.thumbnail_url || selectedAd?.thumbnail_url) && (
-                    <div style={{ borderRadius: 8, overflow: "hidden", border: `1px solid ${BORDER}` }}>
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={selectedLead.thumbnail_url || selectedAd?.thumbnail_url}
-                        alt="Criativo"
-                        style={{ width: "100%", maxHeight: 110, objectFit: "cover", display: "block" }}
-                      />
-                      <div style={{ padding: "5px 8px", background: "rgba(10,8,24,0.9)", fontSize: 10, fontWeight: 600, color: "#c4c0d9" }}>
-                        {selectedLead.headline || selectedAd?.creative_title || "Criativo do Anúncio"}
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                <div style={{ width: "100%", height: 1, background: BORDER }} />
-
-                {/* CAPI Events timeline */}
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  <div style={{ fontSize: 10, color: TEXT_MUTED, fontWeight: 700, textTransform: "uppercase" as const, letterSpacing: 1 }}>
-                    Conversões CAPI ({selectedEvents.length})
-                  </div>
-                  {selectedEvents.length === 0 ? (
-                    <div
-                      style={{
-                        padding: "12px 10px",
-                        borderRadius: 8,
-                        background: SURFACE,
-                        border: `1px solid ${BORDER}`,
-                        fontSize: 11,
-                        color: TEXT_MUTED,
-                        textAlign: "center",
-                      }}
-                    >
-                      Nenhuma venda registrada. Use o botão Enviar CAPI no chat.
-                    </div>
-                  ) : (
-                    selectedEvents.map((ev) => (
-                      <div
-                        key={ev.id}
-                        style={{
-                          padding: "8px 10px",
-                          borderRadius: 8,
-                          background: SURFACE,
-                          border: `1px solid ${ev.event_name === "Purchase" ? "rgba(255,215,0,0.3)" : BORDER}`,
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                          fontSize: 11,
-                        }}
-                      >
-                        <div>
-                          <strong style={{ color: ev.event_name === "Purchase" ? "#ffd700" : "#fff" }}>
-                            {ev.event_name}
-                          </strong>
-                          <div style={{ fontSize: 10, color: TEXT_MUTED, marginTop: 1 }}>{formatDateTime(ev.created_at)}</div>
-                        </div>
-                        <span style={{ fontWeight: 700, color: "#34c77b" }}>
-                          {ev.value ? formatMoney(ev.value, ev.currency || "BRL") : "✓"}
-                        </span>
-                      </div>
-                    ))
-                  )}
-                </div>
-
-                {/* Quick actions */}
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  <Link href={`/leads/${selectedLead.id}`} style={{ textDecoration: "none" }}>
-                    <button
-                      type="button"
-                      style={{
-                        width: "100%",
-                        padding: "8px 12px",
-                        borderRadius: 8,
-                        border: `1px solid ${BORDER}`,
-                        background: "transparent",
-                        color: "#c4c0d9",
-                        fontSize: 12,
-                        fontWeight: 600,
-                        cursor: "pointer",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        gap: 6,
-                      }}
-                    >
-                      <User size={13} />
-                      Ver Ficha Completa do Lead
-                    </button>
-                  </Link>
-                </div>
-              </>
-            ) : (
-              <div style={{ textAlign: "center", padding: "40px 10px", color: TEXT_MUTED, fontSize: 12 }}>
-                Selecione um lead para ver o raio-x de atribuição.
+                <p>
+                  <strong>
+                    {sale.preview.isTest
+                      ? "Modo de teste: não é uma venda de produção."
+                      : "Destino: API de Conversões da Meta."}
+                  </strong>
+                </p>
+                {sale.preview.errors.map((error) => (
+                  <p className={styles.previewError} key={error}>
+                    {error}
+                  </p>
+                ))}
+                {sale.preview.warnings.map((warning) => (
+                  <p key={warning}>{warning}</p>
+                ))}
+                {sale.preview.alreadySent > 0 && (
+                  <label className={styles.checkboxLabel}>
+                    <input
+                      type="checkbox"
+                      checked={saleConfirmed}
+                      onChange={(event) =>
+                        setSaleConfirmed(event.target.checked)
+                      }
+                      disabled={saleBusy}
+                    />
+                    <span>
+                      Já existe compra enviada para este contato. Confirmo que
+                      esta é uma venda nova.
+                    </span>
+                  </label>
+                )}
+                <details>
+                  <summary>Ver dados do evento</summary>
+                  <pre>{JSON.stringify(sale.preview.payload, null, 2)}</pre>
+                </details>
               </div>
             )}
-          </div>
+            {saleNotice && (
+              <p className={styles.inlineNotice} role="status">
+                {saleNotice}
+              </p>
+            )}
+            <div className={styles.dialogActions}>
+              {sale.preview ? (
+                <>
+                  <button
+                    type="button"
+                    className={styles.secondaryButton}
+                    disabled={saleBusy}
+                    onClick={() => {
+                      setSale((previous) =>
+                        previous ? { ...previous, preview: null } : previous,
+                      );
+                      setSaleConfirmed(false);
+                    }}
+                  >
+                    Editar dados
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.primaryButton}
+                    disabled={
+                      !sale.preview.ok ||
+                      saleBusy ||
+                      (sale.preview.alreadySent > 0 && !saleConfirmed)
+                    }
+                    onClick={() => void confirmSale()}
+                  >
+                    {saleBusy ? (
+                      <Loader2 size={16} className={styles.spin} />
+                    ) : (
+                      <Send size={15} />
+                    )}
+                    {saleBusy
+                      ? "Enviando…"
+                      : sale.preview.isTest
+                        ? "Enviar teste"
+                        : "Confirmar e enviar"}
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="submit"
+                  className={styles.primaryButton}
+                  disabled={saleBusy}
+                >
+                  {saleBusy ? (
+                    <Loader2 size={16} className={styles.spin} />
+                  ) : (
+                    <ShieldCheck size={16} />
+                  )}
+                  {saleBusy ? "Conferindo…" : "Conferir antes de enviar"}
+                </button>
+              )}
+            </div>
+          </form>
         )}
-      </div>
-    {/* Modal Lightbox de Foto Ampliada */}
-    {lightboxUrl && (
-      <div
-        style={{
-          position: "fixed",
-          inset: 0,
-          background: "rgba(0, 0, 0, 0.88)",
-          backdropFilter: "blur(4px)",
-          zIndex: 99999,
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: "20px",
-        }}
-        onClick={() => setLightboxUrl(null)}
+      </Modal>
+      <Modal
+        open={Boolean(lightbox)}
+        title="Imagem da conversa"
+        onClose={() => setLightbox(null)}
       >
-        <div
-          style={{
-            position: "absolute",
-            top: 20,
-            right: 24,
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-            zIndex: 100000,
-          }}
-        >
-          <a
-            href={lightboxUrl}
-            download="foto-whatsapp.jpg"
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "8px 16px",
-              borderRadius: 8,
-              background: "rgba(255, 255, 255, 0.15)",
-              border: "1px solid rgba(255, 255, 255, 0.25)",
-              color: "#fff",
-              textDecoration: "none",
-              fontSize: 13,
-              fontWeight: 700,
-              cursor: "pointer",
-            }}
-          >
-            ⬇ Baixar Imagem
-          </a>
-          <button
-            type="button"
-            onClick={() => setLightboxUrl(null)}
-            style={{
-              width: 38,
-              height: 38,
-              borderRadius: "50%",
-              background: "rgba(255, 255, 255, 0.2)",
-              border: "none",
-              color: "#fff",
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-            title="Fechar (Esc)"
-          >
-            <X size={20} />
-          </button>
-        </div>
-
-        <img
-          src={lightboxUrl}
-          alt="Foto ampliada do WhatsApp"
-          onClick={(e) => e.stopPropagation()}
-          style={{
-            maxWidth: "92vw",
-            maxHeight: "86vh",
-            borderRadius: 10,
-            boxShadow: "0 10px 40px rgba(0, 0, 0, 0.8)",
-            objectFit: "contain",
-          }}
-        />
-      </div>
-    )}
+        {lightbox && (
+          <img
+            className={styles.lightboxImage}
+            src={lightbox}
+            alt="Imagem ampliada da conversa"
+          />
+        )}
+      </Modal>
     </div>
   );
 }

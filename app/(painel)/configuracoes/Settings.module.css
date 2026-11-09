@@ -1,0 +1,526 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 23px;
+  min-width: 0;
+}
+.heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+.eyebrow {
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 1.3px;
+  color: var(--text-faint);
+}
+.heading h1 {
+  font-family: inherit;
+  font-size: 27px;
+  letter-spacing: -1px;
+  font-weight: 750;
+  margin: 8px 0;
+}
+.heading p {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.8;
+  margin: 0;
+}
+.version {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10px;
+  color: var(--brand);
+  background: var(--brand-soft);
+  border: 1px solid color-mix(in srgb, var(--brand) 12%, var(--border));
+  padding: 9px 12px;
+  border-radius: 7px;
+  white-space: nowrap;
+}
+.grid {
+  display: grid;
+  grid-template-columns: 1.12fr 1fr;
+  gap: 20px;
+  align-items: start;
+}
+.card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  min-width: 0;
+  overflow: hidden;
+}
+.cardHeading {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  border-bottom: 1px solid var(--border);
+  padding: 20px;
+}
+.cardHeading > span {
+  width: 37px;
+  height: 37px;
+  display: grid;
+  place-items: center;
+  background: var(--brand-soft);
+  color: var(--brand);
+  border-radius: 9px;
+  flex-shrink: 0;
+}
+.cardHeading h2 {
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.3px;
+  margin: 0;
+}
+.cardHeading p {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin: 6px 0 0;
+  line-height: 1.6;
+}
+.cardBody {
+  padding: 22px;
+}
+.system {
+  display: flex;
+  flex-direction: column;
+}
+.branding {
+  display: flex;
+  align-items: center;
+  gap: 17px;
+  padding: 22px;
+  border-bottom: 1px solid var(--border);
+}
+.favicon {
+  height: 62px;
+  width: 62px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+.favicon > img {
+  width: 31px;
+  height: 31px;
+  object-fit: contain;
+}
+.branding strong,
+.notificationRow strong,
+.retention strong {
+  font-size: 11px;
+  font-weight: 600;
+}
+.branding p {
+  font-size: 10px;
+  color: var(--text-muted);
+  line-height: 1.8;
+  margin: 6px 0 10px;
+}
+.upload {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  padding: 7px 9px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+  margin: 0;
+}
+.reset {
+  font-size: 9px;
+  color: var(--text-faint);
+  margin-left: 10px;
+  cursor: pointer;
+}
+.notificationRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--border);
+}
+.notificationRow > span {
+  color: var(--text-muted);
+}
+.notificationRow > div {
+  flex: 1;
+  min-width: 0;
+}
+.notificationRow p {
+  font-size: 10px;
+  color: var(--text-muted);
+  line-height: 1.8;
+  margin: 5px 0 0;
+}
+.toggle {
+  position: relative;
+  display: block;
+  width: 32px;
+  height: 19px;
+  flex-shrink: 0;
+  margin: 0;
+  cursor: pointer;
+}
+.toggle input {
+  position: absolute;
+  opacity: 0;
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  z-index: 1;
+  cursor: pointer;
+}
+.toggle > span {
+  position: absolute;
+  inset: 0;
+  background: var(--border-strong);
+  border-radius: 20px;
+  transition: background 0.2s;
+}
+.toggle > span:before {
+  content: "";
+  height: 13px;
+  width: 13px;
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  background: white;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px #20112e15;
+  transition: transform 0.2s;
+}
+.toggle input:checked + span {
+  background: var(--brand);
+}
+.toggle input:checked + span:before {
+  transform: translateX(13px);
+}
+.toggle input:focus-visible + span {
+  outline: 3px solid var(--brand-soft);
+  outline-offset: 3px;
+}
+.retention {
+  padding: 20px 22px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.retention > div {
+  width: 100%;
+}
+.retention p {
+  font-size: 10px;
+  color: var(--text-muted);
+  line-height: 1.8;
+  margin: 6px 0;
+}
+.retention > select {
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  margin: 0;
+}
+.retention > button {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  padding: 10px 11px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  font-size: 10px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.notice {
+  font-size: 11px;
+  padding: 13px 15px;
+  border: 1px solid color-mix(in srgb, var(--brand) 15%, var(--border));
+  background: var(--brand-soft);
+  color: var(--brand);
+  border-radius: 7px;
+  line-height: 1.8;
+  margin: 0 20px 17px;
+}
+.page > .notice {
+  margin: 0;
+}
+.saveRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid var(--border);
+  padding: 16px 22px;
+  background: var(--bg);
+}
+.saveRow > span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 9px;
+  color: var(--text-faint);
+}
+.saveRow > button,
+.download {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  justify-content: center;
+  padding: 10px 13px;
+  border: 1px solid var(--brand);
+  background: var(--brand);
+  color: #fff;
+  border-radius: 7px;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none !important;
+  white-space: nowrap;
+}
+.system button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.cardBody :global(.theme-option) {
+  padding: 11px;
+}
+.cardBody :global(.theme-option-text strong) {
+  font-size: 11px;
+}
+.cardBody :global(.theme-option-text span) {
+  font-size: 9px;
+}
+.cardBody :global(.theme-options) {
+  grid-template-columns: 1fr 1fr;
+}
+.cardBody :global(.theme-group legend) {
+  font-size: 10px;
+}
+.cardBody :global(.theme-preview) {
+  width: 43px;
+}
+.cardBody :global(.swatch-label) {
+  font-size: 9px;
+}
+.cardBody :global(.hint) {
+  font-size: 10px;
+  line-height: 1.8;
+}
+.cardBody :global(label) {
+  font-size: 11px;
+}
+.cardBody :global(input) {
+  font-size: 12px;
+  padding: 11px;
+  border-radius: 7px;
+}
+.cardBody :global(button) {
+  font-size: 11px;
+}
+.dataStats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  padding-bottom: 22px;
+  gap: 10px;
+}
+.dataStats > span {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.dataStats strong {
+  font-size: 23px;
+  font-weight: 650;
+  color: var(--text);
+  letter-spacing: -0.8px;
+}
+.data {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 13px 18px;
+  margin: 0;
+}
+.data dt {
+  font-size: 10px;
+  color: var(--text-faint);
+}
+.data dd {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+.recoveryNote {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 10px;
+  line-height: 1.9;
+  color: var(--text-muted);
+  padding: 13px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  margin: 20px 0;
+}
+.recoveryNote svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--brand);
+}
+.bottomNote {
+  display: flex;
+  align-items: center;
+  font-size: 10px;
+  color: var(--text-faint);
+  margin: 0;
+}
+.spin {
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (max-width: 1100px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+  .heading h1 {
+    font-size: 25px;
+  }
+  .version {
+    font-size: 9px;
+  }
+  .heading p {
+    font-size: 11px;
+  }
+}
+@media (max-width: 650px) {
+  .heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 13px;
+  }
+  .heading h1 {
+    font-size: 25px;
+  }
+  .heading p {
+    font-size: 11px;
+  }
+  .eyebrow {
+    font-size: 9px;
+  }
+  .grid {
+    gap: 17px;
+  }
+  .cardHeading {
+    padding: 17px;
+  }
+  .cardHeading h2 {
+    font-size: 14px;
+  }
+  .cardHeading p {
+    font-size: 10px;
+  }
+  .branding {
+    padding: 18px;
+    gap: 13px;
+  }
+  .favicon {
+    height: 52px;
+    width: 52px;
+  }
+  .branding p {
+    font-size: 10px;
+  }
+  .reset {
+    margin-left: 7px;
+    font-size: 8px;
+  }
+  .notificationRow {
+    padding: 18px;
+  }
+  .notificationRow strong {
+    font-size: 11px;
+  }
+  .notificationRow p {
+    font-size: 10px;
+  }
+  .retention {
+    padding: 18px;
+  }
+  .saveRow {
+    padding: 16px;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .saveRow > button {
+    width: 100%;
+    font-size: 11px;
+  }
+  .saveRow > span {
+    font-size: 9px;
+  }
+  .cardBody {
+    padding: 18px;
+  }
+  .notice {
+    margin: 0 15px 15px;
+    font-size: 10px;
+  }
+  .cardBody :global(.theme-options) {
+    grid-template-columns: 1fr 1fr;
+  }
+  .cardBody :global(.theme-option) {
+    padding: 10px;
+    gap: 7px;
+  }
+  .cardBody :global(.theme-preview) {
+    width: 32px;
+    height: 28px;
+  }
+  .cardBody :global(.theme-option-text strong) {
+    font-size: 10px;
+  }
+  .cardBody :global(.theme-option-text span) {
+    font-size: 8px;
+  }
+  .data {
+    grid-template-columns: 1fr;
+    gap: 7px;
+  }
+  .data dd {
+    text-align: left;
+    margin-bottom: 9px;
+  }
+  .bottomNote {
+    font-size: 9px;
+    line-height: 1.8;
+  }
+  .download {
+    font-size: 11px;
+  }
+  .dataStats strong {
+    font-size: 23px;
+  }
+}

@@ -16,10 +16,12 @@ import {
   toClient,
   toEvent,
   toLead,
+  withDispatchLease,
   type Row,
   type StoreImpl,
 } from "./store-rows";
 import type { EventRow } from "./types";
+import { mergeLeadUpdate } from "./lead-tracking";
 
 /**
  * Modo local: um único arquivo SQLite dentro da pasta data/, usando o SQLite
@@ -34,8 +36,11 @@ export function dataDir(): string {
   }
   const isServerless =
     Boolean(process.env.NETLIFY || process.env.AWS_LAMBDA_FUNCTION_NAME) ||
-    (typeof process.cwd === "function" && process.cwd().startsWith("/var/task"));
-  const dir = isServerless ? path.join(os.tmpdir(), "track_data") : path.join(process.cwd(), "data");
+    (typeof process.cwd === "function" &&
+      process.cwd().startsWith("/var/task"));
+  const dir = isServerless
+    ? path.join(os.tmpdir(), "track_data")
+    : path.join(process.cwd(), "data");
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -91,6 +96,7 @@ create table if not exists leads (
 );
 create index if not exists leads_client_seen_idx on leads (client_id, first_seen_at desc);
 create index if not exists leads_source_idx on leads (source_id);
+create index if not exists leads_updated_idx on leads (updated_at desc);
 
 create table if not exists events (
   id              text primary key,
@@ -146,7 +152,10 @@ create table if not exists settings (
 `;
 
 type Sqlite = typeof import("node:sqlite");
-const g = globalThis as unknown as { __trackDb?: DatabaseSync; __trackDbPath?: string };
+const g = globalThis as unknown as {
+  __trackDb?: DatabaseSync;
+  __trackDbPath?: string;
+};
 
 function db(): DatabaseSync {
   const file = dbPath();
@@ -154,13 +163,10 @@ function db(): DatabaseSync {
   // getBuiltinModule evita que o empacotador tente resolver o módulo nativo.
   const sqlite = process.getBuiltinModule("node:sqlite") as Sqlite;
   const conn = new sqlite.DatabaseSync(file);
-  conn.exec("pragma journal_mode = wal; pragma foreign_keys = on; pragma busy_timeout = 5000; pragma synchronous = normal; pragma cache_size = -64000; pragma temp_store = memory;");
+  conn.exec(
+    "pragma journal_mode = wal; pragma foreign_keys = on; pragma busy_timeout = 5000; pragma synchronous = normal; pragma cache_size = -64000; pragma temp_store = memory;",
+  );
   conn.exec(SCHEMA);
-  try {
-    conn.exec("update leads set ctwa_clid = 'ctwa_ad_' || source_id where (ctwa_clid is null or ctwa_clid = '') and source_id is not null and source_id <> '';");
-  } catch {
-    // ignora
-  }
   g.__trackDb = conn;
   g.__trackDbPath = file;
   return conn;
@@ -176,25 +182,43 @@ function toSql(v: unknown): SqlValue {
   return JSON.stringify(v);
 }
 
-function update(table: string, id: string, patch: Row, allowed: readonly string[]) {
+function update(
+  table: string,
+  id: string,
+  patch: Row,
+  allowed: readonly string[],
+) {
   const keys = Object.keys(patch).filter((k) => allowed.includes(k));
   if (keys.length === 0) return;
   const sets = keys.map((k) => `${k} = ?`).join(", ");
-  db().prepare(`update ${table} set ${sets} where id = ?`).run(...keys.map((k) => toSql(patch[k])), id);
+  db()
+    .prepare(`update ${table} set ${sets} where id = ?`)
+    .run(...keys.map((k) => toSql(patch[k])), id);
 }
 
-const LEAD_INSERT_COLS = LEAD_COLS.filter((c) => c !== "updated_at" && c !== "first_seen_at");
+const LEAD_INSERT_COLS = LEAD_COLS.filter(
+  (c) => c !== "updated_at" && c !== "first_seen_at",
+);
 
 function insertOneLead(row: Row): string {
   const id = randomUUID();
   const t = nowIso();
-  const withDefaults: Row = { ...row, country: row.country || "br", origin: row.origin || "manual" };
+  const withDefaults: Row = {
+    ...row,
+    country: row.country || "br",
+    origin: row.origin || "manual",
+  };
   db()
     .prepare(
       `insert into leads (id, ${LEAD_INSERT_COLS.join(", ")}, first_seen_at, updated_at)
-       values (?, ${LEAD_INSERT_COLS.map(() => "?").join(", ")}, ?, ?)`
+       values (?, ${LEAD_INSERT_COLS.map(() => "?").join(", ")}, ?, ?)`,
     )
-    .run(id, ...LEAD_INSERT_COLS.map((c) => toSql(withDefaults[c])), String(row.first_seen_at || t), t);
+    .run(
+      id,
+      ...LEAD_INSERT_COLS.map((c) => toSql(withDefaults[c])),
+      String(row.first_seen_at || t),
+      t,
+    );
   return id;
 }
 
@@ -202,14 +226,21 @@ export const sqliteStore: StoreImpl = {
   kind: "sqlite",
 
   listClients() {
-    return (db().prepare("select * from clients order by name collate nocase").all() as Row[]).map(toClient);
+    return (
+      db()
+        .prepare("select * from clients order by name collate nocase")
+        .all() as Row[]
+    ).map(toClient);
   },
   getClient(id) {
-    const r = db().prepare("select * from clients where id = ?").get(id) as Row | undefined;
+    const r = db().prepare("select * from clients where id = ?").get(id) as
+      Row | undefined;
     return r ? toClient(r) : null;
   },
   getClientByWebhookKey(key) {
-    const r = db().prepare("select * from clients where webhook_key = ?").get(key) as Row | undefined;
+    const r = db()
+      .prepare("select * from clients where webhook_key = ?")
+      .get(key) as Row | undefined;
     return r ? toClient(r) : null;
   },
   insertClient(row) {
@@ -219,13 +250,24 @@ export const sqliteStore: StoreImpl = {
       .prepare(
         `insert into clients (id, name, webhook_key, pixel_id, capi_token_enc, page_id, waba_id, id_mode, ad_account_id,
            marketing_token_enc, test_event_code, default_currency, send_extra_data, created_at, updated_at)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
-        id, String(row.name), randomBytes(24).toString("hex"), toSql(row.pixel_id), toSql(row.capi_token_enc),
-        toSql(row.page_id), toSql(row.waba_id), String(row.id_mode || "page"), toSql(row.ad_account_id),
-        toSql(row.marketing_token_enc), toSql(row.test_event_code), String(row.default_currency || "BRL"),
-        row.send_extra_data === false ? 0 : 1, t, t
+        id,
+        String(row.name),
+        randomBytes(24).toString("hex"),
+        toSql(row.pixel_id),
+        toSql(row.capi_token_enc),
+        toSql(row.page_id),
+        toSql(row.waba_id),
+        String(row.id_mode || "page"),
+        toSql(row.ad_account_id),
+        toSql(row.marketing_token_enc),
+        toSql(row.test_event_code),
+        String(row.default_currency || "BRL"),
+        row.send_extra_data === false ? 0 : 1,
+        t,
+        t,
       );
     return id;
   },
@@ -234,17 +276,22 @@ export const sqliteStore: StoreImpl = {
   },
 
   getLead(id) {
-    const r = db().prepare("select * from leads where id = ?").get(id) as Row | undefined;
+    const r = db().prepare("select * from leads where id = ?").get(id) as
+      Row | undefined;
     return r ? toLead(r) : null;
   },
   findLead(clientId, phone) {
-    const r = db().prepare("select * from leads where client_id = ? and phone = ?").get(clientId, phone) as Row | undefined;
+    const r = db()
+      .prepare("select * from leads where client_id = ? and phone = ?")
+      .get(clientId, phone) as Row | undefined;
     return r ? toLead(r) : null;
   },
   findLeadsByPhones(clientId, phones) {
     if (phones.length === 0) return [];
     const out: Row[] = [];
-    const stmt = db().prepare("select * from leads where client_id = ? and phone = ?");
+    const stmt = db().prepare(
+      "select * from leads where client_id = ? and phone = ?",
+    );
     for (const p of phones) {
       const r = stmt.get(clientId, p) as Row | undefined;
       if (r) out.push(r);
@@ -258,8 +305,14 @@ export const sqliteStore: StoreImpl = {
       where.push("client_id = ?");
       params.push(f.clientId);
     }
-    if (f.filter === "com-ctwa") where.push("ctwa_clid is not null and ctwa_clid <> ''");
-    if (f.filter === "sem-ctwa") where.push("(ctwa_clid is null or ctwa_clid = '')");
+    const realClick =
+      "(ctwa_clid is not null and trim(ctwa_clid) <> '' and substr(ctwa_clid, 1, 8) <> 'ctwa_ad_' and substr(ctwa_clid, 1, 3) <> 'ad_')";
+    if (f.filter === "com-ctwa") where.push(realClick);
+    if (f.filter === "sem-ctwa") where.push(`not ${realClick}`);
+    const purchase =
+      "exists (select 1 from events e where e.lead_id = leads.id and e.client_id = leads.client_id and e.event_name = 'Purchase' and e.status = 'enviado' and e.is_test = 0)";
+    if (f.filter === "com-venda") where.push(purchase);
+    if (f.filter === "sem-venda") where.push(`not ${purchase}`);
     const q = (f.q || "").trim();
     if (q) {
       const digits = q.replace(/\D/g, "");
@@ -273,7 +326,11 @@ export const sqliteStore: StoreImpl = {
     }
     const sql = `select * from leads ${where.length ? "where " + where.join(" and ") : ""} order by updated_at desc limit ? offset ?`;
     params.push(f.limit, f.offset);
-    return (db().prepare(sql).all(...params) as Row[]).map(toLead);
+    return (
+      db()
+        .prepare(sql)
+        .all(...params) as Row[]
+    ).map(toLead);
   },
   insertLead(row) {
     return insertOneLead(row);
@@ -291,7 +348,41 @@ export const sqliteStore: StoreImpl = {
     return rows.length;
   },
   updateLead(id, patch) {
+    if (patch.client_id !== undefined) {
+      const existing = sqliteStore.getLead(id) as ReturnType<
+        typeof toLead
+      > | null;
+      if (
+        existing &&
+        patch.client_id !== existing.client_id &&
+        (sqliteStore.listEventsForLead(id) as EventRow[]).length
+      )
+        throw new Error(
+          "Não é possível mover um lead com histórico de eventos para outro cliente.",
+        );
+    }
     update("leads", id, { ...patch, updated_at: nowIso() }, LEAD_COLS);
+  },
+  updateLeadWithRaw(id, patch, incomingRaw) {
+    const conn = db();
+    conn.exec("begin immediate");
+    try {
+      const current = conn
+        .prepare("select * from leads where id = ?")
+        .get(id) as Row | undefined;
+      if (!current) throw new Error("Lead não encontrado.");
+      const at = nowIso();
+      update(
+        "leads",
+        id,
+        mergeLeadUpdate(current, patch, incomingRaw, at),
+        LEAD_COLS,
+      );
+      conn.exec("commit");
+    } catch (error) {
+      conn.exec("rollback");
+      throw error;
+    }
   },
   updateLeadsBulk(rows) {
     const conn = db();
@@ -299,7 +390,8 @@ export const sqliteStore: StoreImpl = {
     const stmt = conn.prepare(`update leads set ${sets} where id = ?`);
     conn.exec("begin");
     try {
-      for (const r of rows) stmt.run(...LEAD_BULK_COLS.map((c) => toSql(r[c])), String(r.id));
+      for (const r of rows)
+        stmt.run(...LEAD_BULK_COLS.map((c) => toSql(r[c])), String(r.id));
       conn.exec("commit");
     } catch (e) {
       conn.exec("rollback");
@@ -312,43 +404,119 @@ export const sqliteStore: StoreImpl = {
   },
 
   listEventsForLead(leadId) {
-    return (db().prepare("select * from events where lead_id = ? order by created_at desc").all(leadId) as Row[]).map(toEvent);
+    return (
+      db()
+        .prepare(
+          "select * from events where lead_id = ? order by created_at desc",
+        )
+        .all(leadId) as Row[]
+    ).map(toEvent);
   },
   listEvents(f) {
-    const where = f.status === "enviado" || f.status === "erro" ? "where e.status = ?" : "";
-    const params: SqlValue[] = where ? [f.status!, f.limit, f.offset] : [f.limit, f.offset];
+    const where =
+      f.status === "enviado" || f.status === "erro" ? "where e.status = ?" : "";
+    const params: SqlValue[] = where
+      ? [f.status!, f.limit, f.offset]
+      : [f.limit, f.offset];
     const rows = db()
       .prepare(
         `select e.*, l.name as lead_name, l.phone as lead_phone, c.name as client_name
          from events e left join leads l on l.id = e.lead_id left join clients c on c.id = e.client_id
-         ${where} order by e.created_at desc limit ? offset ?`
+         ${where} order by e.created_at desc limit ? offset ?`,
       )
       .all(...params) as Row[];
-    return rows.map((r) => ({ ...toEvent(r), lead_name: str(r.lead_name), lead_phone: str(r.lead_phone), client_name: str(r.client_name) }));
+    return rows.map((r) => ({
+      ...toEvent(r),
+      lead_name: str(r.lead_name),
+      lead_phone: str(r.lead_phone),
+      client_name: str(r.client_name),
+    }));
   },
   getEvent(id) {
-    const r = db().prepare("select * from events where id = ?").get(id) as Row | undefined;
+    const r = db().prepare("select * from events where id = ?").get(id) as
+      Row | undefined;
+    return r ? toEvent(r) : null;
+  },
+  getEventByExternalId(clientId, eventId) {
+    const r = db()
+      .prepare(
+        "select * from events where client_id = ? and event_id = ? order by created_at desc limit 1",
+      )
+      .get(clientId, eventId) as Row | undefined;
     return r ? toEvent(r) : null;
   },
   insertEvent(row) {
-    const id = randomUUID();
+    const previous = sqliteStore.getEventByExternalId(
+      String(row.client_id),
+      String(row.event_id),
+    ) as EventRow | null;
+    if (previous) return previous.id;
+    const id = sqliteStore.getOrCreateSetting(
+      `conversion:${row.client_id}:${row.event_id}`,
+      randomUUID(),
+    ) as string;
+    const lead = sqliteStore.getLead(String(row.lead_id)) as ReturnType<
+      typeof toLead
+    > | null;
+    if (!lead || lead.client_id !== row.client_id)
+      throw new Error("O lead não pertence ao cliente do evento.");
     db()
       .prepare(
-        `insert into events (id, client_id, lead_id, event_name, event_id, event_time, value, currency, content_name,
+        `insert or ignore into events (id, client_id, lead_id, event_name, event_id, event_time, value, currency, content_name,
            action_source, is_test, status, http_status, events_received, fbtrace_id, error_message, payload, response, created_at)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
-        id, String(row.client_id), String(row.lead_id), String(row.event_name), String(row.event_id), String(row.event_time),
-        toSql(row.value), toSql(row.currency), toSql(row.content_name), String(row.action_source), row.is_test ? 1 : 0,
-        String(row.status), toSql(row.http_status), toSql(row.events_received), toSql(row.fbtrace_id),
-        toSql(row.error_message), JSON.stringify(row.payload ?? null), JSON.stringify(row.response ?? null), nowIso()
+        id,
+        String(row.client_id),
+        String(row.lead_id),
+        String(row.event_name),
+        String(row.event_id),
+        String(row.event_time),
+        toSql(row.value),
+        toSql(row.currency),
+        toSql(row.content_name),
+        String(row.action_source),
+        row.is_test ? 1 : 0,
+        String(row.status),
+        toSql(row.http_status),
+        toSql(row.events_received),
+        toSql(row.fbtrace_id),
+        toSql(row.error_message),
+        JSON.stringify(row.payload ?? null),
+        JSON.stringify(row.response ?? null),
+        nowIso(),
       );
     return id;
   },
+  updateEvent(id, patch) {
+    update("events", id, patch, [
+      "status",
+      "http_status",
+      "events_received",
+      "fbtrace_id",
+      "error_message",
+      "response",
+    ]);
+  },
+  claimEvent(id) {
+    const row = db()
+      .prepare("select response from events where id = ?")
+      .get(id) as Row | undefined;
+    if (!row) return false;
+    const cutoff = new Date(Date.now() - 120_000).toISOString();
+    const result = db()
+      .prepare(
+        "update events set status = 'enviando', response = ? where id = ? and (status in ('pendente', 'erro', 'incerto') or (status = 'enviando' and json_extract(response, '$.request_context.dispatch_started_at') < ?))",
+      )
+      .run(JSON.stringify(withDispatchLease(row.response)), id, cutoff);
+    return Number(result.changes) === 1;
+  },
   countSent(leadId, eventName) {
     const r = db()
-      .prepare("select count(*) as c from events where lead_id = ? and event_name = ? and status = 'enviado' and is_test = 0")
+      .prepare(
+        "select count(*) as c from events where lead_id = ? and event_name = ? and status = 'enviado' and is_test = 0",
+      )
       .get(leadId, eventName) as Row;
     return Number(r.c);
   },
@@ -357,7 +525,7 @@ export const sqliteStore: StoreImpl = {
     if (leadIds.length === 0) return out;
     const rows = db()
       .prepare(
-        `select * from events where status = 'enviado' and is_test = 0 and lead_id in (${leadIds.map(() => "?").join(",")}) order by created_at`
+        `select * from events where status = 'enviado' and is_test = 0 and lead_id in (${leadIds.map(() => "?").join(",")}) order by created_at`,
       )
       .all(...leadIds) as Row[];
     for (const r of rows) {
@@ -369,21 +537,25 @@ export const sqliteStore: StoreImpl = {
   recentSent(sinceIso) {
     return (
       db()
-        .prepare("select event_name, value from events where status = 'enviado' and is_test = 0 and created_at >= ?")
+        .prepare(
+          "select event_name, value from events where status = 'enviado' and is_test = 0 and created_at >= ?",
+        )
         .all(sinceIso) as Row[]
     ).map((r) => ({ event_name: String(r.event_name), value: num(r.value) }));
   },
   contentNames(clientId) {
     const rows = db()
       .prepare(
-        "select content_name, count(*) as c from events where client_id = ? and content_name is not null and content_name <> '' group by content_name order by c desc limit 30"
+        "select content_name, count(*) as c from events where client_id = ? and content_name is not null and content_name <> '' group by content_name order by c desc limit 30",
       )
       .all(clientId) as Row[];
     return rows.map((r) => String(r.content_name));
   },
 
   getAd(clientId, adId) {
-    const r = db().prepare("select * from ad_cache where client_id = ? and ad_id = ?").get(clientId, adId) as Row | undefined;
+    const r = db()
+      .prepare("select * from ad_cache where client_id = ? and ad_id = ?")
+      .get(clientId, adId) as Row | undefined;
     return r ? toAd(r) : null;
   },
   adsFor(pairs) {
@@ -391,7 +563,9 @@ export const sqliteStore: StoreImpl = {
     const adIds = [...new Set(pairs.map((p) => p.adId))];
     if (adIds.length === 0) return out;
     const rows = db()
-      .prepare(`select * from ad_cache where ad_id in (${adIds.map(() => "?").join(",")})`)
+      .prepare(
+        `select * from ad_cache where ad_id in (${adIds.map(() => "?").join(",")})`,
+      )
       .all(...adIds) as Row[];
     for (const r of rows) {
       const ad = toAd(r);
@@ -400,27 +574,54 @@ export const sqliteStore: StoreImpl = {
     return out;
   },
   upsertAd(row) {
-    const sets = AD_COLS.map((c) => `${c} = excluded.${c}`).join(", ");
+    const cols = AD_COLS.filter(
+      (c) => Object.hasOwn(row, c) && row[c] !== undefined,
+    );
+    const sets = cols.map((c) => `${c} = excluded.${c}`);
     db()
       .prepare(
-        `insert into ad_cache (client_id, ad_id, ${AD_COLS.join(", ")}, fetched_at)
-         values (?, ?, ${AD_COLS.map(() => "?").join(", ")}, ?)
-         on conflict (client_id, ad_id) do update set ${sets}, fetched_at = excluded.fetched_at`
+        `insert into ad_cache (client_id, ad_id${cols.length ? ", " + cols.join(", ") : ""}, fetched_at)
+         values (?, ?${cols.length ? ", " + cols.map(() => "?").join(", ") : ""}, ?)
+         on conflict (client_id, ad_id) do update set ${[...sets, "fetched_at = excluded.fetched_at"].join(", ")}`,
       )
       .run(
-        String(row.client_id), String(row.ad_id),
-        ...AD_COLS.map((c) => (c === "raw" ? JSON.stringify(row.raw ?? null) : toSql(row[c]))),
-        nowIso()
+        String(row.client_id),
+        String(row.ad_id),
+        ...cols.map((c) =>
+          c === "raw" ? JSON.stringify(row.raw ?? null) : toSql(row[c]),
+        ),
+        nowIso(),
       );
   },
 
   getSetting(key) {
-    const r = db().prepare("select value from settings where key = ?").get(key) as Row | undefined;
+    const r = db()
+      .prepare("select value from settings where key = ?")
+      .get(key) as Row | undefined;
     return r ? String(r.value) : null;
   },
+  getOrCreateSetting(key, value) {
+    db()
+      .prepare("insert or ignore into settings (key, value) values (?, ?)")
+      .run(key, value);
+    return String(
+      (db().prepare("select value from settings where key = ?").get(key) as Row)
+        .value,
+    );
+  },
   setSettings(values) {
-    const stmt = db().prepare("insert into settings (key, value) values (?, ?) on conflict (key) do update set value = excluded.value");
-    for (const [k, v] of Object.entries(values)) stmt.run(k, v);
+    const conn = db();
+    conn.exec("begin immediate");
+    try {
+      const stmt = conn.prepare(
+        "insert into settings (key, value) values (?, ?) on conflict (key) do update set value = excluded.value",
+      );
+      for (const [k, v] of Object.entries(values)) stmt.run(k, v);
+      conn.exec("commit");
+    } catch (error) {
+      conn.exec("rollback");
+      throw error;
+    }
   },
 
   stats() {

@@ -1,5 +1,13 @@
-import { listClients, listLeads, getLead, adsFor, sentForLeads } from "@/lib/store";
+import {
+  listClients,
+  listLeads,
+  getLead,
+  adsFor,
+  sentForLeads,
+  getSetting,
+} from "@/lib/store";
 import { ConversasClient } from "./ConversasClient";
+import { summarizeConversation } from "./conversation-data";
 
 export const dynamic = "force-dynamic";
 
@@ -22,13 +30,15 @@ export default async function ConversasPage({
     clientId: sp.cliente || null,
     q: sp.q,
     offset: 0,
-    limit: 1000,
+    limit: 101,
   });
+  const hasMore = leads.length > 100;
+  leads = leads.slice(0, 100);
 
   // Se a URL solicitou um lead específico, garante que ele sempre esteja na lista
   if (sp.lead && !leads.some((l) => l.id === sp.lead)) {
     const single = await getLead(sp.lead);
-    if (single) {
+    if (single && (!sp.cliente || single.client_id === sp.cliente)) {
       leads = [single, ...leads];
     }
   }
@@ -38,7 +48,7 @@ export default async function ConversasPage({
     adsFor(
       leads
         .filter((l) => l.source_id)
-        .map((l) => ({ clientId: l.client_id, adId: l.source_id! }))
+        .map((l) => ({ clientId: l.client_id, adId: l.source_id! })),
     ),
   ]);
 
@@ -61,14 +71,29 @@ export default async function ConversasPage({
 
   return (
     <ConversasClient
-      clients={clients.map((c) => ({ id: c.id, name: c.name, default_currency: c.default_currency }))}
-      initialLeads={leads}
+      clients={clients.map((c) => ({
+        id: c.id,
+        name: c.name,
+        default_currency: c.default_currency,
+      }))}
+      initialLeads={leads.map((lead) =>
+        summarizeConversation(lead, lead.id === (sp.lead || leads[0]?.id)),
+      )}
       adsData={adsData}
       eventsData={eventsData}
       clientNameMap={clientNameMap}
       initialSelectedLeadId={sp.lead || leads[0]?.id || null}
       initialClientId={sp.cliente || ""}
       initialSearchQuery={sp.q || ""}
+      initialOpenThread={Boolean(sp.lead)}
+      initialHasMore={hasMore}
+      initialUpdatedAt={new Date().toISOString()}
+      initialSoundEnabled={
+        (await getSetting("sound_notifications")) !== "false"
+      }
+      initialBadgeEnabled={
+        (await getSetting("tab_badge_notifications")) !== "false"
+      }
     />
   );
 }

@@ -1,264 +1,75 @@
-# Track Manual
+# Track Manual Flow 3.0.1
 
-Painel para enviar manualmente ao Meta as conversões de anúncios Click-to-WhatsApp. Os leads chegam da
-Leona, você confere cada venda, põe o valor e clica em enviar. Nada sai sem o seu clique, e tudo que foi
-enviado fica registrado com a resposta do Meta.
+Central de atendimento e CRM para organizar contatos WhatsApp, acompanhar oportunidades e registrar conversões manuais na Meta. Interface com navegação lateral, atendimento em três painéis, funil persistente e adaptação ao celular.
 
-O mesmo código roda de dois jeitos:
+A ingestão de contatos pela Leona, por webhooks e por importação não dispara `Purchase` automaticamente. Uma venda passa por conferência; outra compra do mesmo contato exige confirmação explícita. Reenvios conservam o identificador, destino, modo de teste e corpo da intenção original. A aceitação do evento pela Meta não comprova atribuição ao anúncio.
 
-| | Online (Netlify + Supabase) | No computador |
-| --- | --- | --- |
-| Abre no celular em qualquer lugar | Sim | Só no mesmo Wi-Fi |
-| Leads chegam sozinhos da Leona | Sim | Não (importa o CSV) |
-| Contas necessárias | GitHub, Netlify, Supabase (gratuitas) | Nenhuma |
-| Onde ficam os dados | Postgres no Supabase | Arquivo na pasta `data/` |
+## Instalação local
 
-O painel decide o modo sozinho pelas variáveis de ambiente: `DATABASE_URL` (Postgres direto) ou
-`SUPABASE_DATABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (API do Supabase, criadas pela extensão do Netlify) ligam o
-modo online; sem nenhuma delas, é local.
+Use Node.js 22.13 ou superior. A validação local desta entrega usou Node 24.22.1.
 
----
-
-## Colocar Online (Netlify + Supabase)
-
-### 1. Arrumar o Repositório
-
-O repositório precisa ter **só esta versão, na raiz** (package.json, app/, lib/ etc. direto na raiz, sem
-pasta `track-manual/` dentro). Se a pasta do repositório no seu computador tem uma versão antiga:
-
-1. Apague tudo dentro dela, **menos a pasta `.git`** (ela fica escondida; se não a vir, tudo bem).
-2. Cole dentro dela o **conteúdo** da pasta `track-manual` deste zip (os arquivos e pastas, não a pasta em si).
-3. Faça o commit e o push (no GitHub Desktop: escreva uma mensagem, "Commit to main", depois "Push origin").
-
-O Netlify percebe o push e faz o build sozinho. Nesse primeiro build ele ainda vai reclamar de banco de
-dados; é o próximo passo.
-
-### 2. Criar o Projeto no Supabase
-
-Entre em supabase.com e crie um projeto (região **South America (São Paulo)**). Ele pede uma senha do banco;
-guarde-a (só letras e números facilita). Não precisa criar tabela nenhuma agora.
-
-### 3. Ligar o Netlify ao Supabase
-
-Há dois jeitos. O primeiro é o mais fácil.
-
-**Pela extensão (recomendado).** No Netlify: **Extensions > Supabase > Install**, depois, dentro do site,
-**Supabase > Connect** (ele pede para entrar na sua conta do Supabase) e escolha o projeto. A extensão cria
-sozinha as variáveis `SUPABASE_DATABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` e outras. Faça **Deploys > Trigger
-deploy > Deploy site** e abra o site: a tela vai dizer que faltam as tabelas e mostrar um trecho de SQL com um
-botão **Copiar**. No Supabase, abra o **SQL Editor** (menu da esquerda), cole, clique em **Run** e recarregue o
-site. É uma vez só. Na tela seguinte você cria a sua senha. (O mesmo SQL está no arquivo `supabase-tabelas.sql`.)
-
-**Pela variável.** Se preferir a conexão direta ao Postgres: no Supabase, clique em **Connect** (botão no
-topo) e escolha **Transaction pooler**. Copie a URI, que se parece com
-`postgresql://postgres.abcdefgh:[YOUR-PASSWORD]@aws-0-sa-east-1.pooler.supabase.com:6543/postgres`, e troque
-`[YOUR-PASSWORD]` (com os colchetes) pela senha do banco. No Netlify: **Site configuration > Environment
-variables > Add a variable**, chave `DATABASE_URL`, valor = a URI, escopo **All scopes**. Depois **Deploys >
-Trigger deploy > Deploy site**. Nesse modo o painel cria as tabelas sozinho.
-
-Toda mudança em variável só vale depois de um deploy novo. Se a conexão não der certo, a tela do painel diz o
-que está errado (chave pública em vez da de serviço, senha recusada, conexão direta em vez do pooler,
-`[YOUR-PASSWORD]` esquecido, projeto pausado…). Colchetes, espaços e aspas que sobrarem na `DATABASE_URL` são
-ignorados, e símbolos na senha são aceitos.
-
-Opcional: a variável `APP_SECRET` (64 caracteres aleatórios) guarda fora do banco o segredo que protege os
-tokens do Meta. Sem ela, o painel gera um e guarda na tabela `settings`.
-
-### 4. Cadastrar o Cliente e Ligar a Leona
-
-1. **Clientes > Cadastrar Cliente**: pixel, token da API de Conversões, ID da Página, e o **código de
-   Eventos de Teste** para começar em modo de teste (veja "Acessos no Meta" abaixo).
-2. Na página do cliente, a seção **Como os Leads Entram** mostra o endereço e o corpo para o bloco de
-   **Integração** da Leona. Adicione o bloco no fluxo de boas-vindas, logo depois do início: método POST,
-   cabeçalho `Content-Type: application/json`, o endereço e o corpo. Ligue as duas saídas do bloco ao passo
-   seguinte.
-3. Confira os nomes das variáveis no seletor de variáveis da Leona (CTWA Click ID, Source ID, Source URL,
-   Thumbnail URL, Media URL).
-4. Para os contatos antigos, exporte na Leona e use **Importar**.
-
-### 5. Validar
-
-1. Clique em um anúncio de verdade e mande uma mensagem. O lead aparece no painel; abra-o e veja em
-   **Dados Brutos Recebidos** se o CTWA Click ID chegou. Se veio vazio, o nome da variável no bloco está errado.
-2. Envie uma Compra de teste. Ela tem de aparecer em **Eventos de Teste** no Gerenciador de Eventos.
-3. Se o Meta recusar, leia a mensagem no histórico. Tente desmarcar "Enviar dados extras" no cliente.
-4. Deu certo: apague o código de teste do cliente. A partir daí conta como conversão.
-
----
-
-## Rodar no Computador (Sem Contas)
-
-1. Instale o **Node.js** (versão LTS) em https://nodejs.org.
-2. Descompacte esta pasta e abra `iniciar.bat` (Windows), `iniciar.command` (Mac) ou `./iniciar.sh` (Linux).
-3. Na primeira vez ele prepara tudo (2 a 4 minutos); depois abre na hora, em `http://localhost:3000`.
-4. Crie a senha, cadastre o cliente e importe o CSV da Leona.
-
-Os dados ficam na pasta `data/` (banco + configuração). Para backup, copie a pasta.
-
----
-
-## O Que o Painel Faz
-
-**Leads.** Chegam pela Leona (online) ou pelo CSV exportado dela. O painel reconhece as colunas pelo nome:
-nome, telefone, e-mail, CTWA Click ID, ID de origem (ID do anúncio), URL de origem, URL da miniatura e URL
-da mídia. O estado é sugerido pelo DDD; cidade e CEP você completa. Importar de novo só atualiza pelo telefone.
-
-**Envio Manual.** Você escolhe o evento (Compra, Lead, Lead Qualificado, Início de Checkout e mais dez),
-informa valor e produto, clica em **Conferir Antes de Enviar** e vê exatamente o que vai para o Meta. Só
-depois aparece o botão de enviar. Se a mesma compra já foi enviada para aquele lead, o painel avisa e trava.
-
-**Histórico.** Cada envio guarda o que foi enviado, a resposta do Meta e o `fbtrace_id`. Envio com erro
-tem **Reenviar**, com o mesmo `event_id`, para o Meta nunca contar em dobro.
-
-**Dados do Meta.** Pelo ID do anúncio, busca campanha, conjunto, anúncio, miniatura, gasto, impressões,
-cliques e conversas iniciadas.
-
-**Vários Clientes.** Cada cliente tem pixel, tokens, Página e endereço de entrada próprios.
-
-**Excluir.** Na lista de leads, o ícone de lixeira no fim da linha exclui o lead e o histórico dele, depois de
-confirmar. O mesmo botão existe na página do lead, em "Dados Brutos Recebidos e Exclusão".
-
-## Design
-
-**Página de entrada**: vídeo de fundo em tela cheia, barra transparente e chamada centralizada. **Painel**:
-minimalista, com a mesma identidade. Cores: roxo `#7b39fc` (marca) e roxo escuro `#2b2344`. Fontes (baixadas
-no build, sem chamada externa): Manrope (interface), Cabin (botões e etiquetas), Instrument Serif (títulos) e
-Inter (texto). O painel respeita o tema claro/escuro do sistema.
-
-### Componentes (shadcn/ui)
-
-O projeto segue a estrutura do shadcn/ui: `components.json`, `lib/utils.ts` (`cn`), componentes em
-`components/ui/`, Tailwind v4 e TypeScript. Para adicionar outros componentes do shadcn: `npx shadcn@latest add <nome>`.
-
-| Arquivo | O que é | Onde é usado |
-| --- | --- | --- |
-| `components/ui/button.tsx` | `Button` — variantes `default`, `cool` (relevo), `outline`, `secondary`, `ghost`, `link`, `destructive`; tamanhos `sm`, `default`, `lg`, `icon`; `asChild` para links | Todos os botões do painel. `cool` só em "Enviar ao Meta" |
-| `components/ui/liquid-glass-button.tsx` | `LiquidButton` — vidro líquido com filtro SVG (distorce o fundo no Chrome/Edge); aceita `asChild` | "Ver Como Funciona", sobre o vídeo da página de entrada |
-| `components/ui/metal-button.tsx` | `MetalButton` — botão metálico com brilho e afundamento; variantes `default`, `primary`, `success`, `error`, `gold`, `bronze` | "Acessar o Painel", no fim da página de entrada |
-| `components/demo/liquid-glass-button-demo.tsx` | Exemplo de uso | Não usado pelo painel |
-
-Os tokens do shadcn (`--primary`, `--muted`, `--border`…) estão ligados às variáveis do painel em
-`app/globals.css`, então `bg-primary`, `border-input`, `ring-ring` etc. funcionam nas duas paletas. O Tailwind é
-carregado só com as utilidades (sem o reset "preflight"); o CSS do painel fica na camada `panel`, abaixo das
-utilidades, e por isso qualquer classe do Tailwind ganha do CSS do painel.
-
-### Aparência (Configurações > Aparência)
-
-Tema (Automático, Claro, Escuro, Preto total), cor de destaque (Roxo, Vermelho, Azul, Verde, Laranja, Rosa,
-Preto e branco), densidade (Confortável, Compacta) e títulos (com ou sem serifa). A escolha aplica na hora e
-fica num cookie de um ano, lido no servidor: a página já chega no tema certo, sem piscar e sem JavaScript
-extra. As opções e as cores estão em `lib/theme.ts`; o CSS de cada tema e cor, no topo de `app/globals.css`.
-
-### Onde mexer
-
-- **Textos da página de entrada**: `app/login/Hero.tsx` (constantes `COPY` e `NAV_LINKS`) e `app/login/page.tsx`
-  (recursos, passos e rodapé).
-- **Logo**: `app/Logo.tsx`, constante `LOGO_PATH` (cole o `d` do path do seu SVG).
-- **Vídeo de fundo**: `public/fundo.mp4` (cópia leve, 470 KB) e `public/fundo.jpg` (imagem mostrada enquanto
-  carrega); o original do design fica como reserva em `VIDEO_FALLBACK_URL`. Para trocar, substitua os dois
-  arquivos.
-- **Cores e tipografia do painel**: variáveis no topo de `app/globals.css` (`--brand`, `--bg`, `--surface`…).
-- **Navegação do painel**: `app/(painel)/PanelNav.tsx`.
-
-## Acessos no Meta (Cadastrados Dentro do Painel)
-
-**ID do Pixel.** Gerenciador de Eventos > seu pixel; aparece no topo da tela de Configurações.
-
-**Token da API de Conversões.** Na mesma tela > **API de Conversões** > **Gerar token de acesso**.
-
-**ID da Página.** Na Página do Facebook ligada ao WhatsApp dos anúncios: **Sobre > Transparência da Página**.
-
-**Token de Leitura dos Anúncios** (só para puxar campanha e gasto). Configurações do Negócio > **Usuários >
-Usuários do sistema** > **Adicionar** (Funcionário) > **Atribuir ativos** > a conta de anúncios > **Gerar
-token** com a permissão `ads_read`, validade "nunca expira". Precisa de um aplicativo no Business Manager;
-se não houver, crie um do tipo Empresa em developers.facebook.com.
-
-**Código de Eventos de Teste.** Gerenciador de Eventos > pixel > aba **Eventos de Teste** > código `TEST…`.
-
-## Contagem em Dobro
-
-A Leona já envia Compra pelo bloco de Pixel quando a venda é aprovada pelo fluxo. Se o painel enviar a
-mesma venda, o Meta conta duas. Regra recomendada: **o painel é o único que envia Compra**. Depois de
-validado, remova os blocos de Pixel de Compra dos fluxos.
-
-## Como o Evento É Montado
-
-```json
-{
-  "event_name": "Purchase",
-  "event_time": 1789967760,
-  "event_id": "uuid-gerado-no-envio",
-  "action_source": "business_messaging",
-  "messaging_channel": "whatsapp",
-  "user_data": {
-    "ctwa_clid": "texto puro, exatamente como chegou",
-    "page_id": "ID da Página",
-    "ph": ["hash"], "fn": ["hash"], "ln": ["hash"],
-    "ct": ["hash"], "st": ["hash"], "country": ["hash"], "external_id": ["hash"]
-  },
-  "custom_data": {
-    "value": 29.9, "currency": "BRL", "content_name": "3 - FOTOS - 29,90",
-    "ctwa_source_id": "ID do anúncio", "ctwa_source_url": "URL de origem"
-  }
-}
+```sh
+npm ci
+npm run typecheck
+npm test
+npm run build
+npm run start
 ```
 
-- **Quem atribui a venda ao anúncio é o `ctwa_clid`.** ID e URL de origem vão como propriedades personalizadas.
-- **Telefone nas duas formas** (com e sem o nono dígito), porque o WhatsApp e o cadastro no Facebook diferem.
-- **Nomes limpos**: emojis e letras enfeitadas são removidos antes do hash.
-- **Sem `ctwa_clid`** o evento vai como conversa (`chat`), casado só pelo telefone; o painel avisa antes.
-- **Página ou WABA.** A documentação do Meta pede o ID da Conta do WhatsApp Business (API Oficial). Com API
-  não oficial (uazapi), o caminho usado na prática, inclusive pelo bloco de Pixel da Leona, é `ctwa_clid` +
-  ID da Página. O painel usa a Página como padrão. **Valide em modo de teste antes de produção.**
-- **Dados extras desligáveis** por cliente, caso o Meta recuse os campos com hash.
-- **Prazo**: evento com mais de 7 dias gera aviso; no futuro é bloqueado.
+Abra `http://localhost:3000`, crie a senha inicial e cadastre as empresas em **Clientes**. Os iniciadores `iniciar.bat`, `iniciar.command` e `iniciar.sh` continuam disponíveis para a instalação local.
 
-## Para Quem Programa
+Sem configuração de banco remoto, o sistema usa SQLite em `data/` ou no diretório de `TRACK_DATA_DIR`. Não versione essa pasta. Antes de atualizar uma instalação existente, leia o [procedimento de migração](docs/FLOW-3.0-MIGRACAO.md).
 
-```bash
-npm install
-npm run dev                                   # modo local, http://localhost:3000
-DATABASE_URL=postgres://... npm run dev       # modo online contra um Postgres
-npm test                                      # testes (SQLite)
-TEST_DATABASE_URL=postgres://... npm test     # testes também contra Postgres
-```
+## Armazenamento e ambiente
 
-Variáveis: `DATABASE_URL` (Postgres direto) ou `SUPABASE_DATABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (API do
-Supabase) ligam o modo online; `APP_SECRET` (opcional), `PORT`, `TRACK_DATA_DIR` (pasta dos dados no modo
-local), `META_API_VERSION` (padrão v25.0). Testes contra a API: `TEST_SUPABASE_URL`, `TEST_SUPABASE_KEY` e
-`TEST_SUPABASE_PG_URL` (um PostgREST e o Postgres por baixo dele).
+| Variável                                              | Uso                                                                                                                                                                              |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TRACK_DATA_DIR`                                      | Diretório persistente do SQLite, configuração e sessões locais.                                                                                                                  |
+| `APP_SECRET`                                          | Segredo exclusivo, estável, com pelo menos 32 caracteres aleatórios. Tem prioridade local e online. Preserve-o fora do Git; sua troca exige recadastrar ou recifrar credenciais. |
+| `DATABASE_URL`                                        | Postgres direto. O servidor cria as tabelas ao inicializar o armazenamento.                                                                                                      |
+| `SUPABASE_DATABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` | PostgREST, como alternativa à conexão direta. Use chave de serviço exclusivamente no servidor e prepare o esquema de `supabase-tabelas.sql`.                                     |
+| `TRACK_WHATSAPP_AUTO_RECONNECT=false`                 | Desabilita a retomada automática de canais nativos, útil em homologação e CI.                                                                                                    |
+| `TRACK_WAHA_API_KEY`                                  | Chave opcional de serviço, com pelo menos 32 caracteres, para as rotas internas compatíveis com WAHA. O painel autenticado usa a própria sessão.                                 |
 
-```
-app/login/               página de entrada (Hero.tsx: vídeo, barra e chamada; page.tsx: login e seções)
-app/(painel)/PanelNav.tsx navegação do painel com a página atual marcada
-app/Logo.tsx             marca (LOGO_PATH)
-components/ui/           botões (shadcn/ui): button, liquid-glass-button, metal-button
-lib/utils.ts             cn() do shadcn
-public/fundo.mp4|jpg     vídeo de fundo e imagem de espera
-app/(painel)/            telas: leads, importar, detalhe do lead, eventos, clientes, configurações
-app/api/webhook/leona/   entrada automática de leads
-app/actions.ts           salvar, importar, conferir, enviar, reenviar, puxar dados do anúncio
-lib/store.ts             fachada do banco: escolhe SQLite ou Postgres pelo ambiente
-lib/store-sqlite.ts      modo local (SQLite embutido no Node)
-lib/store-pg.ts          modo online (Postgres via DATABASE_URL)
-lib/store-rest.ts        modo online pela API do Supabase (extensão do Netlify)
-lib/schema-sql.ts        tabelas (o Postgres direto roda sozinho; na API a pessoa cola no SQL Editor)
-lib/db-url.ts            limpeza da DATABASE_URL e tradução dos erros de conexão
-lib/config.ts            segredo e senha (config.json local ou tabela settings)
-lib/meta.ts              montagem do evento, envio, consulta do anúncio
-lib/csv.ts               leitura do CSV e reconhecimento das colunas
-lib/ingest.ts            criação/atualização de leads, inclusive em lote
-netlify.toml             configuração do Netlify
-scripts/iniciar.mjs      iniciador do modo local
-tests/                   testes automáticos
-```
+Não coloque `.env`, bancos, chaves ou sessões no repositório nem na imagem Docker. O [guia de migração](docs/FLOW-3.0-MIGRACAO.md) explica volume persistente, segredo antigo exposto, restauração e rollback.
 
-Funciona igual na Vercel: basta a mesma variável `DATABASE_URL`.
+## Atendimento e canais
 
-## Segurança
+Em **Canais WhatsApp**, selecione a empresa e configure um provedor: nativo, WAHA ou Evolution. Status e envios usam o provedor salvo para essa empresa. Configurações antigas guardadas no navegador ou em parâmetros globais precisam ser conferidas e cadastradas nesse novo fluxo.
 
-- Tokens do Meta ficam criptografados (AES-256-GCM) e nunca voltam para a tela.
-- A senha é guardada como hash (scrypt); o histórico guarda o corpo enviado sem o token.
-- Dados pessoais vão ao Meta sempre com hash SHA-256. O painel guarda nome e telefone em texto; trate o
-  acesso ao banco com o mesmo cuidado que a Leona.
-- O endereço de entrada da Leona funciona como senha: não publique.
+O modo nativo exige um servidor Node contínuo, disco persistente e um único responsável por sessão. Em serverless, use um provedor externo persistente. O painel não fornece coordenação de sessões nativas entre réplicas.
+
+Em **Clientes**, copie a URL de entrada correspondente à integração escolhida. Configure webhooks e valide recebimento e resposta com um número de homologação. Contatos também podem entrar por CSV/TXT. Um ID de anúncio e um CTWA Click ID são informações diferentes; o sistema não fabrica um clique a partir do anúncio.
+
+Conversas oferecem rascunhos por contato, anotações, busca no histórico e reprodução de mídia quando o conteúdo está disponível. Mover uma oportunidade para **Ganho** no funil salva o estágio comercial; não envia uma conversão por si só.
+
+## Campanhas e CTWA
+
+No dashboard, selecione a empresa, use **Carregar campanhas da conta** e escolha **Somente ativas**, **Somente pausadas** ou **Todos os status**. O seletor permite marcar campanhas específicas da conta daquela empresa. O status pertence à campanha e não é inferido do anúncio; uma campanha ativa pode conter anúncios pausados. Os filtros afetam a tabela e a sincronização, enquanto os indicadores gerais preservam o total do cliente/período. O catálogo informa o horário da consulta; atualize-o para conferir mudanças na Meta.
+
+CTWA é extraído somente de campos ou parâmetros explicitamente identificados. Um CTWA real exige Página ou WABA no cadastro; se faltar, a conversão fica bloqueada em vez de perder o clique em uma mudança automática para telefone. As referências de clique/anúncio/horário são preservadas em conjunto e sob atualização atômica. Isso não garante atribuição pela Meta nem recupera cliques antigos que nunca chegaram corretamente.
+
+Consulte a [revisão específica de CTWA e campanhas](docs/FLOW-3.0.1-CTWA-CAMPANHAS.md).
+
+## Indicadores
+
+Receita e vendas usam apenas `Purchase` de produção aceito, sem somar testes, checkouts ou tentativas repetidas. Moedas permanecem separadas. Referências de anúncio usam o payload preservado da conversão.
+
+O cache legado contém gasto acumulado do anúncio. Sem investimento validado para o período selecionado, investimento, lucro, CPA e ROAS aparecem sem dados. Não são calculados a partir de um denominador incompatível.
+
+## Backup e acesso
+
+O download em **Configurações** gera um snapshot consistente do SQLite. Ele não inclui `config.json`, o segredo externo nem os arquivos locais de sessão. Preserve esses elementos separadamente e teste a restauração. Para bancos remotos, use o backup do provedor.
+
+A autenticação continua sendo de um administrador do painel. Várias empresas cadastradas não representam usuários isolados por organização. O limite de tentativas de login é por processo; múltiplas réplicas precisam de limitação compartilhada.
+
+## Validação e revisão
+
+O workflow de CI prepara instalação, tipos, testes e build em Node 22 e 24. As validações locais usam dados fictícios; integrações reais com Meta, WhatsApp e bancos remotos precisam de homologação própria.
+
+- [Revisão da versão 3.0 e limites conhecidos](docs/FLOW-3.0-REVISAO.md)
+- [Instalação e migração](docs/FLOW-3.0-MIGRACAO.md)
+- [Situação dos achados da auditoria](docs/FLOW-3.0-ACHADOS.md)
+- [Auditoria histórica da versão 2.6.2](docs/AUDITORIA-2.6.2.md)
+
+A referência visual informada foi a Leona Solutions; somente sua página pública de login estava acessível. O Track Manual mantém identidade própria.

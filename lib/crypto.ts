@@ -26,12 +26,14 @@ export function encrypt(plain: string, secret: string): string {
 export function decrypt(enc: string, secret: string): string {
   const [version, iv, tag, data] = enc.split(".");
   if (version !== "v1" || !iv || !tag || !data) {
-    throw new Error("Token salvo em formato desconhecido. Cadastre o token de novo.");
+    throw new Error(
+      "Token salvo em formato desconhecido. Cadastre o token de novo.",
+    );
   }
   const decipher = createDecipheriv(
     "aes-256-gcm",
     key(secret, "tokens"),
-    Buffer.from(iv, "base64url")
+    Buffer.from(iv, "base64url"),
   );
   decipher.setAuthTag(Buffer.from(tag, "base64url"));
   try {
@@ -41,7 +43,7 @@ export function decrypt(enc: string, secret: string): string {
     ]).toString("utf8");
   } catch {
     throw new Error(
-      "Não foi possível ler o token salvo. O APP_SECRET mudou? Cadastre o token de novo."
+      "Não foi possível ler o token salvo. O APP_SECRET mudou? Cadastre o token de novo.",
     );
   }
 }
@@ -49,22 +51,33 @@ export function decrypt(enc: string, secret: string): string {
 /** Cria o valor do cookie de sessão: validade + assinatura. */
 export function signSession(expiresAtMs: number, secret: string): string {
   const body = String(expiresAtMs);
-  const sig = createHmac("sha256", key(secret, "sessao")).update(body).digest("base64url");
+  const sig = createHmac("sha256", key(secret, "sessao"))
+    .update(body)
+    .digest("base64url");
   return `${body}.${sig}`;
 }
 
-export function verifySession(cookie: string | undefined, secret: string, nowMs: number): boolean {
+export function verifySession(
+  cookie: string | undefined,
+  secret: string,
+  nowMs: number,
+): boolean {
   if (!cookie) return false;
-  const [body, sig] = cookie.split(".");
-  if (!body || !sig) return false;
-  const expected = createHmac("sha256", key(secret, "sessao")).update(body).digest();
+  const parts = cookie.split(".");
+  if (parts.length !== 2) return false;
+  const [body, sig] = parts;
+  if (!/^\d{13}$/.test(body) || !/^[A-Za-z0-9_-]{43}$/.test(sig)) return false;
+  const expected = createHmac("sha256", key(secret, "sessao"))
+    .update(body)
+    .digest();
   let given: Buffer;
   try {
     given = Buffer.from(sig, "base64url");
   } catch {
     return false;
   }
-  if (given.length !== expected.length || !timingSafeEqual(given, expected)) return false;
+  if (given.length !== expected.length || !timingSafeEqual(given, expected))
+    return false;
   const expires = Number(body);
   return Number.isFinite(expires) && expires > nowMs;
 }

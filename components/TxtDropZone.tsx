@@ -23,7 +23,6 @@ interface ImportResult {
 export function TxtDropZone({ clientId, onImported }: TxtDropZoneProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
-  const [autoPurchase, setAutoPurchase] = useState(true);
   const [result, setResult] = useState<ImportResult | null>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -32,12 +31,16 @@ export function TxtDropZone({ clientId, onImported }: TxtDropZoneProps) {
       setResult({ ok: false, error: "Selecione um arquivo .txt" });
       return;
     }
+    if (file.size > 1024 * 1024) {
+      setResult({ ok: false, error: "Envie um arquivo de até 1 MB." });
+      return;
+    }
     setResult(null);
     const reader = new FileReader();
     reader.onload = (e) => {
       const text = e.target?.result as string;
       startTransition(async () => {
-        const res = await importFromTxtAction(clientId, text, autoPurchase);
+        const res = await importFromTxtAction(clientId, text, false);
         setResult(res);
         if (res.ok && res.leadId) onImported?.(res.leadId);
       });
@@ -66,23 +69,10 @@ export function TxtDropZone({ clientId, onImported }: TxtDropZoneProps) {
 
   return (
     <div style={{ marginBottom: 16 }}>
-      {/* Opção de Auto-Conversão no Meta */}
-      <div style={{ marginBottom: 10, display: "flex", alignItems: "center", gap: 8 }}>
-        <input
-          type="checkbox"
-          id="auto-purchase-check"
-          checked={autoPurchase}
-          onChange={(e) => setAutoPurchase(e.target.checked)}
-          style={{ cursor: "pointer", width: 16, height: 16 }}
-        />
-        <label
-          htmlFor="auto-purchase-check"
-          style={{ fontSize: 13, color: "var(--text, #333)", cursor: "pointer", userSelect: "none" }}
-        >
-          💰 <strong>Registrar Compra (Purchase) automaticamente no Meta</strong> com o valor da proposta
-        </label>
-      </div>
-
+      <p className="hint">
+        Importe a proposta para preencher o contato. A compra será conferida e
+        enviada separadamente.
+      </p>
       <div
         onClick={() => inputRef.current?.click()}
         onDragOver={onDragOver}
@@ -125,7 +115,7 @@ export function TxtDropZone({ clientId, onImported }: TxtDropZoneProps) {
                 verticalAlign: "middle",
               }}
             />
-            Processando proposta e enviando ao Meta…
+            Importando proposta…
           </p>
         ) : (
           <>
@@ -133,7 +123,7 @@ export function TxtDropZone({ clientId, onImported }: TxtDropZoneProps) {
               Arrastar e soltar proposta (.txt)
             </p>
             <p style={{ margin: "4px 0 0", color: "#6b7280", fontSize: 12 }}>
-              ou clique para selecionar o arquivo
+              ou clique para selecionar o arquivo · até 1 MB
             </p>
           </>
         )}
@@ -145,7 +135,9 @@ export function TxtDropZone({ clientId, onImported }: TxtDropZoneProps) {
             marginTop: 10,
             padding: "10px 14px",
             borderRadius: 8,
-            background: result.ok ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)",
+            background: result.ok
+              ? "rgba(34,197,94,0.1)"
+              : "rgba(239,68,68,0.1)",
             border: `1px solid ${result.ok ? "#22c55e" : "#ef4444"}`,
             fontSize: 13,
           }}
@@ -157,8 +149,14 @@ export function TxtDropZone({ clientId, onImported }: TxtDropZoneProps) {
                 {result.phone && `(${result.phone})`}
               </div>
               {result.purchaseSent && (
-                <div style={{ marginTop: 4, fontWeight: 600, color: "#059669" }}>
-                  🚀 Venda de R$ {Number(result.value || 0).toFixed(2).replace(".", ",")} enviada ao Meta com sucesso via CAPI!
+                <div
+                  style={{ marginTop: 4, fontWeight: 600, color: "#059669" }}
+                >
+                  🚀 Venda de R${" "}
+                  {Number(result.value || 0)
+                    .toFixed(2)
+                    .replace(".", ",")}{" "}
+                  enviada ao Meta com sucesso via CAPI!
                 </div>
               )}
             </div>

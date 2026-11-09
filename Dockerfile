@@ -21,6 +21,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
+ENV TRACK_DATA_DIR="/app/data"
 
 # Cria usuário não-root por segurança
 RUN addgroup --system --gid 1001 nodejs && \
@@ -31,12 +32,15 @@ COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/data ./data
 COPY --from=builder /app/scripts ./scripts
 
 # Permissões de escrita para a pasta de dados e sessões WhatsApp
 RUN mkdir -p /app/data /app/.waha_sessions && \
-    chown -R nextjs:nodejs /app/data /app/.waha_sessions
+    chown -R nextjs:nodejs /app/data /app/.waha_sessions && \
+    chmod 700 /app/data /app/.waha_sessions
+
+# Cada instalação gera senha/segredo próprios; monte um volume persistente.
+VOLUME ["/app/data"]
 
 USER nextjs
 

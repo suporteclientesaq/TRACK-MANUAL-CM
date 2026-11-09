@@ -1,0 +1,9 @@
+.git
+.next
+node_modules
+data
+.waha_sessions
+.env
+.env.*
+*.tsbuildinfo
+*.log

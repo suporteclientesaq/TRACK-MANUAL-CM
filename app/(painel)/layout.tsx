@@ -1,41 +1,37 @@
-import Link from "next/link";
-import { LogOut } from "lucide-react";
-import { logoutAction } from "@/app/actions";
+import { Suspense } from "react";
 import { requireAuth } from "@/lib/auth";
-import { setupProblem } from "@/lib/store";
+import { listClients, setupProblem } from "@/lib/store";
 import { StorageProblem } from "@/app/StorageProblem";
-import { Logo } from "@/app/Logo";
-import { Button } from "@/components/ui/button";
-import { PanelNav } from "./PanelNav";
-import { WhatsAppHeaderBadge } from "@/components/WhatsAppHeaderBadge";
-import { VersionBadge } from "@/components/VersionBadge";
+import { AppShell } from "./AppShell";
 
 export const dynamic = "force-dynamic";
 
-export default async function PainelLayout({ children }: { children: React.ReactNode }) {
+export default async function PainelLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   const problem = await setupProblem();
-  if (problem) return <StorageProblem message={problem.message} database={problem.database} sql={problem.sql} />;
+  if (problem)
+    return (
+      <StorageProblem
+        message={problem.message}
+        database={problem.database}
+        sql={problem.sql}
+      />
+    );
   await requireAuth();
+  const clients = (await listClients()).map(({ id, name }) => ({ id, name }));
+  const dateLabel = new Intl.DateTimeFormat("pt-BR", {
+    day: "numeric",
+    month: "long",
+    timeZone: "America/Sao_Paulo",
+  }).format(new Date());
   return (
-    <>
-      <header className="topbar">
-        <Link href="/" className="brand">
-          <Logo size={22} />
-          Track Manual
-          <VersionBadge />
-        </Link>
-        <PanelNav />
-        <div className="topbar-right" style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <WhatsAppHeaderBadge />
-          <form action={logoutAction}>
-            <Button variant="ghost" size="sm" type="submit">
-              <LogOut />
-              Sair
-            </Button>
-          </form>
-        </div>
-      </header>
-      <main className="container">{children}</main>
-    </>
+    <Suspense fallback={null}>
+      <AppShell clients={clients} dateLabel={dateLabel}>
+        {children}
+      </AppShell>
+    </Suspense>
   );
 }

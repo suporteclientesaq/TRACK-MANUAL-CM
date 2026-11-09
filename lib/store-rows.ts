@@ -8,13 +8,15 @@ import type { AdInfo, Client, EventRow, Lead } from "./types";
 
 export type Row = Record<string, unknown>;
 
-export const str = (v: unknown): string | null => (v === null || v === undefined ? null : String(v));
+export const str = (v: unknown): string | null =>
+  v === null || v === undefined ? null : String(v);
 export const num = (v: unknown): number | null => {
   if (v === null || v === undefined || v === "") return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 };
-export const iso = (v: unknown): string => (v instanceof Date ? v.toISOString() : String(v));
+export const iso = (v: unknown): string =>
+  v instanceof Date ? v.toISOString() : String(v);
 
 export function fromJson(v: unknown): unknown {
   if (typeof v !== "string") return v ?? null;
@@ -23,6 +25,26 @@ export function fromJson(v: unknown): unknown {
   } catch {
     return v;
   }
+}
+
+/** A lease timestamp belongs to the atomic transition into sending. */
+export function withDispatchLease(value: unknown): Record<string, unknown> {
+  const parsed = fromJson(value);
+  const response =
+    parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  const context =
+    response.request_context && typeof response.request_context === "object"
+      ? (response.request_context as Record<string, unknown>)
+      : {};
+  return {
+    ...response,
+    request_context: {
+      ...context,
+      dispatch_started_at: new Date().toISOString(),
+    },
+  };
 }
 
 export function toClient(r: Row): Client {
@@ -53,34 +75,73 @@ export function toLead(r: Row): Lead {
   let thumb = str(r.thumbnail_url);
 
   // Fallback inteligente se o anúncio veio gravado no raw mas não nas colunas individuais
-  if (!sourceId && rawObj && typeof rawObj === "object") {
-    const rawSid = rawObj.source_id ?? rawObj.sourceId ?? rawObj.ad_id ?? rawObj._baileys_source_id;
+  const canonicalTracking =
+    !!rawObj &&
+    typeof rawObj._tracking_snapshot === "object" &&
+    rawObj._tracking_snapshot !== null;
+  if (!sourceId && !canonicalTracking && rawObj && typeof rawObj === "object") {
+    const rawSid =
+      rawObj.source_id ??
+      rawObj.sourceId ??
+      rawObj.ad_id ??
+      rawObj._baileys_source_id;
     if (rawSid) sourceId = String(rawSid).trim();
   }
-  if (!headline && rawObj && typeof rawObj === "object") {
+  if (!headline && !canonicalTracking && rawObj && typeof rawObj === "object") {
     const rawH = rawObj.headline ?? rawObj.title ?? rawObj._baileys_headline;
     if (rawH) headline = String(rawH).trim();
   }
-  if (!thumb && rawObj && typeof rawObj === "object") {
-    const rawT = rawObj.thumbnail_url ?? rawObj.thumbnailUrl ?? rawObj._baileys_thumbnail_url;
+  if (!thumb && !canonicalTracking && rawObj && typeof rawObj === "object") {
+    const rawT =
+      rawObj.thumbnail_url ??
+      rawObj.thumbnailUrl ??
+      rawObj._baileys_thumbnail_url;
     if (rawT) thumb = String(rawT).trim();
   }
-  if (!ctwaClid && sourceId) {
-    ctwaClid = `ctwa_ad_${sourceId}`;
-  }
+  // Legacy synthetic identifiers are ad references, never Meta click IDs.
+  if (ctwaClid?.startsWith("ctwa_ad_") || ctwaClid?.startsWith("ad_"))
+    ctwaClid = null;
 
   // Resolve nome real: usa pushName/notifyName/verifiedName do raw, ou extrai das anotações/propostas
   let resolvedName = str(r.name);
-  if ((!resolvedName || resolvedName === "Sem Nome") && rawObj && typeof rawObj === "object") {
+  if (resolvedName && /continental\s*studio/i.test(resolvedName)) {
+    resolvedName = null;
+  }
+  if (
+    (!resolvedName || resolvedName === "Sem Nome") &&
+    rawObj &&
+    typeof rawObj === "object"
+  ) {
     const rn = rawObj as Record<string, unknown>;
     const fromRaw =
       (typeof rn.pushName === "string" && rn.pushName.trim()) ||
       (typeof rn.pushname === "string" && rn.pushname.trim()) ||
       (typeof rn.notifyName === "string" && rn.notifyName.trim()) ||
       (typeof rn.verifiedName === "string" && rn.verifiedName.trim()) ||
-      (typeof rn.name === "string" && rn.name.trim() && rn.name.trim() !== "Sem Nome" && rn.name.trim()) ||
+      (typeof rn.name === "string" &&
+        rn.name.trim() &&
+        rn.name.trim() !== "Sem Nome" &&
+        rn.name.trim()) ||
       null;
-    if (fromRaw) resolvedName = fromRaw;
+    if (fromRaw && !/continental\s*studio/i.test(fromRaw)) resolvedName = fromRaw;
+
+    if ((!resolvedName || resolvedName === "Sem Nome") && Array.isArray(rn.messages)) {
+      for (let i = rn.messages.length - 1; i >= 0; i--) {
+        const msg = rn.messages[i];
+        if (msg && typeof msg === "object" && !msg.fromMe) {
+          const candidate = msg.pushName || msg.senderName || msg.notifyName;
+          if (
+            typeof candidate === "string" &&
+            candidate.trim() &&
+            candidate.trim() !== "Sem Nome" &&
+            !/continental\s*studio/i.test(candidate)
+          ) {
+            resolvedName = candidate.trim();
+            break;
+          }
+        }
+      }
+    }
   }
   // Se ainda estiver sem nome, tenta extrair de notas ou propostas importadas (ex: "Cliente: Vilson Gregorio")
   if (!resolvedName || resolvedName === "Sem Nome") {
@@ -88,7 +149,9 @@ export function toLead(r: Row): Lead {
     if (notesStr) {
       const m =
         notesStr.match(/(?:Cliente|Nome|Lead|Contato):\s*([^\n\r,•*#|]+)/i) ||
-        notesStr.match(/👤\s*(?:\*\*)?(?:Cliente|Nome)?(?:\*\*)?:\s*([^\n\r,•*#|]+)/i);
+        notesStr.match(
+          /👤\s*(?:\*\*)?(?:Cliente|Nome)?(?:\*\*)?:\s*([^\n\r,•*#|]+)/i,
+        );
       if (m && m[1].trim() && !/pendente/i.test(m[1])) {
         const extracted = m[1].trim().replace(/^[*_#\s]+|[*_#\s]+$/g, "");
         if (extracted.length >= 2) resolvedName = extracted;
@@ -118,7 +181,10 @@ export function toLead(r: Row): Lead {
     notes: str(r.notes),
     raw: rawObj,
     first_seen_at: iso(r.first_seen_at),
-    clid_seen_at: r.clid_seen_at === null || r.clid_seen_at === undefined ? null : iso(r.clid_seen_at),
+    clid_seen_at:
+      r.clid_seen_at === null || r.clid_seen_at === undefined
+        ? null
+        : iso(r.clid_seen_at),
     updated_at: iso(r.updated_at),
   };
 }
@@ -136,7 +202,11 @@ export function toEvent(r: Row): EventRow {
     content_name: str(r.content_name),
     action_source: String(r.action_source),
     is_test: !!r.is_test,
-    status: r.status === "enviado" ? "enviado" : "erro",
+    status: ["pendente", "enviando", "incerto", "enviado", "erro"].includes(
+      String(r.status),
+    )
+      ? (r.status as EventRow["status"])
+      : "erro",
     http_status: num(r.http_status),
     events_received: num(r.events_received),
     fbtrace_id: str(r.fbtrace_id),
@@ -171,23 +241,67 @@ export function toAd(r: Row): AdInfo {
 
 /** Colunas que podem ser alteradas por um update de cliente. */
 export const CLIENT_COLS = [
-  "name", "pixel_id", "capi_token_enc", "page_id", "waba_id", "id_mode", "ad_account_id",
-  "marketing_token_enc", "test_event_code", "default_currency", "send_extra_data", "updated_at",
+  "name",
+  "pixel_id",
+  "capi_token_enc",
+  "page_id",
+  "waba_id",
+  "id_mode",
+  "ad_account_id",
+  "marketing_token_enc",
+  "test_event_code",
+  "default_currency",
+  "send_extra_data",
+  "updated_at",
 ] as const;
 
 /** Colunas de lead, na ordem usada nos inserts. */
 export const LEAD_COLS = [
-  "client_id", "name", "phone", "email", "city", "state", "zip", "country", "ctwa_clid", "source_id",
-  "source_url", "source_type", "thumbnail_url", "media_url", "headline", "ad_body", "origin", "notes",
-  "raw", "first_seen_at", "clid_seen_at", "updated_at",
+  "client_id",
+  "name",
+  "phone",
+  "email",
+  "city",
+  "state",
+  "zip",
+  "country",
+  "ctwa_clid",
+  "source_id",
+  "source_url",
+  "source_type",
+  "thumbnail_url",
+  "media_url",
+  "headline",
+  "ad_body",
+  "origin",
+  "notes",
+  "raw",
+  "first_seen_at",
+  "clid_seen_at",
+  "updated_at",
 ] as const;
 
 /** Colunas de lead que a importação em lote atualiza (raw fica como está). */
-export const LEAD_BULK_COLS = LEAD_COLS.filter((c) => c !== "client_id" && c !== "raw" && c !== "first_seen_at" && c !== "origin");
+export const LEAD_BULK_COLS = LEAD_COLS.filter(
+  (c) =>
+    c !== "client_id" && c !== "raw" && c !== "first_seen_at" && c !== "origin",
+);
 
 export const AD_COLS = [
-  "ad_name", "ad_status", "adset_id", "adset_name", "campaign_id", "campaign_name", "creative_title",
-  "creative_body", "thumbnail_url", "spend", "impressions", "clicks", "conversations", "raw",
+  "ad_name",
+  "ad_status",
+  "adset_id",
+  "adset_name",
+  "campaign_id",
+  "campaign_name",
+  "creative_title",
+  "creative_body",
+  "thumbnail_url",
+  "spend",
+  "impressions",
+  "clicks",
+  "conversations",
+  "raw",
 ] as const;
 
 export const nowIso = () => new Date().toISOString();
@@ -204,7 +318,11 @@ export interface LeadFilter {
   limit: number;
 }
 
-export type EventWithNames = EventRow & { lead_name: string | null; lead_phone: string | null; client_name: string | null };
+export type EventWithNames = EventRow & {
+  lead_name: string | null;
+  lead_phone: string | null;
+  client_name: string | null;
+};
 
 export interface Stats {
   clients: number;
@@ -231,24 +349,44 @@ export interface StoreImpl {
   insertLead(row: Row): MaybeAsync<string>;
   insertLeads(rows: Row[]): MaybeAsync<number>;
   updateLead(id: string, patch: Row): MaybeAsync<void>;
+  updateLeadWithRaw(
+    id: string,
+    patch: Row,
+    incomingRaw: unknown,
+  ): MaybeAsync<void>;
   /** Atualiza várias linhas de uma vez; cada linha traz id + todas as LEAD_BULK_COLS. */
   updateLeadsBulk(rows: Row[]): MaybeAsync<number>;
   deleteLead(id: string): MaybeAsync<void>;
 
   listEventsForLead(leadId: string): MaybeAsync<EventRow[]>;
-  listEvents(f: { status?: string; offset: number; limit: number }): MaybeAsync<EventWithNames[]>;
+  listEvents(f: {
+    status?: string;
+    offset: number;
+    limit: number;
+  }): MaybeAsync<EventWithNames[]>;
   getEvent(id: string): MaybeAsync<EventRow | null>;
+  getEventByExternalId(
+    clientId: string,
+    eventId: string,
+  ): MaybeAsync<EventRow | null>;
   insertEvent(row: Row): MaybeAsync<string>;
+  updateEvent(id: string, patch: Row): MaybeAsync<void>;
+  claimEvent(id: string): MaybeAsync<boolean>;
   countSent(leadId: string, eventName: string): MaybeAsync<number>;
   sentForLeads(leadIds: string[]): MaybeAsync<Map<string, EventRow[]>>;
-  recentSent(sinceIso: string): MaybeAsync<{ event_name: string; value: number | null }[]>;
+  recentSent(
+    sinceIso: string,
+  ): MaybeAsync<{ event_name: string; value: number | null }[]>;
   contentNames(clientId: string): MaybeAsync<string[]>;
 
   getAd(clientId: string, adId: string): MaybeAsync<AdInfo | null>;
-  adsFor(pairs: { clientId: string; adId: string }[]): MaybeAsync<Map<string, AdInfo>>;
+  adsFor(
+    pairs: { clientId: string; adId: string }[],
+  ): MaybeAsync<Map<string, AdInfo>>;
   upsertAd(row: Row): MaybeAsync<void>;
 
   getSetting(key: string): MaybeAsync<string | null>;
+  getOrCreateSetting(key: string, value: string): MaybeAsync<string>;
   setSettings(values: Record<string, string>): MaybeAsync<void>;
 
   stats(): MaybeAsync<Stats>;

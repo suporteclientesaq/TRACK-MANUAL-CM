@@ -5,9 +5,7 @@ import { Check } from "lucide-react";
 import { saveThemeAction } from "@/app/actions";
 import {
   ACCENT_OPTIONS,
-  DENSITY_OPTIONS,
   THEME_OPTIONS,
-  TITLE_OPTIONS,
   htmlAttrs,
   type ThemePrefs,
 } from "@/lib/theme";
@@ -49,7 +47,11 @@ export function ThemeForm({ initial }: { initial: ThemePrefs }) {
         <legend>Tema</legend>
         <div className="theme-options">
           {THEME_OPTIONS.map((o) => (
-            <label key={o.value} className="theme-option" data-selected={prefs.theme === o.value}>
+            <label
+              key={o.value}
+              className="theme-option"
+              data-selected={prefs.theme === o.value}
+            >
               <input
                 type="radio"
                 name="theme"
@@ -57,7 +59,10 @@ export function ThemeForm({ initial }: { initial: ThemePrefs }) {
                 checked={prefs.theme === o.value}
                 onChange={() => apply({ ...prefs, theme: o.value })}
               />
-              <span className={`theme-preview theme-preview-${o.value}`} aria-hidden="true">
+              <span
+                className={`theme-preview theme-preview-${o.value}`}
+                aria-hidden="true"
+              >
                 <span className="theme-preview-bar" />
                 <span className="theme-preview-card" />
               </span>
@@ -74,7 +79,12 @@ export function ThemeForm({ initial }: { initial: ThemePrefs }) {
         <legend>Cor de destaque</legend>
         <div className="swatches">
           {ACCENT_OPTIONS.map((o) => (
-            <label key={o.value} className="swatch" data-selected={prefs.accent === o.value} title={o.label}>
+            <label
+              key={o.value}
+              className="swatch"
+              data-selected={prefs.accent === o.value}
+              title={o.label}
+            >
               <input
                 type="radio"
                 name="accent"
@@ -83,7 +93,9 @@ export function ThemeForm({ initial }: { initial: ThemePrefs }) {
                 onChange={() => apply({ ...prefs, accent: o.value })}
               />
               <span className="swatch-dot" style={{ background: o.color }}>
-                {prefs.accent === o.value ? <Check size={14} strokeWidth={3} /> : null}
+                {prefs.accent === o.value ? (
+                  <Check size={14} strokeWidth={3} />
+                ) : null}
               </span>
               <span className="swatch-label">{o.label}</span>
             </label>
@@ -91,52 +103,12 @@ export function ThemeForm({ initial }: { initial: ThemePrefs }) {
         </div>
       </fieldset>
 
-      <div className="cols">
-        <fieldset className="theme-group">
-          <legend>Densidade</legend>
-          <div className="theme-options theme-options-stack">
-            {DENSITY_OPTIONS.map((o) => (
-              <label key={o.value} className="theme-option" data-selected={prefs.density === o.value}>
-                <input
-                  type="radio"
-                  name="density"
-                  value={o.value}
-                  checked={prefs.density === o.value}
-                  onChange={() => apply({ ...prefs, density: o.value })}
-                />
-                <span className="theme-option-text">
-                  <strong>{o.label}</strong>
-                  <span>{o.desc}</span>
-                </span>
-              </label>
-            ))}
-          </div>
-        </fieldset>
-
-        <fieldset className="theme-group">
-          <legend>Títulos</legend>
-          <div className="theme-options theme-options-stack">
-            {TITLE_OPTIONS.map((o) => (
-              <label key={o.value} className="theme-option" data-selected={prefs.titles === o.value}>
-                <input
-                  type="radio"
-                  name="titles"
-                  value={o.value}
-                  checked={prefs.titles === o.value}
-                  onChange={() => apply({ ...prefs, titles: o.value })}
-                />
-                <span className="theme-option-text">
-                  <strong className={o.value === "serifa" ? "font-display text-[1.15rem] font-normal" : "font-ui"}>{o.label}</strong>
-                  <span>{o.desc}</span>
-                </span>
-              </label>
-            ))}
-          </div>
-        </fieldset>
-      </div>
-
       <p className="hint" aria-live="polite">
-        {pending ? "Salvando…" : saved ? "Salvo. Vale para este navegador; em outro aparelho, escolha de novo." : "A mudança aparece na hora e fica guardada neste navegador."}
+        {pending
+          ? "Salvando…"
+          : saved
+            ? "Salvo. Vale para este navegador; em outro aparelho, escolha de novo."
+            : "A mudança aparece na hora e fica guardada neste navegador."}
       </p>
     </div>
   );

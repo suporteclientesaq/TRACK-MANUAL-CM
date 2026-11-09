@@ -1,6 +1,12 @@
+import { selectReferralGroups } from "./ctwa";
 import { normalizePhone } from "./normalize";
 import type { ParsedEvolutionLead } from "./evolution";
-import { normalizeBaseUrl, safeFetchJson } from "./evolution";
+import {
+  normalizeBaseUrl,
+  safeFetchJson,
+  phoneFromWhatsAppJid,
+  whatsappTimestamp,
+} from "./evolution";
 
 /**
  * Parser de Webhook do WAHA (WhatsApp HTTP API - devlikeapro/waha).
@@ -8,12 +14,14 @@ import { normalizeBaseUrl, safeFetchJson } from "./evolution";
  *
  * Ao receber a mensagem de lead Click-to-WhatsApp via WAHA:
  * 1. Extrai o telefone do remetente (payload.from)
- * 2. Extrai ctwa_clid (payload._data.contextInfo.ctwaClid ou conversionData)
+ * 2. Extrai ctwa_clid (campos explícitos ctwaClid/ctwa_clid do provedor)
  * 3. Extrai dados do anúncio (externalAdReply ou tags no texto como [AD:123456])
  */
 export function parseWahaWebhook(
-  body: Record<string, unknown>
-): { ok: true; lead: ParsedEvolutionLead } | { ok: false; ignored?: boolean; error: string } {
+  body: Record<string, unknown>,
+):
+  | { ok: true; lead: ParsedEvolutionLead }
+  | { ok: false; ignored?: boolean; error: string } {
   if (!body || typeof body !== "object") {
     return { ok: false, error: "Payload vazio ou inválido." };
   }
@@ -21,46 +29,93 @@ export function parseWahaWebhook(
   // WAHA envia o evento no campo 'event' (ex: 'message', 'message.any')
   const event = String(body.event || "");
   if (event && !event.startsWith("message")) {
-    return { ok: false, ignored: true, error: `Evento WAHA "${event}" ignorado.` };
+    return {
+      ok: false,
+      ignored: true,
+      error: `Evento WAHA "${event}" ignorado.`,
+    };
   }
 
   const session = typeof body.session === "string" ? body.session : "default";
 
   // Objeto principal de mensagem no WAHA fica em body.payload
   const payload = (body.payload || body) as Record<string, unknown>;
+  const data = (payload._data || {}) as Record<string, unknown>;
 
   const fromMe = Boolean(payload.fromMe);
-  if (fromMe) {
-    return { ok: false, ignored: true, error: "Mensagem enviada pelo próprio número (fromMe: true)." };
-  }
+  const rawRecipient = fromMe
+    ? String(payload.to || payload.chatId || data.to || "")
+    : String(payload.from || payload.author || "");
 
-  const rawFrom = String(payload.from || payload.author || "");
-  if (!rawFrom) {
-    return { ok: false, error: "Nenhum remetente ('from') encontrado no payload do WAHA." };
+  if (!rawRecipient) {
+    return {
+      ok: false,
+      error: fromMe
+        ? "Nenhum destinatário ('to') encontrado no payload do WAHA."
+        : "Nenhum remetente ('from') encontrado no payload do WAHA.",
+    };
   }
 
   // Ignora grupos e transmissões/status
-  if (rawFrom.includes("@g.us") || rawFrom.includes("@broadcast")) {
-    return { ok: false, ignored: true, error: "Mensagem de grupo ou broadcast ignorada." };
+  if (
+    rawRecipient.includes("@g.us") ||
+    rawRecipient.includes("@broadcast") ||
+    rawRecipient.includes("status@broadcast") ||
+    rawRecipient.includes("newsletter")
+  ) {
+    return {
+      ok: false,
+      ignored: true,
+      error: "Mensagem de grupo ou broadcast ignorada.",
+    };
   }
 
-  const rawPhone = rawFrom.replace(/@.*$/, "").replace(/\D/g, "");
-  const phone = normalizePhone(rawPhone);
+  const phone = phoneFromWhatsAppJid(
+    rawRecipient,
+    fromMe ? undefined : (payload.fromAlt || payload.senderPn),
+  );
   if (!phone) {
-    return { ok: false, error: `Telefone inválido extraído do remetente: ${rawFrom}` };
+    if (rawRecipient.endsWith("@lid"))
+      return {
+        ok: false,
+        ignored: true,
+        error: "Identificador LID sem telefone resolvido.",
+      };
+    return {
+      ok: false,
+      error: `Telefone inválido extraído: ${rawRecipient}`,
+    };
   }
 
-  const data = (payload._data || {}) as Record<string, unknown>;
-
-  // Nome do contato
-  const name =
-    typeof payload.notifyName === "string" && payload.notifyName.trim()
-      ? payload.notifyName.trim()
-      : typeof data.notifyName === "string" && data.notifyName.trim()
-        ? data.notifyName.trim()
-        : typeof payload.pushName === "string" && payload.pushName.trim()
-          ? payload.pushName.trim()
-          : null;
+  // Nome do contato: se fromMe for true, não usamos o nome do atendente/empresa
+  let name: string | null = null;
+  if (!fromMe) {
+    const sender = (payload.sender || {}) as Record<string, unknown>;
+    const contact = (payload.contact || {}) as Record<string, unknown>;
+    const chat = (payload.chat || {}) as Record<string, unknown>;
+    const candidateNames = [
+      payload.notifyName,
+      data.notifyName,
+      payload.pushName,
+      data.pushName,
+      sender.pushName,
+      sender.name,
+      contact.name,
+      contact.pushname,
+      data.verifiedName,
+      payload.verifiedName,
+      chat.name,
+    ];
+    for (const c of candidateNames) {
+      if (typeof c === "string" && c.trim() && c.trim() !== "Sem Nome") {
+        const clean = c.trim();
+        if (!/^(continental\s*studio|atendimento|suporte)$/i.test(clean)) {
+          name = clean;
+          break;
+        }
+      }
+    }
+  }
 
   // Texto da mensagem
   const messageText =
@@ -70,132 +125,31 @@ export function parseWahaWebhook(
         ? data.body.trim()
         : null;
 
-  // ContextInfo do WhatsApp Web
-  const contextInfo =
-    (data.contextInfo as Record<string, unknown>) ||
-    (payload.contextInfo as Record<string, unknown>) ||
-    {};
+  // Select one complete provider context before extracting its reference.
+  const referral = selectReferralGroups([
+    data.contextInfo,
+    payload.contextInfo,
+    data,
+    payload,
+  ]);
+  const ctwa_clid = referral?.ctwa_clid || null;
+  let source_id = referral?.source_id || null;
+  const source_url = referral?.source_url || null;
+  const thumbnail_url = referral?.thumbnail_url || null;
+  const media_url = referral?.media_url || null;
+  const headline = referral?.headline || null;
+  const ad_body = referral?.ad_body || null;
 
-  // Dados do anúncio (externalAdReply)
-  const adReply =
-    (contextInfo.externalAdReply as Record<string, unknown>) ||
-    (data.externalAdReply as Record<string, unknown>) ||
-    (payload.externalAdReply as Record<string, unknown>) ||
-    {};
-
-  // CTWA Click ID
-  let ctwa_clid: string | null = null;
-  const rawCtwa =
-    contextInfo.ctwaClid ??
-    contextInfo.ctwa_clid ??
-    contextInfo.conversionData ??
-    contextInfo.conversion_data ??
-    adReply.ctwaClid ??
-    adReply.ctwa_clid ??
-    adReply.conversionData ??
-    adReply.conversion_data ??
-    data.ctwaClid ??
-    payload.ctwaClid ??
-    null;
-
-  if (rawCtwa != null) {
-    if (Buffer.isBuffer(rawCtwa) || rawCtwa instanceof Uint8Array) {
-      const buf = Buffer.from(rawCtwa);
-      if (buf.length > 0) {
-        const utf8 = buf.toString("utf-8").trim();
-        const m = utf8.match(/([a-zA-Z0-9+/=_-]{20,})/);
-        if (m && m[1].length >= 20) {
-          ctwa_clid = m[1];
-        } else {
-          const b64 = buf.toString("base64").trim();
-          if (b64 && b64.length >= 16) ctwa_clid = b64;
-        }
-      }
-    } else if (typeof rawCtwa === "string" && rawCtwa.trim()) {
-      ctwa_clid = rawCtwa.trim();
-    } else {
-      const s = String(rawCtwa).trim();
-      if (s && s !== "[object Object]" && s !== "null" && s !== "undefined") ctwa_clid = s;
-    }
-  }
-
-  // Se conversionData veio em Base64, decodifica ou usa direto
-  if (!ctwa_clid && (contextInfo.conversionData || adReply.conversionData)) {
-    const rawConv = contextInfo.conversionData || adReply.conversionData;
-    if (Buffer.isBuffer(rawConv) || rawConv instanceof Uint8Array) {
-      ctwa_clid = Buffer.from(rawConv).toString("base64").trim();
-    } else if (typeof rawConv === "string" && rawConv.trim()) {
-      try {
-        const decoded = Buffer.from(rawConv.trim(), "base64").toString("utf-8");
-        const m = decoded.match(/([a-zA-Z0-9_-]{20,})/);
-        ctwa_clid = m ? m[1] : rawConv.trim();
-      } catch {
-        ctwa_clid = rawConv.trim();
-      }
-    }
-  }
-
-  let source_id: string | null = null;
-  const rawSourceId =
-    adReply.sourceId ??
-    adReply.source_id ??
-    adReply.adId ??
-    adReply.ad_id ??
-    contextInfo.sourceId;
-  if (rawSourceId != null) {
-    const s = String(rawSourceId).trim();
-    if (s && s !== "0" && s !== "null" && s !== "undefined") {
-      source_id = s;
-    }
-  }
-
-  const rawSourceUrl = adReply.sourceUrl || adReply.source_url;
-  let source_url = typeof rawSourceUrl === "string" && rawSourceUrl.trim() ? rawSourceUrl.trim() : null;
-
-  if (source_url) {
-    try {
-      const u = new URL(source_url);
-      if (!ctwa_clid) {
-        ctwa_clid = u.searchParams.get("ctwa_clid") || u.searchParams.get("fbclid") || null;
-      }
-      if (!source_id) {
-        const urlAd = u.searchParams.get("ad_id") || u.searchParams.get("hsa_ad") || u.searchParams.get("ad");
-        if (urlAd) source_id = urlAd;
-      }
-    } catch {
-      if (!ctwa_clid) {
-        const m = source_url.match(/(?:ctwa_clid|fbclid)=([^&]+)/i);
-        if (m) ctwa_clid = decodeURIComponent(m[1]);
-      }
-      if (!source_id) {
-        const m = source_url.match(/(?:ad_id|hsa_ad)=(\d+)/i);
-        if (m) source_id = m[1];
-      }
-    }
-  }
-
-  // Rastreamento por TAG no texto da mensagem caso ctwa_clid/source_id venha vazio
-  if (!source_id && messageText) {
+  // Text tags identify an ad only when no separate referral context is present.
+  if (!referral && messageText) {
     const tagMatch =
-      messageText.match(/\[(?:AD|REF|COD|ANUNCIO|ID|ANÚNCIO)[:\s-]*(\d{6,})\]/i) ||
+      messageText.match(
+        /\[(?:AD|REF|COD|ANUNCIO|ID|ANÚNCIO)[:\s-]*(\d{6,})\]/i,
+      ) ||
       messageText.match(/(?:AD|REF|COD|ANUNCIO|ANÚNCIO)[:\s-]+(\d{6,})/i) ||
       messageText.match(/(?:hsa_ad|ad_id)=(\d{6,})/i);
-    if (tagMatch) {
-      source_id = tagMatch[1];
-    }
+    if (tagMatch) source_id = tagMatch[1];
   }
-
-  const rawThumb = adReply.thumbnailUrl || adReply.thumbnail_url;
-  const thumbnail_url = typeof rawThumb === "string" && rawThumb.trim() ? rawThumb.trim() : null;
-
-  const rawMedia = adReply.mediaUrl || adReply.media_url;
-  const media_url = typeof rawMedia === "string" && rawMedia.trim() ? rawMedia.trim() : null;
-
-  const rawTitle = adReply.title || adReply.headline;
-  const headline = typeof rawTitle === "string" && rawTitle.trim() ? rawTitle.trim() : null;
-
-  const rawBody = adReply.body || adReply.ad_body;
-  const ad_body = typeof rawBody === "string" && rawBody.trim() ? rawBody.trim() : null;
 
   return {
     ok: true,
@@ -211,6 +165,39 @@ export function parseWahaWebhook(
       ad_body,
       message_text: messageText,
       instance: session,
+      fromMe: false,
+      message_id:
+        typeof payload.id === "string"
+          ? payload.id
+          : typeof data.id === "string"
+            ? data.id
+            : null,
+      received_at: whatsappTimestamp(payload.timestamp || data.t),
+      type:
+        String(payload.type || data.type || "text").includes("audio") ||
+        payload.type === "ptt"
+          ? "audio"
+          : payload.type === "image"
+            ? "image"
+            : payload.type === "video"
+              ? "video"
+              : payload.type === "document"
+                ? "document"
+                : "text",
+      mimetype:
+        typeof (payload.media as Record<string, unknown> | undefined)
+          ?.mimetype === "string"
+          ? String((payload.media as Record<string, unknown>).mimetype)
+          : typeof data.mimetype === "string"
+            ? data.mimetype
+            : null,
+      message_media_url:
+        typeof (payload.media as Record<string, unknown> | undefined)?.url ===
+        "string"
+          ? String((payload.media as Record<string, unknown>).url)
+          : null,
+      base64: typeof payload.base64 === "string" ? payload.base64 : null,
+      filename: typeof data.filename === "string" ? data.filename : null,
     },
   };
 }
@@ -225,7 +212,10 @@ export interface WahaConfig {
   sessionName: string;
 }
 
-function wahaHeaders(apiKey?: string, extra: Record<string, string> = {}): Record<string, string> {
+function wahaHeaders(
+  apiKey?: string,
+  extra: Record<string, string> = {},
+): Record<string, string> {
   const headers: Record<string, string> = { ...extra };
   const key = (apiKey || "").trim();
   if (key) {
@@ -244,9 +234,12 @@ export async function wahaGetState(config: WahaConfig): Promise<{
 }> {
   const base = normalizeBaseUrl(config.serverUrl);
   const session = config.sessionName || "default";
-  const res = await safeFetchJson(`${base}/api/sessions/${encodeURIComponent(session)}`, {
-    headers: wahaHeaders(config.apiKey),
-  });
+  const res = await safeFetchJson(
+    `${base}/api/sessions/${encodeURIComponent(session)}`,
+    {
+      headers: wahaHeaders(config.apiKey),
+    },
+  );
 
   if (!res.ok) {
     if (
@@ -274,7 +267,9 @@ export async function wahaGetState(config: WahaConfig): Promise<{
   return { ok: true, state: "close" };
 }
 
-export async function wahaGetQrCode(config: WahaConfig): Promise<string | null> {
+export async function wahaGetQrCode(
+  config: WahaConfig,
+): Promise<string | null> {
   const base = normalizeBaseUrl(config.serverUrl);
   const session = config.sessionName || "default";
 
@@ -316,7 +311,7 @@ export async function wahaGetQrCode(config: WahaConfig): Promise<string | null> 
 
 export async function wahaCreateOrConnect(
   config: WahaConfig,
-  webhookUrl?: string
+  webhookUrl?: string,
 ): Promise<{
   ok: boolean;
   state: "open" | "connecting" | "close";
@@ -330,6 +325,30 @@ export async function wahaCreateOrConnect(
   // 1. Verifica estado atual
   const current = await wahaGetState(config);
   if (current.ok && current.state === "open") {
+    if (webhookUrl) {
+      const webhook = await safeFetchJson(
+        `${base}/api/sessions/${encodeURIComponent(session)}`,
+        {
+          method: "PATCH",
+          headers: wahaHeaders(config.apiKey, {
+            "Content-Type": "application/json",
+          }),
+          body: JSON.stringify({
+            config: { webhooks: [{ url: webhookUrl, events: ["message"] }] },
+          }),
+        },
+      );
+      if (!webhook.ok)
+        return {
+          ok: false,
+          state: "open",
+          qrcode: null,
+          phone: current.phone,
+          error:
+            webhook.error ||
+            "A sessão está conectada, mas não foi possível atualizar o webhook.",
+        };
+    }
     return { ok: true, state: "open", qrcode: null, phone: current.phone };
   }
 
@@ -351,7 +370,9 @@ export async function wahaCreateOrConnect(
 
     const createRes = await safeFetchJson(`${base}/api/sessions`, {
       method: "POST",
-      headers: wahaHeaders(config.apiKey, { "Content-Type": "application/json" }),
+      headers: wahaHeaders(config.apiKey, {
+        "Content-Type": "application/json",
+      }),
       body: JSON.stringify(startBody),
     });
 
@@ -359,7 +380,9 @@ export async function wahaCreateOrConnect(
       // Tenta rota alternativa POST /api/sessions/start
       const altRes = await safeFetchJson(`${base}/api/sessions/start`, {
         method: "POST",
-        headers: wahaHeaders(config.apiKey, { "Content-Type": "application/json" }),
+        headers: wahaHeaders(config.apiKey, {
+          "Content-Type": "application/json",
+        }),
         body: JSON.stringify(startBody),
       });
       if (!altRes.ok) {
@@ -367,23 +390,33 @@ export async function wahaCreateOrConnect(
           ok: false,
           state: "close",
           qrcode: null,
-          error: createRes.error || altRes.error || "Não foi possível criar a sessão no WAHA.",
+          error:
+            createRes.error ||
+            altRes.error ||
+            "Não foi possível criar a sessão no WAHA.",
         };
       }
     }
   } else if (current.state === "close") {
     // Inicia sessão existente
-    await safeFetchJson(`${base}/api/sessions/${encodeURIComponent(session)}/start`, {
-      method: "POST",
-      headers: wahaHeaders(config.apiKey, { "Content-Type": "application/json" }),
-    });
+    await safeFetchJson(
+      `${base}/api/sessions/${encodeURIComponent(session)}/start`,
+      {
+        method: "POST",
+        headers: wahaHeaders(config.apiKey, {
+          "Content-Type": "application/json",
+        }),
+      },
+    );
   }
 
   // Se tem webhook e a sessão já existia, atualiza se suportado
   if (webhookUrl && current.state !== "not_found") {
     await safeFetchJson(`${base}/api/sessions/${encodeURIComponent(session)}`, {
       method: "PATCH",
-      headers: wahaHeaders(config.apiKey, { "Content-Type": "application/json" }),
+      headers: wahaHeaders(config.apiKey, {
+        "Content-Type": "application/json",
+      }),
       body: JSON.stringify({
         config: {
           webhooks: [{ url: webhookUrl, events: ["message"] }],
@@ -400,21 +433,29 @@ export async function wahaCreateOrConnect(
   return { ok: true, state: "connecting", qrcode: qr };
 }
 
-export async function wahaLogout(config: WahaConfig): Promise<{ ok: boolean; error?: string }> {
+export async function wahaLogout(
+  config: WahaConfig,
+): Promise<{ ok: boolean; error?: string }> {
   const base = normalizeBaseUrl(config.serverUrl);
   const session = config.sessionName || "default";
 
-  const res = await safeFetchJson(`${base}/api/sessions/${encodeURIComponent(session)}/logout`, {
-    method: "POST",
-    headers: wahaHeaders(config.apiKey),
-  });
+  const res = await safeFetchJson(
+    `${base}/api/sessions/${encodeURIComponent(session)}/logout`,
+    {
+      method: "POST",
+      headers: wahaHeaders(config.apiKey),
+    },
+  );
 
   if (!res.ok) {
     // Tenta /stop
-    const stopRes = await safeFetchJson(`${base}/api/sessions/${encodeURIComponent(session)}/stop`, {
-      method: "POST",
-      headers: wahaHeaders(config.apiKey),
-    });
+    const stopRes = await safeFetchJson(
+      `${base}/api/sessions/${encodeURIComponent(session)}/stop`,
+      {
+        method: "POST",
+        headers: wahaHeaders(config.apiKey),
+      },
+    );
     return { ok: stopRes.ok, error: stopRes.error };
   }
 
@@ -424,8 +465,8 @@ export async function wahaLogout(config: WahaConfig): Promise<{ ok: boolean; err
 export async function wahaSendMessage(
   config: WahaConfig,
   phone: string,
-  text: string
-): Promise<{ ok: boolean; error?: string }> {
+  text: string,
+): Promise<{ ok: boolean; error?: string; messageId?: string }> {
   const base = normalizeBaseUrl(config.serverUrl);
   const session = config.sessionName || "default";
   const cleanPhone = phone.replace(/\D/g, "");
@@ -442,7 +483,169 @@ export async function wahaSendMessage(
   });
 
   if (!res.ok) {
-    return { ok: false, error: res.error || "Erro ao enviar mensagem pelo WAHA." };
+    return {
+      ok: false,
+      error: res.error || "Erro ao enviar mensagem pelo WAHA.",
+    };
   }
-  return { ok: true };
+  return { ok: true, messageId: sentMessageId(res.data) };
 }
+
+export async function wahaSendMedia(
+  config: WahaConfig,
+  phone: string,
+  media: {
+    base64: string;
+    mimetype: string;
+    filename?: string;
+    caption?: string;
+  },
+): Promise<{ ok: boolean; error?: string; messageId?: string }> {
+  const number = normalizePhone(phone);
+  if (!number) return { ok: false, error: "Telefone inválido." };
+  const data = media.base64.replace(/^data:.*?;base64,/, "");
+  if (!data || Buffer.byteLength(data, "base64") > 8 * 1024 * 1024)
+    return { ok: false, error: "Envie um arquivo de até 8 MB." };
+  const endpoint = media.mimetype.startsWith("image/")
+    ? "sendImage"
+    : media.mimetype.startsWith("audio/")
+      ? "sendVoice"
+      : media.mimetype.startsWith("video/")
+        ? "sendVideo"
+        : "sendFile";
+  const response = await safeFetchJson(
+    `${normalizeBaseUrl(config.serverUrl)}/api/${endpoint}`,
+    {
+      method: "POST",
+      headers: wahaHeaders(config.apiKey, {
+        "Content-Type": "application/json",
+      }),
+      body: JSON.stringify({
+        session: config.sessionName || "default",
+        chatId: `${number}@c.us`,
+        caption: media.caption || "",
+        file: {
+          mimetype: media.mimetype,
+          filename: media.filename || "arquivo",
+          data,
+        },
+      }),
+    },
+  );
+  return {
+    ok: response.ok,
+    error: response.error,
+    messageId: sentMessageId(response.data),
+  };
+}
+
+function sentMessageId(data: unknown): string | undefined {
+  if (!data || typeof data !== "object") return undefined;
+  const row = data as Record<string, unknown>;
+  const key =
+    row.key && typeof row.key === "object"
+      ? (row.key as Record<string, unknown>)
+      : {};
+  return typeof key.id === "string"
+    ? key.id
+    : typeof row.id === "string"
+      ? row.id
+      : undefined;
+}
+
+/**
+ * Sincroniza em tempo real as conversas, mensagens e avatares do WhatsApp diretamente via API do WAHA.
+ * Puxa todos os chats ativos estilo WhatsApp Web.
+ */
+export async function wahaSyncLiveChats(
+  config: WahaConfig,
+  clientId: string,
+): Promise<{ ok: boolean; syncedCount: number; error?: string }> {
+  const base = normalizeBaseUrl(config.serverUrl);
+  const session = config.sessionName || "default";
+
+  try {
+    let chatsRes = await safeFetchJson<any[]>(
+      `${base}/api/${encodeURIComponent(session)}/chats`,
+      { headers: wahaHeaders(config.apiKey) },
+    );
+    if (!chatsRes.ok || !Array.isArray(chatsRes.data)) {
+      chatsRes = await safeFetchJson<any[]>(
+        `${base}/api/chats?session=${encodeURIComponent(session)}`,
+        { headers: wahaHeaders(config.apiKey) },
+      );
+    }
+
+    if (!chatsRes.ok || !Array.isArray(chatsRes.data) || chatsRes.data.length === 0) {
+      return {
+        ok: false,
+        syncedCount: 0,
+        error: chatsRes.error || "Nenhum chat retornado pelo WAHA.",
+      };
+    }
+
+    const { ingestLead } = await import("./ingest");
+    let synced = 0;
+
+    for (const chat of chatsRes.data) {
+      const chatId = String(chat.id || "");
+      if (
+        chatId.includes("@g.us") ||
+        chatId.includes("@broadcast") ||
+        chatId.includes("newsletter")
+      )
+        continue;
+
+      const rawPhone = chatId.replace(/@.*$/, "").split(":")[0].replace(/\D/g, "");
+      const phone = normalizePhone(rawPhone);
+      if (!phone) continue;
+
+      let chatName =
+        typeof chat.name === "string" && chat.name.trim() ? chat.name.trim() : null;
+      if (chatName && (/continental\s*studio/i.test(chatName) || chatName.length < 2)) {
+        chatName = null;
+      }
+
+      const picture =
+        typeof chat.picture === "string" && chat.picture.startsWith("http")
+          ? chat.picture
+          : null;
+      const lastMsg = (chat.lastMessage || {}) as Record<string, unknown>;
+      const msgText =
+        typeof lastMsg.body === "string" && lastMsg.body.trim()
+          ? lastMsg.body.trim()
+          : null;
+      const timestamp = Number(lastMsg.timestamp || 0) * 1000 || Date.now();
+      const fromMe = Boolean(lastMsg.fromMe);
+
+      await ingestLead(
+        clientId,
+        {
+          name: chatName,
+          phone,
+          thumbnail_url: picture,
+        },
+        "manual",
+        {
+          origin: "waha",
+          received_at: new Date(timestamp).toISOString(),
+          instance: session,
+          message_text: msgText,
+          fromMe,
+          ...(picture ? { profilePicUrl: picture } : {}),
+        },
+      ).catch(() => {});
+
+      synced++;
+    }
+
+    return { ok: true, syncedCount: synced };
+  } catch (err) {
+    return {
+      ok: false,
+      syncedCount: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+

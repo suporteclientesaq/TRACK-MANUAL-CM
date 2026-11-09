@@ -1,13 +1,14 @@
 {
   "name": "track-manual",
-  "version": "2.6.2",
+  "version": "3.0.1",
   "private": true,
   "scripts": {
     "iniciar": "node scripts/iniciar.mjs",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "vitest run"
+    "test": "vitest run",
+    "typecheck": "next typegen && tsc --noEmit --incremental false"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.3.3",
@@ -16,12 +17,12 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.47.0",
-    "next": "^16.3.5",
+    "next": "^16.4.5",
     "pg": "^8.23.0",
     "pino": "^10.4.0",
     "qrcode": "^1.5.4",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "server-only": "^0.0.1",
     "tailwind-merge": "^3.7.0"
   },
@@ -33,7 +34,7 @@
     "@types/react-dom": "^19.2.0",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.0",
-    "vitest": "^5.0.1"
+    "vitest": "^5.1.0"
   },
   "engines": {
     "node": ">=22.13.0"

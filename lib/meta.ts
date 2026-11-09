@@ -12,7 +12,9 @@ import {
 import type { IdMode } from "./types";
 
 // META_GRAPH_URL existe só para os testes de ponta a ponta apontarem para um Meta falso.
-const GRAPH = (process.env.META_GRAPH_URL || "https://graph.facebook.com").replace(/\/+$/, "");
+const GRAPH = (
+  process.env.META_GRAPH_URL || "https://graph.facebook.com"
+).replace(/\/+$/, "");
 const SEVEN_DAYS_S = 7 * 24 * 60 * 60;
 
 export interface EventClientConfig {
@@ -83,8 +85,14 @@ export function buildEvent(input: BuildEventInput): BuiltEvent {
 
   // Define se vai como business_messaging ou chat
   const isSyntheticClid = clid.startsWith("ctwa_ad_") || clid.startsWith("ad_");
+  if (isSyntheticClid)
+    warnings.push(
+      "O identificador salvo é uma referência de anúncio, não um CTWA Click ID. O evento será enviado por telefone e pode não ser atribuído ao anúncio.",
+    );
   let hasClid = clid.length > 0 && !forceChat && !isSyntheticClid;
-  let actionSource: "business_messaging" | "chat" = hasClid ? "business_messaging" : "chat";
+  let actionSource: "business_messaging" | "chat" = hasClid
+    ? "business_messaging"
+    : "chat";
 
   // Se tem ctwa_clid mas não tem ID de Página/WABA:
   if (hasClid && !hasPageOrWaba) {
@@ -92,10 +100,12 @@ export function buildEvent(input: BuildEventInput): BuiltEvent {
       // Modo sem burocracia: envia pelo telefone sem travar o usuário
       hasClid = false;
       actionSource = "chat";
-      warnings.push("Cliente sem ID da Página cadastrado. Enviando via correspondência por telefone (Meta Chat).");
+      warnings.push(
+        "Cliente sem ID da Página cadastrado. Enviando via correspondência por telefone (Meta Chat).",
+      );
     } else {
       errors.push(
-        "Cadastre no cliente o ID da Página ou o ID da Conta do WhatsApp Business. Sem um deles o Meta não aceita o ctwa_clid."
+        "Cadastre no cliente o ID da Página ou o ID da Conta do WhatsApp Business. Sem um deles o Meta não aceita o ctwa_clid.",
       );
     }
   }
@@ -106,10 +116,12 @@ export function buildEvent(input: BuildEventInput): BuiltEvent {
   if (!Number.isFinite(eventTimeS)) {
     errors.push("Data do evento inválida.");
   } else if (eventTimeS > nowS + 60) {
-    errors.push("A data do evento está no futuro. O Meta recusa eventos futuros.");
+    errors.push(
+      "A data do evento está no futuro. O Meta recusa eventos futuros.",
+    );
   } else if (nowS - eventTimeS > SEVEN_DAYS_S) {
     warnings.push(
-      "O evento tem mais de 7 dias. O Meta costuma recusar ou ignorar eventos tão antigos."
+      "O evento tem mais de 7 dias. O Meta costuma recusar ou ignorar eventos tão antigos.",
     );
   }
 
@@ -126,26 +138,33 @@ export function buildEvent(input: BuildEventInput): BuiltEvent {
       userData.page_id = page;
     } else if (page) {
       userData.page_id = page;
-      warnings.push("ID da Conta do WhatsApp Business não cadastrado; usando o ID da Página.");
+      warnings.push(
+        "ID da Conta do WhatsApp Business não cadastrado; usando o ID da Página.",
+      );
     } else if (waba) {
       userData.whatsapp_business_account_id = waba;
-      warnings.push("ID da Página não cadastrado; usando o ID da Conta do WhatsApp Business.");
+      warnings.push(
+        "ID da Página não cadastrado; usando o ID da Conta do WhatsApp Business.",
+      );
     }
   } else {
     if (!forceChat && clid.length > 0) {
       // Estava com clid mas foi convertido para chat
     } else if (!clid) {
       warnings.push(
-        "Este lead não tem ctwa_clid. O evento vai como conversa, casado só pelo telefone, e o Meta pode não atribuir ao anúncio."
+        "Este lead não tem ctwa_clid. O evento vai como conversa, casado só pelo telefone, e o Meta pode não atribuir ao anúncio.",
       );
     }
-    if (!phone) errors.push("Sem ctwa_clid e sem telefone válido não há como o Meta identificar a pessoa.");
+    if (!phone)
+      errors.push(
+        "Sem ctwa_clid e sem telefone válido não há como o Meta identificar a pessoa.",
+      );
   }
 
   // Correspondência avançada máxima (Event Match Quality — EMQ):
   // Com send_extra_data ativo (padrão) ou sem ctwa_clid, enviamos todos os sinais de
   // identidade hasheados (telefone com variações, nome, e-mail, cidade, estado, CEP, país e ID).
-  // Isso atinge pontuação máxima no Meta (EMQ até 10/10) e vincula 100% dos dados.
+  // A qualidade de correspondência e a atribuição são calculadas pela Meta; não há garantia de pontuação.
   if (client.send_extra_data || !hasClid) {
     if (phone) {
       userData.ph = phoneVariants(phone).map(sha256Hex);
@@ -179,7 +198,8 @@ export function buildEvent(input: BuildEventInput): BuiltEvent {
   }
   if (customData.value !== undefined) {
     const currency = (input.currency || "BRL").trim().toUpperCase();
-    if (!/^[A-Z]{3}$/.test(currency)) errors.push("Moeda inválida. Use o código de 3 letras, como BRL.");
+    if (!/^[A-Z]{3}$/.test(currency))
+      errors.push("Moeda inválida. Use o código de 3 letras, como BRL.");
     else customData.currency = currency;
   }
 
@@ -195,7 +215,11 @@ export function buildEvent(input: BuildEventInput): BuiltEvent {
 
   if (client.send_extra_data) {
     // content_ids: ID do anúncio de origem — ajuda o Meta a fechar o loop de atribuição
-    const effectiveSourceId = lead.source_id || (lead.ctwa_clid?.startsWith("ctwa_ad_") ? lead.ctwa_clid.replace("ctwa_ad_", "") : null);
+    const effectiveSourceId =
+      lead.source_id ||
+      (lead.ctwa_clid?.startsWith("ctwa_ad_")
+        ? lead.ctwa_clid.replace("ctwa_ad_", "")
+        : null);
     if (effectiveSourceId) {
       customData.content_ids = [effectiveSourceId];
       customData.ctwa_source_id = effectiveSourceId;
@@ -204,7 +228,8 @@ export function buildEvent(input: BuildEventInput): BuiltEvent {
   }
 
   // Fora de mensagens de empresa, "LeadSubmitted" não é evento padrão: o padrão é "Lead".
-  const eventName = !hasClid && input.eventName === "LeadSubmitted" ? "Lead" : input.eventName;
+  const eventName =
+    !hasClid && input.eventName === "LeadSubmitted" ? "Lead" : input.eventName;
 
   const event: Record<string, unknown> = {
     event_name: eventName,
@@ -238,34 +263,52 @@ export interface SendResult {
 
 type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 
+/** Limit network waits; an interrupted conversion keeps its original event ID. */
+function boundedFetch(fetchImpl: FetchLike): FetchLike {
+  return (url, init) =>
+    fetchImpl(url, {
+      ...init,
+      signal: init?.signal
+        ? AbortSignal.any([init.signal, AbortSignal.timeout(30_000)])
+        : AbortSignal.timeout(30_000),
+    });
+}
+
 export function describeMetaError(json: unknown): string | null {
   if (!json || typeof json !== "object") return null;
   const err = (json as { error?: Record<string, unknown> }).error;
   if (!err) return null;
 
   const code = err.code !== undefined ? Number(err.code) : null;
-  const subcode = err.error_subcode !== undefined ? Number(err.error_subcode) : null;
+  const subcode =
+    err.error_subcode !== undefined ? Number(err.error_subcode) : null;
 
-  const parts = [err.error_user_title, err.error_user_msg, err.message]
-    .filter((p): p is string => typeof p === "string" && p.length > 0);
+  const parts = [err.error_user_title, err.error_user_msg, err.message].filter(
+    (p): p is string => typeof p === "string" && p.length > 0,
+  );
   const unique = [...new Set(parts)];
   const rawMsg = unique.join(" — ");
 
   let hint = "";
   if (code === 190 || code === 102) {
-    hint = "Token da API expirou ou é inválido. Gere um novo token no Gerenciador de Eventos do Meta.";
+    hint =
+      "Token da API expirou ou é inválido. Gere um novo token no Gerenciador de Eventos do Meta.";
   } else if (subcode === 2804065) {
-    hint = "A identificação da Página não corresponde a este conjunto de dados.";
+    hint =
+      "A identificação da Página não corresponde a este conjunto de dados.";
   } else if (subcode === 2804072) {
-    hint = "O ctwa_clid e o ID da Página não correspondem ao mesmo anúncio/conta.";
+    hint =
+      "O ctwa_clid e o ID da Página não correspondem ao mesmo anúncio/conta.";
   } else if (subcode === 2804019) {
     hint = "O ctwa_clid é inválido ou expirou.";
   } else if (code === 100 && subcode === 33) {
     hint = "Permissões insuficientes ou objeto inacessível (ads_read).";
   }
 
-  const codeStr = code !== null ? ` (código ${code}${subcode ? `/${subcode}` : ""})` : "";
-  const fullText = [rawMsg, hint].filter(Boolean).join(" — ") || "Erro desconhecido do Meta";
+  const codeStr =
+    code !== null ? ` (código ${code}${subcode ? `/${subcode}` : ""})` : "";
+  const fullText =
+    [rawMsg, hint].filter(Boolean).join(" — ") || "Erro desconhecido do Meta";
   return fullText + codeStr;
 }
 
@@ -282,10 +325,16 @@ function isRecoverableCtwaError(json: unknown): boolean {
   // 2804065 = Page ID not associated with dataset
   // 2804072 = Page ID / ctwa_clid mismatch
   // 2804019 = Invalid/expired ctwa_clid
-  if (subcode === 2804065 || subcode === 2804072 || subcode === 2804019) return true;
+  if (subcode === 2804065 || subcode === 2804072 || subcode === 2804019)
+    return true;
 
   // Erros de parâmetro relacionados a page_id ou ctwa_clid
-  if (code === 100 && (msg.includes("page_id") || msg.includes("ctwa_clid") || msg.includes("business_messaging"))) {
+  if (
+    code === 100 &&
+    (msg.includes("page_id") ||
+      msg.includes("ctwa_clid") ||
+      msg.includes("business_messaging"))
+  ) {
     return true;
   }
   return false;
@@ -300,23 +349,29 @@ export async function sendEvent(opts: {
   fetchImpl?: FetchLike;
   autoFallback?: boolean;
 }): Promise<SendResult> {
-  const doFetch = opts.fetchImpl ?? fetch;
+  const doFetch = boundedFetch(opts.fetchImpl ?? fetch);
   const autoFallback = opts.autoFallback ?? true;
 
   const execSend = async (ev: Record<string, unknown>) => {
-    const body: Record<string, unknown> = { data: [ev], partner_agent: "track-manual" };
+    const body: Record<string, unknown> = {
+      data: [ev],
+      partner_agent: "track-manual",
+    };
     const testCode = (opts.testEventCode || "").trim();
     if (testCode) body.test_event_code = testCode;
 
     const url = `${GRAPH}/${opts.apiVersion}/${encodeURIComponent(opts.pixelId)}/events`;
     let res: Response;
     try {
-      res = await doFetch(`${url}?access_token=${encodeURIComponent(opts.accessToken)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        cache: "no-store",
-      });
+      res = await doFetch(
+        `${url}?access_token=${encodeURIComponent(opts.accessToken)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          cache: "no-store",
+        },
+      );
     } catch (e) {
       return {
         ok: false,
@@ -337,8 +392,12 @@ export async function sendEvent(opts: {
       json = null;
     }
 
-    const obj = (json && typeof json === "object" ? json : {}) as Record<string, unknown>;
-    const received = typeof obj.events_received === "number" ? obj.events_received : null;
+    const obj = (json && typeof json === "object" ? json : {}) as Record<
+      string,
+      unknown
+    >;
+    const received =
+      typeof obj.events_received === "number" ? obj.events_received : null;
     const errObj = obj.error as Record<string, unknown> | undefined;
     const fbtrace =
       (typeof obj.fbtrace_id === "string" && obj.fbtrace_id) ||
@@ -353,7 +412,8 @@ export async function sendEvent(opts: {
       fbtraceId: fbtrace,
       errorMessage: ok
         ? null
-        : describeMetaError(json) ?? `O Meta respondeu ${res.status} sem confirmar o recebimento.`,
+        : (describeMetaError(json) ??
+          `O Meta respondeu ${res.status} sem confirmar o recebimento.`),
       response: json,
       body,
       rawJson: json,
@@ -375,10 +435,20 @@ export async function sendEvent(opts: {
     };
     delete fallbackEvent.messaging_channel;
 
-    const uData = { ...((opts.event.user_data as Record<string, unknown>) || {}) };
+    const uData = {
+      ...((opts.event.user_data as Record<string, unknown>) || {}),
+    };
     delete uData.ctwa_clid;
     delete uData.page_id;
     delete uData.whatsapp_business_account_id;
+    if (
+      !Object.keys(uData).some((key) =>
+        ["ph", "em", "external_id"].includes(key),
+      )
+    )
+      return first;
+    if (fallbackEvent.event_name === "LeadSubmitted")
+      fallbackEvent.event_name = "Lead";
     fallbackEvent.user_data = uData;
 
     const second = await execSend(fallbackEvent);
@@ -414,7 +484,8 @@ export interface FetchedAd {
   raw: unknown;
 }
 
-const str = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
+const str = (v: unknown): string | null =>
+  typeof v === "string" && v ? v : null;
 const num = (v: unknown): number | null => {
   const n = typeof v === "string" || typeof v === "number" ? Number(v) : NaN;
   return Number.isFinite(n) ? n : null;
@@ -427,9 +498,12 @@ export async function fetchAd(opts: {
   fetchImpl?: FetchLike;
 }): Promise<{ ok: true; ad: FetchedAd } | { ok: false; error: string }> {
   if (!/^\d{6,}$/.test(opts.adId)) {
-    return { ok: false, error: "O ID de origem deste lead não parece um ID de anúncio do Meta." };
+    return {
+      ok: false,
+      error: "O ID de origem deste lead não parece um ID de anúncio do Meta.",
+    };
   }
-  const doFetch = opts.fetchImpl ?? fetch;
+  const doFetch = boundedFetch(opts.fetchImpl ?? fetch);
   const token = encodeURIComponent(opts.accessToken);
   const base = `${GRAPH}/${opts.apiVersion}/${opts.adId}`;
 
@@ -437,17 +511,17 @@ export async function fetchAd(opts: {
   const attempts = [
     // 1. Completa: anúncio com conjunto, campanha e criativo expandido (inclui object_story_spec para texto real)
     {
-      url: `${base}?fields=name,effective_status,adset{id,name},campaign{id,name},creative{id,title,body,thumbnail_url,image_url,object_story_spec{link_data{message,description,image_hash},video_data{message,image_url},photo_data{caption}}}&access_token=${token}`,
+      url: `${base}?fields=name,effective_status,adset{id,name,status,effective_status},campaign{id,name,status,effective_status},creative{id,title,body,thumbnail_url,image_url,object_story_spec{link_data{message,description,image_hash},video_data{message,image_url},photo_data{caption}}}&access_token=${token}`,
       type: "ad_full",
     },
     // 2. Criativo sem object_story_spec (compatibilidade)
     {
-      url: `${base}?fields=name,effective_status,adset{id,name},campaign{id,name},creative{id,title,body,thumbnail_url,image_url}&access_token=${token}`,
+      url: `${base}?fields=name,effective_status,adset{id,name,status,effective_status},campaign{id,name,status,effective_status},creative{id,title,body,thumbnail_url,image_url}&access_token=${token}`,
       type: "ad_creative",
     },
     // 3. Segura: campos padrão sem criativo aninhado
     {
-      url: `${base}?fields=name,status,adset{id,name},campaign{id,name}&access_token=${token}`,
+      url: `${base}?fields=name,status,adset{id,name,status},campaign{id,name,status}&access_token=${token}`,
       type: "ad_safe",
     },
     // 4. Básica: apenas nome
@@ -457,7 +531,7 @@ export async function fetchAd(opts: {
     },
     // 5. Caso o ID seja de um conjunto de anúncios
     {
-      url: `${base}?fields=name,campaign{id,name}&access_token=${token}`,
+      url: `${base}?fields=name,campaign{id,name,status}&access_token=${token}`,
       type: "adset",
     },
     // 6. Caso o ID seja de uma campanha
@@ -494,7 +568,12 @@ export async function fetchAd(opts: {
   }
 
   if (!adJson.name) {
-    return { ok: false, error: lastError || "Não foi possível carregar os dados deste anúncio do Meta." };
+    return {
+      ok: false,
+      error:
+        lastError ||
+        "Não foi possível carregar os dados deste anúncio do Meta.",
+    };
   }
 
   // ── Insights: busca métricas completas ─────────────────────────────────────
@@ -502,10 +581,15 @@ export async function fetchAd(opts: {
   try {
     const insRes = await doFetch(
       `${base}/insights?fields=spend,impressions,clicks,unique_clicks,reach,actions,action_values&date_preset=maximum&access_token=${token}`,
-      { cache: "no-store" }
+      { cache: "no-store" },
     );
-    const insJson = (await insRes.json()) as { data?: Record<string, unknown>[] };
-    insights = insRes.ok && Array.isArray(insJson.data) ? insJson.data[0] ?? null : null;
+    const insJson = (await insRes.json()) as {
+      data?: Record<string, unknown>[];
+    };
+    insights =
+      insRes.ok && Array.isArray(insJson.data)
+        ? (insJson.data[0] ?? null)
+        : null;
   } catch {
     insights = null;
   }
@@ -517,11 +601,15 @@ export async function fetchAd(opts: {
   let creativeBody = str(creative.body);
 
   // Tenta extrair texto do object_story_spec (texto real do anúncio)
-  const storySpec = (creative.object_story_spec || {}) as Record<string, unknown>;
+  const storySpec = (creative.object_story_spec || {}) as Record<
+    string,
+    unknown
+  >;
   const linkData = (storySpec.link_data || {}) as Record<string, unknown>;
   const videoData = (storySpec.video_data || {}) as Record<string, unknown>;
   const photoData = (storySpec.photo_data || {}) as Record<string, unknown>;
-  const storyMessage = str(linkData.message) ?? str(videoData.message) ?? str(photoData.caption);
+  const storyMessage =
+    str(linkData.message) ?? str(videoData.message) ?? str(photoData.caption);
   const storyDescription = str(linkData.description);
 
   // Se o criativo tem texto real do anúncio e o body estava vazio, usa o texto real
@@ -534,15 +622,22 @@ export async function fetchAd(opts: {
     try {
       const creativeRes = await doFetch(
         `${GRAPH}/${opts.apiVersion}/${creativeId}?fields=thumbnail_url,image_url,body,title,object_story_spec{link_data{image_hash,picture,message},video_data{image_url,message}}&access_token=${token}`,
-        { cache: "no-store" }
+        { cache: "no-store" },
       );
-      const creativeJson = (await creativeRes.json()) as Record<string, unknown>;
+      const creativeJson = (await creativeRes.json()) as Record<
+        string,
+        unknown
+      >;
       if (creativeRes.ok && !creativeJson.error) {
-        thumbnailUrl = str(creativeJson.image_url) ?? str(creativeJson.thumbnail_url);
+        thumbnailUrl =
+          str(creativeJson.image_url) ?? str(creativeJson.thumbnail_url);
         if (!creativeTitle) creativeTitle = str(creativeJson.title);
         if (!creativeBody) creativeBody = str(creativeJson.body);
         // Tenta extrair thumbnail do object_story_spec do criativo separado
-        const cs = (creativeJson.object_story_spec || {}) as Record<string, unknown>;
+        const cs = (creativeJson.object_story_spec || {}) as Record<
+          string,
+          unknown
+        >;
         const ld = (cs.link_data || {}) as Record<string, unknown>;
         const vd = (cs.video_data || {}) as Record<string, unknown>;
         if (!thumbnailUrl) thumbnailUrl = str(ld.picture) ?? str(vd.image_url);
@@ -567,14 +662,19 @@ export async function fetchAd(opts: {
     "onsite_conversion.messaging_first_reply",
     "click_to_message_conversations_started",
   ];
-  const convActions = actions.filter((a) => CONV_ACTION_TYPES.some((t) => (a.action_type || "").includes(t)));
-  const conversations = convActions.reduce((sum, a) => sum + (Number(a.value) || 0), 0) || null;
+  const convActions = actions.filter((a) =>
+    CONV_ACTION_TYPES.some((t) => (a.action_type || "").includes(t)),
+  );
+  const conversations =
+    convActions.reduce((sum, a) => sum + (Number(a.value) || 0), 0) || null;
 
   // Compras via action_values
   const actionValues = Array.isArray(insights?.action_values)
     ? (insights!.action_values as { action_type?: string; value?: string }[])
     : [];
-  const purchaseVal = actionValues.find((a) => (a.action_type || "") === "purchase");
+  const purchaseVal = actionValues.find(
+    (a) => (a.action_type || "") === "purchase",
+  );
   const purchaseValue = purchaseVal ? num(purchaseVal.value) : null;
 
   return {
@@ -583,9 +683,13 @@ export async function fetchAd(opts: {
       ad_name: str(adJson.name),
       ad_status: str(adJson.effective_status) || str(adJson.status),
       adset_id: str(adset.id) || (successType === "adset" ? opts.adId : null),
-      adset_name: str(adset.name) || (successType === "adset" ? str(adJson.name) : null),
-      campaign_id: str(campaign.id) || (successType === "campaign" ? opts.adId : null),
-      campaign_name: str(campaign.name) || (successType === "campaign" ? str(adJson.name) : null),
+      adset_name:
+        str(adset.name) || (successType === "adset" ? str(adJson.name) : null),
+      campaign_id:
+        str(campaign.id) || (successType === "campaign" ? opts.adId : null),
+      campaign_name:
+        str(campaign.name) ||
+        (successType === "campaign" ? str(adJson.name) : null),
       creative_title: creativeTitle,
       creative_body: creativeBody,
       thumbnail_url: thumbnailUrl,
@@ -602,93 +706,478 @@ export async function fetchAd(opts: {
 // Consulta Completa da Conta de Anúncios (act_...) com Gastos e Campanhas
 // ---------------------------------------------------------------------------
 
-export async function fetchAdAccountAdsAndInsights(opts: {
+export type CampaignStatusFilter = "active" | "paused" | "all";
+
+export interface MetaCampaign {
+  id: string;
+  name: string;
+  status: string | null;
+  effective_status: string | null;
+}
+export interface MetaAdAccount {
+  id: string;
+  account_id: string;
+  name: string;
+  account_status: number | null;
+}
+interface CollectionResult {
+  rows: Record<string, unknown>[];
+  partial: boolean;
+  warnings: string[];
+}
+const metaRecord = (value: unknown): Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+const campaignState = (campaign: {
+  effective_status?: unknown;
+  status?: unknown;
+}): string =>
+  str(campaign.effective_status) || str(campaign.status) || "UNKNOWN";
+export function matchesCampaignStatus(
+  campaign: { effective_status?: unknown; status?: unknown },
+  filter: CampaignStatusFilter,
+): boolean {
+  return (
+    filter === "all" ||
+    campaignState(campaign) === (filter === "paused" ? "PAUSED" : "ACTIVE")
+  );
+}
+function campaignFilter(value: unknown): CampaignStatusFilter | null {
+  return value === undefined || value === "active"
+    ? "active"
+    : value === "all" || value === "paused"
+      ? value
+      : null;
+}
+function collectionUrl(
+  apiVersion: string,
+  path: string,
+  accessToken: string,
+  fields: string,
+): URL {
+  if (!/^v\d+\.\d+$/.test(apiVersion))
+    throw new Error("Versão da API Meta inválida.");
+  if (!accessToken.trim())
+    throw new Error("Informe um token de leitura da Meta.");
+  const url = new URL(`${GRAPH}/${apiVersion}/${path}`);
+  url.searchParams.set("fields", fields);
+  url.searchParams.set("limit", "100");
+  url.searchParams.set("access_token", accessToken);
+  return url;
+}
+function safeMetaFailure(error: unknown, token: string): string {
+  if (!token) return error instanceof Error ? error.message : String(error);
+  return (error instanceof Error ? error.message : String(error))
+    .replaceAll(token, "[credencial]")
+    .replaceAll(encodeURIComponent(token), "[credencial]");
+}
+
+/** Follow cursors on the original endpoint; never send a token to an arbitrary paging URL. */
+async function readMetaCollection(
+  initial: URL,
+  fetchImpl: FetchLike,
+  token: string,
+): Promise<CollectionResult> {
+  const rows: Record<string, unknown>[] = [];
+  const seen = new Set<string>();
+  let current = new URL(initial);
+  for (let page = 0; page < 100; page++) {
+    let json: Record<string, unknown>;
+    try {
+      const response = await fetchImpl(current.toString(), {
+        cache: "no-store",
+      });
+      json = metaRecord(await response.json());
+      if (!response.ok || json.error)
+        throw new Error(
+          describeMetaError(json) || "A Meta recusou a consulta.",
+        );
+      if (!Array.isArray(json.data))
+        throw new Error("A Meta devolveu uma lista inválida.");
+    } catch (error) {
+      const message = safeMetaFailure(error, token);
+      if (!rows.length) throw new Error(message);
+      return {
+        rows,
+        partial: true,
+        warnings: [
+          `Consulta interrompida após ${rows.length} registros: ${message}`,
+        ],
+      };
+    }
+    rows.push(...(json.data as Record<string, unknown>[]));
+    const paging = metaRecord(json.paging);
+    if (!paging.next) return { rows, partial: false, warnings: [] };
+    try {
+      const next = new URL(String(paging.next));
+      if (
+        next.origin !== initial.origin ||
+        next.pathname !== initial.pathname ||
+        next.username ||
+        next.password
+      )
+        throw new Error("Origem inesperada.");
+    } catch {
+      return {
+        rows,
+        partial: true,
+        warnings: [
+          "A Meta indicou uma origem de paginação inválida; a lista está incompleta.",
+        ],
+      };
+    }
+    let after = str(metaRecord(paging.cursors).after);
+    if (!after) {
+      try {
+        const next = new URL(String(paging.next));
+        if (
+          next.origin !== initial.origin ||
+          next.pathname !== initial.pathname ||
+          next.username ||
+          next.password
+        )
+          throw new Error("Origem de paginação inesperada.");
+        after = next.searchParams.get("after");
+      } catch {
+        return {
+          rows,
+          partial: true,
+          warnings: [
+            "A Meta indicou uma próxima página inválida; a lista está incompleta.",
+          ],
+        };
+      }
+    }
+    if (!after || seen.has(after))
+      return {
+        rows,
+        partial: true,
+        warnings: [
+          "A paginação da Meta repetiu um cursor; a lista está incompleta.",
+        ],
+      };
+    seen.add(after);
+    current = new URL(initial);
+    current.searchParams.set("after", after);
+  }
+  return {
+    rows,
+    partial: true,
+    warnings: ["Limite de 100 páginas atingido; a consulta está incompleta."],
+  };
+}
+
+export async function fetchAdAccounts(opts: {
+  apiVersion: string;
+  accessToken: string;
+  fetchImpl?: FetchLike;
+}): Promise<
+  | {
+      ok: true;
+      accounts: MetaAdAccount[];
+      partial: boolean;
+      warnings: string[];
+    }
+  | { ok: false; error: string }
+> {
+  try {
+    const result = await readMetaCollection(
+      collectionUrl(
+        opts.apiVersion,
+        "me/adaccounts",
+        opts.accessToken,
+        "id,name,account_id,account_status",
+      ),
+      boundedFetch(opts.fetchImpl ?? fetch),
+      opts.accessToken,
+    );
+    const accounts = result.rows.flatMap((value) => {
+      const item = metaRecord(value);
+      const id =
+        str(item.id) ||
+        (str(item.account_id) ? `act_${item.account_id}` : null);
+      if (!id || !/^act_\d+$/.test(id)) return [];
+      return [
+        {
+          id,
+          account_id: str(item.account_id) || id.slice(4),
+          name: str(item.name) || id,
+          account_status: num(item.account_status),
+        },
+      ];
+    });
+    return {
+      ok: true,
+      accounts: [
+        ...new Map(accounts.map((account) => [account.id, account])).values(),
+      ],
+      partial: result.partial,
+      warnings: result.warnings,
+    };
+  } catch (error) {
+    return { ok: false, error: safeMetaFailure(error, opts.accessToken) };
+  }
+}
+
+async function resolveAdAccount(opts: {
   apiVersion: string;
   adAccountId?: string | null;
   accessToken: string;
   fetchImpl?: FetchLike;
-}): Promise<{ ok: true; ads: FetchedAd[]; accountId: string } | { ok: false; error: string }> {
-  const doFetch = opts.fetchImpl ?? fetch;
-  const token = encodeURIComponent(opts.accessToken);
-
-  let targetAccountId = (opts.adAccountId || "").trim();
-
-  // Se não foi informado ad_account_id, tenta descobrir automaticamente via /me/adaccounts
-  if (!targetAccountId) {
-    try {
-      const meRes = await doFetch(
-        `${GRAPH}/${opts.apiVersion}/me/adaccounts?fields=id,name,account_id&limit=1&access_token=${token}`,
-        { cache: "no-store" }
+}): Promise<string> {
+  const configured = (opts.adAccountId || "").trim();
+  if (configured) {
+    if (!/^(?:act_)?\d+$/.test(configured))
+      throw new Error(
+        "Informe um ID de conta de anúncios válido, como act_123456789.",
       );
-      const meJson = (await meRes.json()) as { data?: { id?: string; account_id?: string }[]; error?: unknown };
-      if (meRes.ok && Array.isArray(meJson.data) && meJson.data.length > 0) {
-        targetAccountId = meJson.data[0]?.id || meJson.data[0]?.account_id || "";
-      }
-    } catch {
-      // Ignora e continua
+    return configured.startsWith("act_") ? configured : `act_${configured}`;
+  }
+  const result = await fetchAdAccounts(opts);
+  if (!result.ok) throw new Error(result.error);
+  if (result.partial || result.accounts.length > 1)
+    throw new Error(
+      "Há várias contas de anúncios ou a lista está incompleta. Selecione explicitamente o ID da conta no cadastro do cliente.",
+    );
+  if (!result.accounts.length)
+    throw new Error(
+      "Nenhuma conta de anúncios acessível. Confira o ID da conta e a permissão de leitura do token.",
+    );
+  return result.accounts[0].id;
+}
+
+export async function fetchAdAccountCampaigns(opts: {
+  apiVersion: string;
+  adAccountId?: string | null;
+  accessToken: string;
+  campaignStatus?: CampaignStatusFilter;
+  fetchImpl?: FetchLike;
+}): Promise<
+  | {
+      ok: true;
+      campaigns: MetaCampaign[];
+      accountId: string;
+      partial: boolean;
+      warnings: string[];
     }
-  }
-
-  if (!targetAccountId) {
-    return { ok: false, error: "ID da conta de anúncios (act_...) não informado e não encontrado na conta." };
-  }
-
-  const actId = targetAccountId.startsWith("act_")
-    ? targetAccountId
-    : `act_${targetAccountId.replace(/\D/g, "")}`;
-
-  // 1. Tenta buscar todos os anúncios com criativos, campanhas e insights de gasto
+  | { ok: false; error: string }
+> {
+  const filter = campaignFilter(opts.campaignStatus);
+  if (!filter) return { ok: false, error: "Filtro de campanhas inválido." };
   try {
-    const url = `${GRAPH}/${opts.apiVersion}/${encodeURIComponent(actId)}/ads?fields=id,name,status,effective_status,campaign{id,name},adset{id,name},creative{id,title,body,thumbnail_url,image_url},insights.date_preset(maximum){spend,impressions,clicks,actions}&limit=150&access_token=${token}`;
-    const res = await doFetch(url, { cache: "no-store" });
-    const json = (await res.json()) as { data?: Record<string, unknown>[]; error?: Record<string, unknown> };
-
-    if (!res.ok || json.error) {
-      const err = describeMetaError(json) || "Erro ao consultar conta de anúncios";
-      return { ok: false, error: err };
-    }
-
-    const list = Array.isArray(json.data) ? json.data : [];
-    const ads: FetchedAd[] = [];
-
-    for (const item of list) {
-      const adId = String(item.id || "");
-      if (!adId) continue;
-
-      const campaign = (item.campaign || {}) as Record<string, unknown>;
-      const adset = (item.adset || {}) as Record<string, unknown>;
-      const creative = (item.creative || {}) as Record<string, unknown>;
-      const insightsList = ((item.insights as Record<string, unknown>)?.data || []) as Record<string, unknown>[];
-      const insights = insightsList[0] || null;
-
-      const actions = Array.isArray(insights?.actions)
-        ? (insights!.actions as { action_type?: string; value?: string }[])
-        : [];
-      const convActions = actions.filter((a) =>
-        (a.action_type || "").includes("messaging_conversation_started")
+    const accountId = await resolveAdAccount(opts);
+    const url = collectionUrl(
+      opts.apiVersion,
+      `${accountId}/campaigns`,
+      opts.accessToken,
+      "id,name,status,effective_status",
+    );
+    if (filter !== "all")
+      url.searchParams.set(
+        "effective_status",
+        JSON.stringify([filter === "active" ? "ACTIVE" : "PAUSED"]),
       );
-      const conversations = convActions.reduce((sum, a) => sum + (Number(a.value) || 0), 0) || null;
+    const result = await readMetaCollection(
+      url,
+      boundedFetch(opts.fetchImpl ?? fetch),
+      opts.accessToken,
+    );
+    const campaigns = result.rows.flatMap((value) => {
+      const item = metaRecord(value);
+      if (!str(item.id) || !/^\d+$/.test(String(item.id))) return [];
+      const campaign = {
+        id: String(item.id),
+        name: str(item.name) || `Campanha ${item.id}`,
+        status: str(item.status),
+        effective_status: str(item.effective_status),
+      };
+      return matchesCampaignStatus(campaign, filter) ? [campaign] : [];
+    });
+    return {
+      ok: true,
+      campaigns: [
+        ...new Map(
+          campaigns.map((campaign) => [campaign.id, campaign]),
+        ).values(),
+      ],
+      accountId,
+      partial: result.partial,
+      warnings: result.warnings,
+    };
+  } catch (error) {
+    return { ok: false, error: safeMetaFailure(error, opts.accessToken) };
+  }
+}
 
-      ads.push({
+export async function fetchAdAccountAdsAndInsights(opts: {
+  apiVersion: string;
+  adAccountId?: string | null;
+  accessToken: string;
+  campaignStatus?: CampaignStatusFilter;
+  campaignIds?: string[];
+  fetchImpl?: FetchLike;
+}): Promise<
+  | {
+      ok: true;
+      ads: FetchedAd[];
+      accountId: string;
+      campaigns: MetaCampaign[];
+      partial: boolean;
+      warnings: string[];
+    }
+  | { ok: false; error: string }
+> {
+  const filter = campaignFilter(opts.campaignStatus);
+  if (!filter) return { ok: false, error: "Filtro de campanhas inválido." };
+  if (
+    opts.campaignIds &&
+    (!Array.isArray(opts.campaignIds) ||
+      opts.campaignIds.some(
+        (id) => typeof id !== "string" || !/^\d+$/.test(id),
+      ))
+  )
+    return { ok: false, error: "Seleção de campanhas inválida." };
+  const catalog = await fetchAdAccountCampaigns({
+    ...opts,
+    campaignStatus: filter,
+  });
+  if (!catalog.ok) return catalog;
+  const requested = new Set(opts.campaignIds || []);
+  const campaigns = catalog.campaigns.filter(
+    (campaign) => !requested.size || requested.has(campaign.id),
+  );
+  if (requested.size && campaigns.length !== requested.size)
+    return {
+      ok: false,
+      error:
+        "Uma ou mais campanhas selecionadas não estão disponíveis no filtro atual. Atualize a lista e confira se continuam ativas.",
+    };
+  const ads = new Map<string, FetchedAd>();
+  const warnings = [...catalog.warnings];
+  let partial = catalog.partial;
+  const doFetch = boundedFetch(opts.fetchImpl ?? fetch);
+  campaignBatches: for (let index = 0; index < campaigns.length; index += 50) {
+    const batch = campaigns.slice(index, index + 50);
+    const campaignMap = new Map(
+      batch.map((campaign) => [campaign.id, campaign]),
+    );
+    const url = collectionUrl(
+      opts.apiVersion,
+      `${catalog.accountId}/ads`,
+      opts.accessToken,
+      "id,account_id,name,status,effective_status,campaign{id,name,status,effective_status},adset{id,name,status,effective_status},creative{id,title,body,thumbnail_url,image_url},insights.date_preset(maximum){spend,impressions,clicks,actions}",
+    );
+    // Campaign IDs are obtained from the campaign endpoint with its own status.
+    // An ad's status must never be mistaken for the status of its campaign.
+    url.searchParams.set(
+      "filtering",
+      JSON.stringify([
+        {
+          field: "campaign.id",
+          operator: "IN",
+          value: batch.map((campaign) => campaign.id),
+        },
+      ]),
+    );
+    let result: CollectionResult;
+    try {
+      result = await readMetaCollection(url, doFetch, opts.accessToken);
+    } catch (error) {
+      if (!ads.size)
+        return { ok: false, error: safeMetaFailure(error, opts.accessToken) };
+      partial = true;
+      warnings.push(
+        `Sincronização interrompida: ${safeMetaFailure(error, opts.accessToken)}`,
+      );
+      break;
+    }
+    partial ||= result.partial;
+    warnings.push(...result.warnings);
+    for (const value of result.rows) {
+      const source = metaRecord(value);
+      const campaignSource = metaRecord(source.campaign);
+      const campaign = campaignMap.get(String(campaignSource.id || ""));
+      if (!str(source.id) || !/^\d+$/.test(String(source.id)) || !campaign) {
+        partial = true;
+        warnings.push(
+          "A Meta retornou anúncios sem identidade válida ou fora das campanhas solicitadas; esses registros foram ignorados.",
+        );
+        continue;
+      }
+      const actualCampaign: MetaCampaign = {
+        ...campaign,
+        ...campaignSource,
+        id: campaign.id,
+        name: str(campaignSource.name) || campaign.name,
+        status: str(campaignSource.status) || campaign.status,
+        effective_status:
+          str(campaignSource.effective_status) || campaign.effective_status,
+      };
+      if (!matchesCampaignStatus(actualCampaign, filter)) {
+        warnings.push(
+          `Campanha ${actualCampaign.name} mudou de status durante a consulta; seus anúncios não foram importados.`,
+        );
+        partial = true;
+        continue;
+      }
+      const item: Record<string, unknown> = {
+        ...source,
+        campaign: actualCampaign,
+      };
+      const adset = metaRecord(item.adset);
+      const creative = metaRecord(item.creative);
+      const insightsList = metaRecord(item.insights).data;
+      const insights = Array.isArray(insightsList)
+        ? metaRecord(insightsList[0])
+        : {};
+      const actions = Array.isArray(insights.actions)
+        ? insights.actions.map(metaRecord)
+        : [];
+      const conversations =
+        actions
+          .filter((action) =>
+            String(action.action_type || "").includes(
+              "messaging_conversation_started",
+            ),
+          )
+          .reduce((sum, action) => sum + (Number(action.value) || 0), 0) ||
+        null;
+      ads.set(String(item.id), {
         ad_name: str(item.name),
         ad_status: str(item.effective_status) || str(item.status),
         adset_id: str(adset.id),
         adset_name: str(adset.name),
-        campaign_id: str(campaign.id),
-        campaign_name: str(campaign.name),
+        campaign_id: campaign.id,
+        campaign_name: actualCampaign.name,
         creative_title: str(creative.title),
         creative_body: str(creative.body),
         thumbnail_url: str(creative.image_url) ?? str(creative.thumbnail_url),
-        spend: num(insights?.spend),
-        impressions: num(insights?.impressions),
-        clicks: num(insights?.clicks),
+        spend: num(insights.spend),
+        impressions: num(insights.impressions),
+        clicks: num(insights.clicks),
         conversations,
-        raw: { item, insights },
+        raw: {
+          account_id: catalog.accountId,
+          item,
+          insights: Object.keys(insights).length ? insights : null,
+        },
       });
+      if (ads.size >= 50_000) {
+        partial = true;
+        warnings.push(
+          "Limite de 50 mil anúncios atingido; a sincronização está incompleta.",
+        );
+        break campaignBatches;
+      }
     }
-
-    return { ok: true, ads, accountId: actId };
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
+  return {
+    ok: true,
+    ads: [...ads.values()],
+    campaigns,
+    accountId: catalog.accountId,
+    partial,
+    warnings: [...new Set(warnings)],
+  };
 }

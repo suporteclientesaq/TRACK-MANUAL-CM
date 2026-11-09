@@ -1,4 +1,6 @@
 import { normalizePhone, ufFromPhone } from "./normalize";
+import { normalizeCtwaClid, ctwaFromUrl } from "./ctwa";
+import { mergeTrackingReference } from "./lead-tracking";
 
 /** Campos do lead que o painel entende, com os nomes alternativos aceitos na entrada. */
 const FIELD_ALIASES: Record<string, string[]> = {
@@ -23,18 +25,52 @@ const FIELD_ALIASES: Record<string, string[]> = {
     "contact_name",
     "contactname",
   ],
-  phone: ["phone", "phone_number", "number", "numero", "telefone", "lead_number", "whatsapp", "celular", "fone"],
+  phone: [
+    "phone",
+    "phone_number",
+    "number",
+    "numero",
+    "telefone",
+    "lead_number",
+    "whatsapp",
+    "celular",
+    "fone",
+  ],
   email: ["email", "e-mail", "e_mail"],
   city: ["city", "cidade", "local", "localidade"],
   state: ["state", "estado", "uf"],
   zip: ["zip", "cep", "zipcode", "zip_code"],
-  ctwa_clid: ["ctwa_clid", "ctwaclid", "ctwa", "clid", "click_id", "conversion_data", "conversiondata", "referral_click_id", "fbclid", "clickid", "meta_click_id", "ctwa_id"],
-  source_id: ["source_id", "sourceid", "ad_id", "adid", "id_origem", "hsa_ad", "anuncio_id", "ad"],
+  ctwa_clid: ["ctwa_clid", "ctwaclid", "ctwa", "ctwa_id"],
+  source_id: [
+    "source_id",
+    "sourceid",
+    "ad_id",
+    "adid",
+    "id_origem",
+    "hsa_ad",
+    "anuncio_id",
+    "ad",
+  ],
   source_url: ["source_url", "sourceurl", "url_origem", "link_anuncio"],
   source_type: ["source_type", "sourcetype"],
-  thumbnail_url: ["thumbnail_url", "thumbnailurl", "thumbnail", "url_miniatura", "miniatura", "thumb", "ad_thumbnail"],
+  thumbnail_url: [
+    "thumbnail_url",
+    "thumbnailurl",
+    "thumbnail",
+    "url_miniatura",
+    "miniatura",
+    "thumb",
+    "ad_thumbnail",
+  ],
   media_url: ["media_url", "mediaurl", "image_url", "video_url"],
-  headline: ["headline", "titulo", "title", "ad_title", "nome_anuncio", "criativo"],
+  headline: [
+    "headline",
+    "titulo",
+    "title",
+    "ad_title",
+    "nome_anuncio",
+    "criativo",
+  ],
   ad_body: ["ad_body", "body", "texto_anuncio", "ad_text"],
 };
 
@@ -72,13 +108,17 @@ function clean(value: unknown): string | null {
  * Lê o corpo enviado pela Leona. Aceita JSON, formulário (a=b&c=d) e, como
  * último recurso, JSON "quebrado" (por exemplo, nome com aspas no meio).
  */
-export function parseBody(text: string, contentType: string | null): Record<string, unknown> {
+export function parseBody(
+  text: string,
+  contentType: string | null,
+): Record<string, unknown> {
   const body = (text || "").trim();
   if (!body) return {};
   if (body.startsWith("{")) {
     try {
       const json = JSON.parse(body);
-      if (json && typeof json === "object" && !Array.isArray(json)) return flatten(json);
+      if (json && typeof json === "object" && !Array.isArray(json))
+        return flatten(json);
     } catch {
       return lenientJson(body);
     }
@@ -92,30 +132,72 @@ export function parseBody(text: string, contentType: string | null): Record<stri
 /** Aceita campos dentro de objetos como { customer: {...}, referral: {...} }. */
 function flatten(obj: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
+  const nodes: Record<string, unknown>[] = [];
   const walk = (o: Record<string, unknown>) => {
+    nodes.push(o);
     for (const [k, v] of Object.entries(o)) {
-      if (v && typeof v === "object" && !Array.isArray(v)) walk(v as Record<string, unknown>);
+      if (v && typeof v === "object" && !Array.isArray(v))
+        walk(v as Record<string, unknown>);
       else if (out[k] === undefined) out[k] = v;
     }
   };
   walk(obj);
+  // Nested referral objects are separate observations. Do not flatten a click
+  // from one object together with another object's ad or creative metadata.
+  const identityAliases = new Set([
+    ...FIELD_ALIASES.ctwa_clid,
+    ...FIELD_ALIASES.source_id,
+    ...FIELD_ALIASES.source_url,
+  ]);
+  const hasIdentity = (node: Record<string, unknown>, aliases: Set<string>) =>
+    Object.entries(node).some(
+      ([key, value]) => aliases.has(key.toLowerCase()) && clean(value),
+    );
+  const clickAliases = new Set(FIELD_ALIASES.ctwa_clid);
+  const selected =
+    nodes.find((node) => hasIdentity(node, clickAliases)) ||
+    nodes.find((node) => hasIdentity(node, identityAliases));
+  if (selected) {
+    const referenceAliases = new Set(
+      [
+        "ctwa_clid",
+        "source_id",
+        "source_url",
+        "source_type",
+        "thumbnail_url",
+        "media_url",
+        "headline",
+        "ad_body",
+      ].flatMap((field) => FIELD_ALIASES[field]),
+    );
+    for (const key of Object.keys(out))
+      if (referenceAliases.has(key.toLowerCase())) delete out[key];
+    for (const [key, value] of Object.entries(selected))
+      if (
+        referenceAliases.has(key.toLowerCase()) &&
+        (value === null || typeof value !== "object")
+      )
+        out[key] = value;
+  }
   return out;
 }
 
 function lenientJson(body: string): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   // "chave": "valor"  — o valor vai até a aspa que precede vírgula, quebra de linha ou }
-  const re = /"([\w.-]+)"\s*:\s*"([\s\S]*?)"\s*(?=,\s*"[\w.-]+"\s*:|\s*\}\s*$)/g;
+  const re =
+    /"([\w.-]+)"\s*:\s*"([\s\S]*?)"\s*(?=,\s*"[\w.-]+"\s*:|\s*\}\s*$)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(body))) out[m[1]] = m[2];
   return out;
 }
 
 export function parseLead(
-  fields: Record<string, unknown>
+  fields: Record<string, unknown>,
 ): { ok: true; lead: ParsedLead } | { ok: false; error: string } {
   const lower: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(fields)) lower[k.toLowerCase().trim()] = v;
+  for (const [k, v] of Object.entries(fields))
+    lower[k.toLowerCase().trim()] = v;
 
   const pick = (field: string): string | null => {
     for (const alias of FIELD_ALIASES[field]) {
@@ -131,6 +213,7 @@ export function parseLead(
   }
 
   const state = pick("state");
+  const sourceUrl = pick("source_url");
   return {
     ok: true,
     lead: {
@@ -138,11 +221,14 @@ export function parseLead(
       phone,
       email: pick("email"),
       city: pick("city"),
-      state: state && /^[a-zA-Z]{2}$/.test(state) ? state.toUpperCase() : ufFromPhone(phone),
+      state:
+        state && /^[a-zA-Z]{2}$/.test(state)
+          ? state.toUpperCase()
+          : ufFromPhone(phone),
       zip: pick("zip"),
-      ctwa_clid: pick("ctwa_clid"),
+      ctwa_clid: normalizeCtwaClid(pick("ctwa_clid")) || ctwaFromUrl(sourceUrl),
       source_id: pick("source_id"),
-      source_url: pick("source_url"),
+      source_url: sourceUrl,
       source_type: pick("source_type"),
       thumbnail_url: pick("thumbnail_url"),
       media_url: pick("media_url"),
@@ -157,10 +243,14 @@ export function parseLead(
  * Regra: dado novo preenchido vence; dado novo vazio nunca apaga o antigo.
  * Exceção de cuidado: cidade, estado e CEP editados à mão no painel são mantidos.
  */
-export function mergeLead(existing: object | null, incoming: ParsedLead): Record<string, unknown> {
+export function mergeLead(
+  existing: object | null,
+  incoming: ParsedLead,
+): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   const keepIfSet = new Set(["city", "state", "zip", "email"]);
-  const prev = (existing || {}) as Record<string, unknown>;
+  const prev = { ...(existing || {}) } as Record<string, unknown>;
+  prev.ctwa_clid = normalizeCtwaClid(prev.ctwa_clid);
   for (const [key, value] of Object.entries(incoming)) {
     const old = existing ? prev[key] : null;
     if (value === null || value === "") {
@@ -169,5 +259,6 @@ export function mergeLead(existing: object | null, incoming: ParsedLead): Record
     }
     out[key] = keepIfSet.has(key) && old ? old : value;
   }
+  Object.assign(out, mergeTrackingReference(prev, incoming));
   return out;
 }

@@ -61,7 +61,7 @@ export interface EventRow {
   content_name: string | null;
   action_source: string;
   is_test: boolean;
-  status: "enviado" | "erro";
+  status: "pendente" | "enviando" | "incerto" | "enviado" | "erro";
   http_status: number | null;
   events_received: number | null;
   fbtrace_id: string | null;
@@ -98,7 +98,11 @@ export const MESSAGING_EVENTS = [
   { value: "QualifiedLead", label: "Lead Qualificado", needsValue: false },
   { value: "InitiateCheckout", label: "Início de Checkout", needsValue: false },
   { value: "AddToCart", label: "Adição ao Carrinho", needsValue: false },
-  { value: "ViewContent", label: "Visualização de Conteúdo", needsValue: false },
+  {
+    value: "ViewContent",
+    label: "Visualização de Conteúdo",
+    needsValue: false,
+  },
   { value: "OrderCreated", label: "Pedido Criado", needsValue: false },
   { value: "OrderShipped", label: "Pedido Enviado", needsValue: false },
   { value: "OrderDelivered", label: "Pedido Entregue", needsValue: false },

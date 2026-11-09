@@ -1,66 +1,99 @@
 "use client";
-
 import { useEffect, useState } from "react";
 import Link from "next/link";
-
 export function WhatsAppHeaderBadge() {
-  const [status, setStatus] = useState<{ online: boolean; count: number } | null>(null);
-
-  const fetchStatus = async () => {
-    try {
-      const res = await fetch("/api/whatsapp/live-status", { cache: "no-store" });
-      if (res.ok) {
-        const json = await res.json();
-        setStatus({ online: !!json.online, count: json.count || 0 });
-      }
-    } catch {
-      // silencioso
-    }
-  };
-
+  const [status, setStatus] = useState<{
+    online: boolean;
+    count: number;
+    unknown: boolean;
+  } | null>(null);
   useEffect(() => {
-    fetchStatus();
-    const interval = setInterval(fetchStatus, 10000);
-    return () => clearInterval(interval);
+    let active = true;
+    let pending = false;
+    let controller: AbortController | null = null;
+    const load = async () => {
+      if (pending || document.hidden) return;
+      pending = true;
+      controller = new AbortController();
+      try {
+        const response = await fetch("/api/whatsapp/live-status", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error("Status indisponível");
+        const json = await response.json();
+        if (active)
+          setStatus({
+            online: !!json.online,
+            count: json.count || 0,
+            unknown: json.state === "unknown",
+          });
+      } catch (error) {
+        if (
+          active &&
+          !(error instanceof DOMException && error.name === "AbortError")
+        )
+          setStatus((previous) => ({
+            ...previous,
+            online: previous?.online || false,
+            count: previous?.count || 0,
+            unknown: true,
+          }));
+      } finally {
+        pending = false;
+      }
+    };
+    void load();
+    const timer = setInterval(() => void load(), 20000);
+    const visible = () => {
+      if (!document.hidden) void load();
+    };
+    document.addEventListener("visibilitychange", visible);
+    return () => {
+      active = false;
+      controller?.abort();
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", visible);
+    };
   }, []);
-
-  if (!status) return null;
-
+  const label = !status
+    ? "Verificando canais"
+    : status.unknown
+      ? "Status indisponível"
+      : status.online
+        ? "WhatsApp conectado"
+        : "Conectar WhatsApp";
+  const color =
+    status?.online && !status.unknown ? "var(--ok)" : "var(--text-muted)";
   return (
     <Link
       href="/whatsapp"
+      title={status?.online ? status.count + " canal(is) conectado(s)" : label}
       style={{
         display: "inline-flex",
         alignItems: "center",
-        gap: "6px",
-        padding: "3px 10px",
-        borderRadius: "999px",
-        background: status.online ? "rgba(52, 199, 123, 0.12)" : "rgba(227, 167, 47, 0.12)",
-        border: `1px solid ${status.online ? "rgba(52, 199, 123, 0.35)" : "rgba(227, 167, 47, 0.35)"}`,
-        color: status.online ? "#34c77b" : "#e3a72f",
-        fontSize: "11px",
-        fontWeight: 700,
+        gap: 6,
+        padding: "5px 9px",
+        borderRadius: 20,
+        border: "1px solid var(--border)",
+        background: "var(--surface)",
+        color,
+        fontSize: 10,
+        fontWeight: 500,
         textDecoration: "none",
         whiteSpace: "nowrap",
-        transition: "all 0.2s ease",
       }}
-      title={
-        status.online
-          ? `${status.count} WhatsApp conectado(s) e recebendo leads`
-          : "WhatsApp desconectado. Clique para escanear o QR Code."
-      }
     >
       <span
         style={{
-          width: "7px",
-          height: "7px",
-          borderRadius: "50%",
-          background: status.online ? "#34c77b" : "#e3a72f",
-          boxShadow: status.online ? "0 0 8px #34c77b" : "none",
+          width: 5,
+          height: 5,
           display: "inline-block",
+          borderRadius: "50%",
+          background: color,
         }}
       />
-      {status.online ? "WhatsApp Online" : "WhatsApp Offline"}
+      {label}
     </Link>
   );
 }

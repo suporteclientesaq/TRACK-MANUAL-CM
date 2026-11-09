@@ -1,1199 +1,1478 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
+  ArrowDownToLine,
+  ArrowRight,
   ArrowUpRight,
   BarChart3,
-  Calendar,
+  CalendarDays,
+  Check,
   CheckCircle2,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  CircleHelp,
+  Copy,
   DollarSign,
-  Download,
-  FileSpreadsheet,
-  GitMerge,
-  Layers,
-  MessageSquare,
+  ExternalLink,
+  Filter,
+  Info,
+  LoaderCircle,
+  MessageCircle,
+  MoreHorizontal,
   Printer,
-  Radio,
   RefreshCw,
   Search,
-  Sparkles,
+  ShoppingBag,
   Target,
   TrendingUp,
-  Zap,
+  X,
 } from "lucide-react";
-import { syncDashboardMetaAction } from "@/app/actions";
-import { ActionProgressModal } from "@/components/ActionProgressModal";
-import { Button } from "@/components/ui/button";
+import {
+  loadDashboardCampaignsAction,
+  syncDashboardMetaAction,
+} from "@/app/actions";
 import type { DashboardData } from "@/lib/dashboard";
-import { formatMoney, formatNumber } from "@/lib/format";
+import { formatDateTime, formatMoney, formatNumber } from "@/lib/format";
+import styles from "./Dashboard.module.css";
 
-interface DashboardClientProps {
-  data: DashboardData;
+type View = "campanhas" | "conjuntos" | "anuncios";
+type ChartMode = "receita" | "conversas" | "vendas";
+type SortKey = "revenue" | "leads" | "purchases";
+interface TableRow {
+  id: string;
+  name: string;
+  detail: string;
+  client: string;
+  currency: string;
+  status?: string;
+  image?: string | null;
+  leads: number;
+  purchases: number;
+  revenue: number;
+}
+const PERIODS = [
+  { value: "hoje", label: "Hoje" },
+  { value: "ontem", label: "Ontem" },
+  { value: "7d", label: "Últimos 7 dias" },
+  { value: "30d", label: "Últimos 30 dias" },
+  { value: "mes", label: "Este mês" },
+  { value: "todos", label: "Todo o histórico" },
+];
+const TABS: { id: View; label: string }[] = [
+  { id: "campanhas", label: "Campanhas" },
+  { id: "conjuntos", label: "Conjuntos" },
+  { id: "anuncios", label: "Anúncios" },
+];
+const normal = (text: string) =>
+  text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+const ratio = (value: number, total: number) =>
+  total > 0 ? `${Math.round((value / total) * 100)}%` : "0%";
+
+/** Spreadsheet cells from contact/campaign names must not become executable formulas. */
+function csvCell(value: string | number | null): string {
+  let text = value === null ? "Indisponível" : String(value);
+  if (typeof value === "string" && /^[\s]*[=+\-@]/.test(text))
+    text = `'${text}`;
+  return `"${text.replace(/"/g, '""')}"`;
 }
 
-export function DashboardClient({ data }: DashboardClientProps) {
-  const [currentData, setCurrentData] = useState<DashboardData>(data);
-  const [activeTab, setActiveTab] = useState<"campanhas" | "conjuntos" | "anuncios" | "funil">("campanhas");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [isLoadingFilter, setIsLoadingFilter] = useState(false);
-  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
-  const [lastUpdated, setLastUpdated] = useState<string>("agora");
-  const [hoveredPoint, setHoveredPoint] = useState<number | null>(null);
+function Sparkline({
+  values,
+  color = "#7b39fc",
+}: {
+  values: number[];
+  color?: string;
+}) {
+  const max = Math.max(...values, 1);
+  const points = values
+    .map(
+      (value, index) =>
+        `${(index / Math.max(values.length - 1, 1)) * 100},${28 - (value / max) * 24}`,
+    )
+    .join(" ");
+  return (
+    <svg viewBox="0 0 100 32" className={styles.sparkline} aria-hidden="true">
+      <polyline
+        points={points}
+        fill="none"
+        stroke={color}
+        strokeWidth="2.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 
-  // Filtro de data customizada
+export function DashboardClient({ data }: { data: DashboardData }) {
+  const [currentData, setCurrentData] = useState(data);
+  const [clientId, setClientId] = useState(data.filterClient || "");
+  const [period, setPeriod] = useState(data.filterPeriod);
+  const [campaignStatus, setCampaignStatus] = useState(
+    data.filterCampaignStatus,
+  );
+  const [campaignIds, setCampaignIds] = useState(data.filterCampaignIds);
+  const [campaignSearch, setCampaignSearch] = useState("");
+  const [isLoadingCampaigns, setIsLoadingCampaigns] = useState(false);
+  const [activeTab, setActiveTab] = useState<View>("campanhas");
+  const [chartMode, setChartMode] = useState<ChartMode>("receita");
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [sortKey, setSortKey] = useState<SortKey>("revenue");
+  const [sortDescending, setSortDescending] = useState(true);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [refreshTick, setRefreshTick] = useState(0);
+  const [notice, setNotice] = useState<{
+    kind: "success" | "error";
+    text: string;
+  } | null>(null);
+  const [stale, setStale] = useState(false);
+  const [showDates, setShowDates] = useState(false);
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
-  const [copiedReport, setCopiedReport] = useState(false);
+  const [showQuality, setShowQuality] = useState(false);
+  const [hoveredPoint, setHoveredPoint] = useState<number | null>(null);
+  const initial = useRef(true);
 
-  const handleCopyReport = () => {
-    const periodLabels: Record<string, string> = {
-      hoje: "Hoje",
-      ontem: "Ontem",
-      "7d": "Últimos 7 Dias",
-      "30d": "Últimos 30 Dias",
-      mes: "Este Mês",
-      todos: "Histórico Completo",
-    };
-    const periodLabel = periodLabels[currentData.filterPeriod] || currentData.filterPeriod;
-    const clientObj = currentData.clients.find((c) => c.id === currentData.filterClient);
-    const clientName = clientObj ? clientObj.name : "Todos os Clientes";
-
-    const text = `📊 *RELATÓRIO DE DESEMPENHO — ${clientName.toUpperCase()}*
-📅 *Período:* ${periodLabel}
-
-📲 *Leads Recebidos (WhatsApp):* ${formatNumber(kpis.leads)}
-💰 *Vendas Aprovadas:* ${kpis.purchases}
-💵 *Faturamento Total:* ${formatMoney(kpis.revenue, currency)}
-🎯 *Investimento Meta Ads:* ${formatMoney(kpis.spend, currency)}
-📈 *ROAS Real:* ${kpis.spend > 0 ? `${kpis.roas.toFixed(2)}x` : "100% orgânico"}
-🎟️ *Ticket Médio:* ${formatMoney(kpis.averageTicket, currency)}
-⚡ *Taxa de Conversão:* ${kpis.conversionRate}%
-
-✨ *Continental MKT — Track Manual*`;
-
-    navigator.clipboard.writeText(text);
-    setCopiedReport(true);
-    setTimeout(() => setCopiedReport(false), 3000);
-  };
-
-  const handleExportCsv = () => {
-    const periodLabels: Record<string, string> = {
-      hoje: "Hoje",
-      ontem: "Ontem",
-      "7d": "Ultimos 7 Dias",
-      "30d": "Ultimos 30 Dias",
-      mes: "Este Mes",
-      todos: "Historico Completo",
-    };
-    const periodLabel = periodLabels[currentData.filterPeriod] || currentData.filterPeriod;
-    const clientObj = currentData.clients.find((c) => c.id === currentData.filterClient);
-    const clientName = clientObj ? clientObj.name : "Todos os Clientes";
-
-    const lines: string[] = [];
-    lines.push(`"RELATORIO EXECUTIVO - TRACK MANUAL"`);
-    lines.push(`"Cliente";"${clientName}"`);
-    lines.push(`"Periodo";"${periodLabel}"`);
-    lines.push(`"Gerado em";"${new Date().toLocaleString("pt-BR")}"`);
-    lines.push("");
-
-    lines.push(`"RESUMO GERAL"`);
-    lines.push(`"Faturamento Total";"R$ ${currentData.kpis.revenue.toFixed(2)}"`);
-    lines.push(`"Investimento Meta";"R$ ${currentData.kpis.spend.toFixed(2)}"`);
-    lines.push(`"Lucro Estimado";"R$ ${currentData.kpis.profit.toFixed(2)}"`);
-    lines.push(`"ROAS Real";"${currentData.kpis.spend > 0 ? `${currentData.kpis.roas.toFixed(2)}x` : "100% Organico"}"`);
-    lines.push(`"Total de Leads (WhatsApp)";"${currentData.kpis.leads}"`);
-    lines.push(`"Vendas Aprovadas";"${currentData.kpis.purchases}"`);
-    lines.push(`"Ticket Medio";"R$ ${currentData.kpis.averageTicket.toFixed(2)}"`);
-    lines.push(`"Taxa de Conversao";"${currentData.kpis.conversionRate}%"`);
-    lines.push(`"Custo por Lead (CPL)";"R$ ${currentData.kpis.costPerLead.toFixed(2)}"`);
-    lines.push(`"Custo por Aquisicao (CPA)";"R$ ${currentData.kpis.cpa.toFixed(2)}"`);
-    lines.push("");
-
-    lines.push(`"DETALHAMENTO POR CAMPANHA"`);
-    lines.push(`"Campanha";"Status";"Gasto (R$)";"Leads";"Vendas";"Faturamento (R$)";"ROAS"`);
-    for (const c of currentData.campaigns) {
-      lines.push(`"${c.name}";"${c.status}";"${c.spend.toFixed(2)}";"${c.leads}";"${c.purchases}";"${c.revenue.toFixed(2)}";"${c.roas.toFixed(2)}x"`);
-    }
-    lines.push("");
-
-    lines.push(`"DETALHAMENTO POR ANUNCIO / CRIATIVO"`);
-    lines.push(`"Anuncio / Criativo";"ID Anuncio";"Campanha";"Conjunto";"Gasto (R$)";"Conversas";"Vendas";"Faturamento (R$)";"ROAS"`);
-    for (const a of currentData.ads) {
-      lines.push(`"${a.name}";"${a.id}";"${a.campaign_name}";"${a.adset_name}";"${a.spend.toFixed(2)}";"${a.conversations}";"${a.purchases}";"${a.revenue.toFixed(2)}";"${a.roas.toFixed(2)}x"`);
-    }
-
-    const csvContent = "\uFEFF" + lines.join("\r\n");
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.setAttribute("download", `relatorio-executivo-${clientName.toLowerCase().replace(/\s+/g, "-")}-${new Date().toISOString().slice(0, 10)}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  };
-
-  const handlePrintReport = () => {
-    window.print();
-  };
-
-  // Sincroniza se a prop inicial mudar
   useEffect(() => {
     setCurrentData(data);
+    setClientId(data.filterClient || "");
+    setPeriod(data.filterPeriod);
+    setCampaignStatus(data.filterCampaignStatus);
+    setCampaignIds(data.filterCampaignIds);
+    setStale(false);
   }, [data]);
 
-  // Busca rápida assíncrona ao trocar período ou cliente (sem reload completo de tela)
-  const fetchLiveFilter = async (period?: string, client?: string | null) => {
-    setIsLoadingFilter(true);
-    const params = new URLSearchParams(window.location.search);
-    if (period !== undefined) params.set("periodo", period);
-    if (client !== undefined) {
-      if (client) params.set("cliente", client);
-      else params.delete("cliente");
-    }
-    const newUrl = `/dashboard?${params.toString()}`;
-    window.history.pushState(null, "", newUrl);
-
-    try {
-      const res = await fetch(`/api/dashboard/live?${params.toString()}`, { cache: "no-store" });
-      if (res.ok) {
-        const json = await res.json();
-        if (json.ok && json.data) {
-          setCurrentData(json.data);
-          const d = new Date();
-          setLastUpdated(`${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}:${d.getSeconds().toString().padStart(2, "0")}`);
-        }
-      }
-    } catch {
-      window.location.href = newUrl;
-    } finally {
-      setIsLoadingFilter(false);
-    }
-  };
-
-  // Polling em tempo real a cada 6 segundos
   useEffect(() => {
-    if (!autoRefreshEnabled) return;
-    const interval = setInterval(async () => {
+    let active = true;
+    let inFlight = false;
+    let controller: AbortController | null = null;
+    const load = async () => {
+      if (inFlight || document.hidden) return;
+      inFlight = true;
+      controller = new AbortController();
+      setIsRefreshing(true);
       try {
-        const params = new URLSearchParams(window.location.search);
-        if (!params.get("periodo") && currentData.filterPeriod) {
-          params.set("periodo", currentData.filterPeriod);
+        const params = new URLSearchParams({ periodo: period });
+        if (clientId) params.set("cliente", clientId);
+        params.set("status_campanha", campaignStatus);
+        if (campaignIds.length) params.set("campanhas", campaignIds.join(","));
+        const response = await fetch(`/api/dashboard/live?${params}`, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (response.status === 401 || response.status === 403)
+          throw new Error(
+            "Sua sessão expirou. Entre novamente para atualizar o painel.",
+          );
+        if (!response.ok)
+          throw new Error(
+            "Não foi possível atualizar os resultados. Tente novamente.",
+          );
+        const result = (await response.json()) as {
+          ok?: boolean;
+          data?: DashboardData;
+          error?: string;
+        };
+        if (!result.ok || !result.data)
+          throw new Error(
+            result.error ||
+              "A atualização não retornou os resultados esperados.",
+          );
+        if (active) {
+          setCurrentData(result.data);
+          setStale(false);
+          window.history.replaceState(null, "", `/dashboard?${params}`);
         }
-        if (!params.get("cliente") && currentData.filterClient) {
-          params.set("cliente", currentData.filterClient);
+      } catch (error) {
+        if (
+          active &&
+          !(error instanceof DOMException && error.name === "AbortError")
+        ) {
+          setStale(true);
+          setNotice({
+            kind: "error",
+            text:
+              error instanceof Error ? error.message : "Falha na atualização.",
+          });
         }
-        const res = await fetch(`/api/dashboard/live?${params.toString()}`, { cache: "no-store" });
-        if (res.ok) {
-          const json = await res.json();
-          if (json.ok && json.data) {
-            setCurrentData(json.data);
-            const d = new Date();
-            setLastUpdated(`${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}:${d.getSeconds().toString().padStart(2, "0")}`);
-          }
-        }
-      } catch {
-        // silencioso
+      } finally {
+        inFlight = false;
+        if (active) setIsRefreshing(false);
       }
-    }, 6000);
-    return () => clearInterval(interval);
-  }, [autoRefreshEnabled, currentData.filterPeriod, currentData.filterClient]);
+    };
+    if (initial.current) initial.current = false;
+    else void load();
+    const timer = autoRefresh
+      ? window.setInterval(() => {
+          void load();
+        }, 30_000)
+      : null;
+    const onVisible = () => {
+      if (!document.hidden && autoRefresh) void load();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      active = false;
+      controller?.abort();
+      if (timer !== null) window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [clientId, period, campaignStatus, campaignIds, refreshTick, autoRefresh]);
 
-  const handleCustomDateSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!customStart || !customEnd) return;
-    await fetchLiveFilter(`${customStart}_${customEnd}`, currentData.filterClient);
-  };
+  const { kpis, currency, chart, funnel, dataQuality } = currentData;
+  const multiCurrency = currentData.revenueByCurrency.length > 1;
+  const effectiveChartMode =
+    chartMode === "receita" && multiCurrency ? "vendas" : chartMode;
+  const points = useMemo(
+    () =>
+      chart.map((point) =>
+        effectiveChartMode === "receita"
+          ? point.revenue || 0
+          : effectiveChartMode === "vendas"
+            ? point.sales
+            : point.leads,
+      ),
+    [chart, effectiveChartMode],
+  );
+  const chartMax = Math.max(...points, 1);
+  const plot = points.map((value, index) => ({
+    x: 12 + (index / Math.max(points.length - 1, 1)) * 976,
+    y: 204 - (value / chartMax) * 166,
+  }));
+  const line = plot.map(({ x, y }) => `${x},${y}`).join(" ");
+  const area = plot.length ? `12,214 ${line} ${plot.at(-1)!.x},214` : "";
+  const chartTotal = points.reduce((sum, value) => sum + value, 0);
+  const hover = hoveredPoint !== null ? chart[hoveredPoint] : null;
+  const clientName =
+    currentData.clients.find((client) => client.id === currentData.filterClient)
+      ?.name || "Todos os clientes";
+  const dateOptionExists = PERIODS.some((option) => option.value === period);
+  const rowData = useMemo<TableRow[]>(() => {
+    if (activeTab === "campanhas")
+      return currentData.campaigns.map((row) => ({
+        ...row,
+        detail: row.client_name,
+        client: row.client_name,
+      }));
+    if (activeTab === "conjuntos")
+      return currentData.adsets.map((row) => ({
+        ...row,
+        detail: row.campaign_name,
+        client: row.client_name,
+      }));
+    return currentData.ads.map((row) => ({
+      ...row,
+      leads: row.conversations,
+      detail: row.campaign_name,
+      client: row.client_name,
+      image: row.thumbnail_url,
+    }));
+  }, [activeTab, currentData]);
+  const filteredRows = useMemo(() => {
+    const search = normal(query.trim());
+    return rowData
+      .filter(
+        (row) =>
+          !search ||
+          normal(`${row.name} ${row.detail} ${row.client}`).includes(search),
+      )
+      .sort((a, b) => (sortDescending ? -1 : 1) * (a[sortKey] - b[sortKey]));
+  }, [rowData, query, sortKey, sortDescending]);
+  const maxPage = Math.max(1, Math.ceil(filteredRows.length / 6));
+  const currentPage = Math.min(page, maxPage);
+  const visibleRows = filteredRows.slice(
+    (currentPage - 1) * 6,
+    currentPage * 6,
+  );
+  const hasData = kpis.leads > 0 || kpis.purchases > 0;
+  const filtered = !!clientId || period !== "30d";
+  const availableCampaigns = currentData.campaignOptions.filter((campaign) => {
+    const status = campaign.effective_status || campaign.status;
+    return (
+      (!clientId || campaign.clientId === clientId) &&
+      (campaignStatus === "all" ||
+        status === (campaignStatus === "active" ? "ACTIVE" : "PAUSED")) &&
+      (!campaignSearch.trim() ||
+        normal(
+          `${campaign.name} ${campaign.clientName} ${campaign.id}`,
+        ).includes(normal(campaignSearch.trim())))
+    );
+  });
 
-  const handleStartSync = async () => {
+  async function handleSync() {
+    if (isSyncing || isLoadingCampaigns) return;
     setIsSyncing(true);
+    setNotice(null);
     try {
-      await syncDashboardMetaAction(currentData.filterClient);
-      await fetchLiveFilter(currentData.filterPeriod, currentData.filterClient);
-    } catch (e) {
-      console.error("Erro na sincronização:", e);
+      const result = await syncDashboardMetaAction(clientId || null, {
+        campaignStatus,
+        campaignIds,
+      });
+      setNotice({
+        kind: result.ok ? "success" : "error",
+        text: result.message,
+      });
+      setRefreshTick((tick) => tick + 1);
+    } catch {
+      setNotice({
+        kind: "error",
+        text: "A sincronização não foi concluída. Confira a conexão e tente novamente.",
+      });
+    } finally {
+      setIsSyncing(false);
     }
-  };
+  }
 
-  const syncSteps = [
-    { label: "Conectando à API do Meta…", threshold: 25 },
-    { label: "Buscando métricas e gastos da Conta de Anúncios…", threshold: 55 },
-    { label: "Cruzando criativos, cliques e conversões…", threshold: 85 },
-    { label: "Atualizando dados reais de ROI e ROAS…", threshold: 100 },
-  ];
+  async function handleLoadCampaigns() {
+    if (isLoadingCampaigns || isSyncing) return;
+    setIsLoadingCampaigns(true);
+    setNotice(null);
+    try {
+      const result = await loadDashboardCampaignsAction(clientId || null);
+      setNotice({
+        kind: result.ok ? "success" : "error",
+        text: result.message,
+      });
+      setRefreshTick((tick) => tick + 1);
+    } catch {
+      setNotice({
+        kind: "error",
+        text: "Não foi possível carregar as campanhas. Confira a conta de anúncios e o token de leitura.",
+      });
+    } finally {
+      setIsLoadingCampaigns(false);
+    }
+  }
 
-  const { kpis, chart, campaigns, adsets, ads, funnel, currency } = currentData;
+  async function handleCopy() {
+    const revenueText = multiCurrency
+      ? currentData.revenueByCurrency
+          .map((row) => formatMoney(row.value, row.currency))
+          .join(" + ")
+      : formatMoney(kpis.revenue, currency);
+    const text = `Track Manual · Relatório de desempenho\n${clientName} · ${currentData.periodLabel}\n${currentData.rangeLabel}\n\nReceita registrada: ${revenueText}\nCompras em produção: ${kpis.purchases}\nNovos contatos: ${kpis.leads}\nTicket médio: ${formatMoney(kpis.averageTicket, currency)}\nConversão dos novos contatos: ${kpis.conversionRate}%\nROAS: indisponível — investimento diário ainda não informado.\n\nTestes e tentativas repetidas não entram na receita.`;
+    try {
+      await navigator.clipboard.writeText(text);
+      setNotice({
+        kind: "success",
+        text: "Relatório copiado. Pronto para compartilhar.",
+      });
+    } catch {
+      setNotice({
+        kind: "error",
+        text: "Não foi possível copiar. Use a exportação CSV ou a impressão.",
+      });
+    }
+  }
 
-  // Cálculo de escala do gráfico
-  const maxVal = Math.max(...chart.map((c) => Math.max(c.revenue, c.spend)), 100);
+  function handleExport() {
+    const rows: (string | number | null)[][] = [
+      ["Track Manual — Relatório de desempenho"],
+      ["Cliente", clientName],
+      ["Período", currentData.periodLabel],
+      ["Intervalo", currentData.rangeLabel],
+      ["Gerado em", formatDateTime(currentData.generatedAt)],
+      [],
+      ["Moeda", "Receita registrada"],
+      ...currentData.revenueByCurrency.map((row) => [row.currency, row.value]),
+      [],
+      ["Novos contatos", kpis.leads],
+      ["Compras em produção", kpis.purchases],
+      ["ROAS", "Indisponível: investimento diário pendente"],
+      ["Filtro da tabela de campanhas", currentData.filterCampaignStatus],
+      [
+        "IDs selecionados",
+        currentData.filterCampaignIds.join(", ") || "Todas do status",
+      ],
+      [
+        "Escopo dos indicadores gerais",
+        "Todos os contatos e compras do cliente e período",
+      ],
+      [],
+      [
+        "Campanha",
+        "Cliente",
+        "Moeda",
+        "Contatos",
+        "Compras",
+        "Receita",
+        "ROAS",
+      ],
+      ...currentData.campaigns.map((row) => [
+        row.name,
+        row.client_name,
+        row.currency,
+        row.leads,
+        row.purchases,
+        row.revenue,
+        null,
+      ]),
+    ];
+    const blob = new Blob(
+      ["\uFEFF" + rows.map((row) => row.map(csvCell).join(";")).join("\r\n")],
+      { type: "text/csv;charset=utf-8" },
+    );
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `track-manual-relatorio-${currentData.generatedAt.slice(0, 10)}.csv`;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
 
-  // Filtros de busca nas tabelas
-  const filteredCampaigns = campaigns.filter((c) =>
-    c.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-  const filteredAdSets = adsets.filter((a) =>
-    a.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    a.campaign_name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-  const filteredAds = ads.filter((a) =>
-    a.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    a.campaign_name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  function applyCustomDates() {
+    if (!customStart || !customEnd || customStart > customEnd) {
+      setNotice({
+        kind: "error",
+        text: "Escolha uma data inicial e uma data final válidas.",
+      });
+      return;
+    }
+    setPeriod(`${customStart}_${customEnd}`);
+    setShowDates(false);
+  }
+
+  function changeSort(key: SortKey) {
+    if (key === sortKey) setSortDescending((value) => !value);
+    else {
+      setSortKey(key);
+      setSortDescending(true);
+    }
+    setPage(1);
+  }
+  function chartValue(value: number) {
+    return effectiveChartMode === "receita"
+      ? formatMoney(value, currency)
+      : formatNumber(value);
+  }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-      {/* Modal de Progresso 1% a 100% */}
-      <ActionProgressModal
-        isOpen={isSyncing}
-        title="Sincronização com o Meta"
-        steps={syncSteps}
-        onClose={() => {
-          setIsSyncing(false);
-          fetchLiveFilter(currentData.filterPeriod, currentData.filterClient);
-        }}
-      />
-
-      {/* Cabeçalho do Dashboard */}
-      <div
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: "16px",
-          paddingBottom: "8px",
-          borderBottom: "1px solid var(--border)",
-        }}
-      >
+    <div className={styles.page}>
+      <div className={styles.heading}>
         <div>
-          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            <h1 style={{ margin: 0, fontSize: "26px", fontWeight: 800 }}>Dashboard de Atribuição</h1>
-            <span
-              style={{
-                fontSize: "11px",
-                fontWeight: 700,
-                padding: "3px 9px",
-                borderRadius: "999px",
-                background: "linear-gradient(90deg, rgba(123, 57, 252, 0.25), rgba(52, 199, 123, 0.25))",
-                color: "#b394ff",
-                border: "1px solid rgba(123, 57, 252, 0.4)",
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "4px",
-              }}
-            >
-              <Sparkles size={12} />
-              MODELO UTMFY
-            </span>
-
-            {/* Badge de Tempo Real com pulso */}
-            <div
-              onClick={() => setAutoRefreshEnabled(!autoRefreshEnabled)}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "6px",
-                padding: "3px 10px",
-                borderRadius: "999px",
-                background: autoRefreshEnabled ? "rgba(52, 199, 123, 0.12)" : "rgba(255, 255, 255, 0.05)",
-                border: autoRefreshEnabled ? "1px solid rgba(52, 199, 123, 0.35)" : "1px solid var(--border)",
-                color: autoRefreshEnabled ? "#34c77b" : "var(--text-muted)",
-                fontSize: "11px",
-                fontWeight: 700,
-                cursor: "pointer",
-                userSelect: "none",
-              }}
-              title="Clique para pausar ou retomar atualização automática em tempo real"
-            >
-              <span
-                style={{
-                  width: "7px",
-                  height: "7px",
-                  borderRadius: "50%",
-                  background: autoRefreshEnabled ? "#34c77b" : "#888",
-                  boxShadow: autoRefreshEnabled ? "0 0 10px #34c77b" : "none",
-                  display: "inline-block",
-                }}
-              />
-              {autoRefreshEnabled ? `AO VIVO (${lastUpdated})` : "PAUSADO"}
-            </div>
-          </div>
-          <p className="muted small" style={{ margin: "4px 0 0 0" }}>
-            Métricas em tempo real de anúncios Click-to-WhatsApp, vendas rastreadas e ROAS ponta a ponta.
-          </p>
+          <span className={styles.eyebrow}>PAINEL DE RESULTADOS</span>
+          <h1>
+            Visão geral<span className={styles.headingDot}>.</span>
+          </h1>
+          <p>Seu atendimento, suas conversões e o próximo passo.</p>
         </div>
+        <div className={styles.headerActions}>
+          <button
+            type="button"
+            className={styles.secondaryButton}
+            onClick={handleExport}
+          >
+            <ArrowDownToLine size={16} /> Exportar relatório
+          </button>
+          <button
+            type="button"
+            className={styles.primaryButton}
+            onClick={() => {
+              void handleSync();
+            }}
+            disabled={isSyncing || isLoadingCampaigns}
+          >
+            <RefreshCw size={16} className={isSyncing ? styles.spin : ""} />
+            {isSyncing ? "Sincronizando…" : "Sincronizar Meta"}
+          </button>
+        </div>
+      </div>
 
-        {/* Controles de Filtro e Sincronização */}
-        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "10px" }}>
-          {/* Seletor de Cliente */}
-          {currentData.clients.length > 1 && (
+      <div className={styles.filterBar}>
+        <div className={styles.filters}>
+          <label className={styles.filterControl}>
+            <CalendarDays size={16} />
             <select
-              value={currentData.filterClient || ""}
-              onChange={(e) => fetchLiveFilter(currentData.filterPeriod, e.target.value)}
-              style={{
-                padding: "7px 12px",
-                borderRadius: "8px",
-                background: "var(--surface)",
-                border: "1px solid var(--border)",
-                color: "var(--text)",
-                fontSize: "13px",
-              }}
+              value={period}
+              onChange={(event) => setPeriod(event.target.value)}
+              aria-label="Período dos resultados"
             >
-              <option value="">Todos os Clientes</option>
-              {currentData.clients.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
+              {PERIODS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+              {!dateOptionExists && (
+                <option value={period}>Período personalizado</option>
+              )}
+            </select>
+            <ChevronDown size={13} />
+          </label>
+          <label className={styles.filterControl}>
+            <span className={styles.clientDot} />
+            <select
+              value={clientId}
+              onChange={(event) => {
+                setClientId(event.target.value);
+                setCampaignIds([]);
+              }}
+              aria-label="Filtrar por cliente"
+            >
+              <option value="">Todos os clientes</option>
+              {currentData.clients.map((client) => (
+                <option key={client.id} value={client.id}>
+                  {client.name}
                 </option>
               ))}
             </select>
+            <ChevronDown size={13} />
+          </label>
+          <button
+            type="button"
+            className={`${styles.filterButton} ${showDates ? styles.filterSelected : ""}`}
+            onClick={() => setShowDates((value) => !value)}
+            aria-expanded={showDates}
+          >
+            <Filter size={15} /> Personalizar
+          </button>
+          {filtered && (
+            <button
+              type="button"
+              className={styles.resetButton}
+              onClick={() => {
+                setClientId("");
+                setPeriod("30d");
+              }}
+            >
+              <X size={13} /> Limpar
+            </button>
           )}
+        </div>
+        <button
+          type="button"
+          className={styles.liveButton}
+          onClick={() => setAutoRefresh((value) => !value)}
+          aria-pressed={autoRefresh}
+          title="Ativar ou pausar atualização automática"
+        >
+          <span
+            className={
+              stale
+                ? styles.staleDot
+                : autoRefresh
+                  ? styles.liveDot
+                  : styles.pausedDot
+            }
+          />
+          {isRefreshing
+            ? "Atualizando…"
+            : stale
+              ? "Atualização pendente"
+              : autoRefresh
+                ? "Atualização automática"
+                : "Atualização pausada"}
+        </button>
+      </div>
 
-          {/* Filtros Rápidos de Período com alternância instantânea */}
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              background: "var(--surface)",
-              borderRadius: "8px",
-              border: "1px solid var(--border)",
-              padding: "3px",
-              gap: "2px",
-            }}
-          >
-            {[
-              { id: "hoje", label: "Hoje" },
-              { id: "ontem", label: "Ontem" },
-              { id: "7d", label: "7 Dias" },
-              { id: "30d", label: "30 Dias" },
-              { id: "mes", label: "Este Mês" },
-              { id: "todos", label: "Tudo" },
-            ].map((p) => {
-              const active = currentData.filterPeriod === p.id;
-              return (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => fetchLiveFilter(p.id, currentData.filterClient)}
-                  disabled={isLoadingFilter}
-                  style={{
-                    background: active ? "var(--brand)" : "transparent",
-                    color: active ? "#ffffff" : "var(--text-muted)",
-                    borderRadius: "6px",
-                    padding: "5px 11px",
-                    fontSize: "12px",
-                    fontWeight: active ? 700 : 500,
-                    border: "none",
-                    cursor: "pointer",
-                    display: "inline-block",
-                    transition: "all 150ms ease",
-                  }}
-                >
-                  {p.label}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Botão Atualizar Agora */}
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => fetchLiveFilter(currentData.filterPeriod, currentData.filterClient)}
-            disabled={isLoadingFilter}
-            style={{ height: "30px", padding: "0 10px", fontSize: "12px", gap: "6px" }}
-          >
-            <RefreshCw size={13} className={isLoadingFilter ? "animate-spin" : undefined} />
-            Atualizar
-          </Button>
-
-          {/* Seletor Customizado de Data (De / Até) */}
-          <form
-            onSubmit={handleCustomDateSubmit}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "6px",
-              background: "var(--surface)",
-              borderRadius: "8px",
-              border: "1px solid var(--border)",
-              padding: "3px 8px",
-            }}
-          >
-            <Calendar size={13} style={{ color: "#9a92ad" }} />
+      {showDates && (
+        <div className={styles.datePanel}>
+          <label>
+            De
             <input
               type="date"
               value={customStart}
-              onChange={(e) => setCustomStart(e.target.value)}
-              style={{
-                background: "transparent",
-                border: "none",
-                color: "var(--text)",
-                fontSize: "11px",
-                padding: "2px",
-              }}
+              onChange={(event) => setCustomStart(event.target.value)}
             />
-            <span style={{ color: "#9a92ad", fontSize: "11px" }}>até</span>
+          </label>
+          <label>
+            Até
             <input
               type="date"
               value={customEnd}
-              onChange={(e) => setCustomEnd(e.target.value)}
-              style={{
-                background: "transparent",
-                border: "none",
-                color: "var(--text)",
-                fontSize: "11px",
-                padding: "2px",
-              }}
+              min={customStart}
+              onChange={(event) => setCustomEnd(event.target.value)}
             />
-            <Button
-              size="sm"
-              type="submit"
-              variant="outline"
-              style={{ padding: "2px 8px", height: "24px", fontSize: "11px" }}
-            >
-              OK
-            </Button>
-          </form>
-
-          {/* Botão de Sincronização com Barra de Progresso 1-100% */}
-          <Button
-            size="sm"
-            onClick={handleStartSync}
-            style={{
-              background: "linear-gradient(90deg, #7b39fc 0%, #6825ee 100%)",
-              color: "#fff",
-              border: "1px solid rgba(255, 255, 255, 0.15)",
-              boxShadow: "0 0 15px rgba(123, 57, 252, 0.4)",
-              fontWeight: 600,
-            }}
+          </label>
+          <button
+            type="button"
+            className={styles.primaryButton}
+            onClick={applyCustomDates}
           >
-            <RefreshCw size={14} className={isSyncing ? "animate-spin" : undefined} />
-            Sincronizar com Meta
-          </Button>
-
-          {/* Botão Copiar Relatório WhatsApp */}
-          <Button
-            size="sm"
-            onClick={handleCopyReport}
-            style={{
-              background: copiedReport ? "rgba(52, 199, 123, 0.25)" : "rgba(37, 211, 102, 0.15)",
-              color: copiedReport ? "#34c77b" : "#25d366",
-              border: "1px solid rgba(37, 211, 102, 0.4)",
-              fontWeight: 600,
-            }}
-            title="Copiar relatório formatado para colar no WhatsApp do cliente"
-          >
-            {copiedReport ? (
-              <>
-                <CheckCircle2 size={14} />
-                Copiado com Sucesso!
-              </>
-            ) : (
-              <>
-                <span>📋</span>
-                Relatório WhatsApp
-              </>
-            )}
-          </Button>
-
-          {/* Botão Baixar CSV Executivo */}
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={handleExportCsv}
-            style={{
-              borderColor: "rgba(56, 189, 248, 0.4)",
-              color: "#38bdf8",
-              background: "rgba(56, 189, 248, 0.08)",
-              fontWeight: 600,
-            }}
-            title="Baixar planilha executiva completa com ROAS e campanhas em CSV / Excel"
-          >
-            <Download size={14} />
-            Exportar CSV
-          </Button>
-
-          {/* Botão Imprimir / PDF */}
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={handlePrintReport}
-            style={{
-              borderColor: "rgba(255, 255, 255, 0.2)",
-              color: "#ebe8f2",
-              background: "rgba(255, 255, 255, 0.04)",
-              fontWeight: 600,
-            }}
-            title="Imprimir relatório executivo ou salvar em PDF"
-          >
-            <Printer size={14} />
-            PDF / Imprimir
-          </Button>
+            Aplicar período
+            <ArrowRight size={15} />
+          </button>
         </div>
-      </div>
-
-      {/* Banner de Atribuição Last-Click */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "10px",
-          padding: "10px 16px",
-          borderRadius: "10px",
-          background: "linear-gradient(90deg, rgba(123, 57, 252, 0.1), rgba(52, 199, 123, 0.08))",
-          border: "1px solid rgba(123, 57, 252, 0.25)",
-          fontSize: "12px",
-          color: "#b394ff",
-        }}
-      >
-        <GitMerge size={15} style={{ flexShrink: 0 }} />
-        <span>
-          <strong style={{ color: "#ebe8f2" }}>Atribuição Last-Click ativa</strong>
-          {" — "}
-          {data.attributionNote}
-        </span>
-      </div>
-
-      {/* Grid Principal de KPIs (Cards Estilo UTMfy) */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-          gap: "14px",
-        }}
-      >
-        {/* Card 1: Faturamento Total */}
+      )}
+      {notice && (
         <div
-          className="card"
-          style={{
-            position: "relative",
-            overflow: "hidden",
-            border: "1px solid rgba(52, 199, 123, 0.35)",
-            background: "linear-gradient(145deg, rgba(52, 199, 123, 0.08), rgba(21, 18, 29, 0.95))",
-          }}
+          role={notice.kind === "error" ? "alert" : "status"}
+          className={`${styles.notice} ${notice.kind === "error" ? styles.errorNotice : styles.successNotice}`}
         >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-            <span style={{ fontSize: "12px", fontWeight: 600, color: "#9a92ad" }}>Faturamento Total</span>
-            <div
-              style={{
-                width: "28px",
-                height: "28px",
-                borderRadius: "8px",
-                background: "rgba(52, 199, 123, 0.2)",
-                color: "#34c77b",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <DollarSign size={16} />
-            </div>
-          </div>
-          <div style={{ fontSize: "24px", fontWeight: 800, color: "#34c77b" }}>
-            {formatMoney(kpis.revenue, currency)}
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "8px", fontSize: "12px", color: "#9a92ad" }}>
-            <span style={{ color: "#34c77b", fontWeight: 600, display: "flex", alignItems: "center" }}>
-              <ArrowUpRight size={14} /> {kpis.purchases}
-            </span>
-            <span>vendas aprovadas</span>
-          </div>
-        </div>
-
-        {/* Card 2: Gasto em Anúncios */}
-        <div
-          className="card"
-          style={{
-            position: "relative",
-            overflow: "hidden",
-            border: "1px solid rgba(123, 57, 252, 0.35)",
-            background: "linear-gradient(145deg, rgba(123, 57, 252, 0.08), rgba(21, 18, 29, 0.95))",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-            <span style={{ fontSize: "12px", fontWeight: 600, color: "#9a92ad" }}>Gasto Meta Ads</span>
-            <div
-              style={{
-                width: "28px",
-                height: "28px",
-                borderRadius: "8px",
-                background: "rgba(123, 57, 252, 0.2)",
-                color: "#b394ff",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <TrendingUp size={16} />
-            </div>
-          </div>
-          <div style={{ fontSize: "24px", fontWeight: 800, color: "#ebe8f2" }}>
-            {formatMoney(kpis.spend, currency)}
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "8px", fontSize: "12px", color: "#9a92ad" }}>
-            <span>{kpis.spend > 0 ? "Investimento em tráfego" : "Clique em 'Sincronizar com Meta' para puxar gastos"}</span>
-          </div>
-        </div>
-
-        {/* Card 3: ROAS Real */}
-        <div
-          className="card"
-          style={{
-            position: "relative",
-            overflow: "hidden",
-            border: "1px solid rgba(0, 242, 254, 0.35)",
-            background: "linear-gradient(145deg, rgba(0, 242, 254, 0.08), rgba(21, 18, 29, 0.95))",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-            <span style={{ fontSize: "12px", fontWeight: 600, color: "#9a92ad" }}>ROAS Real</span>
-            <div
-              style={{
-                width: "28px",
-                height: "28px",
-                borderRadius: "8px",
-                background: "rgba(0, 242, 254, 0.2)",
-                color: "#00f2fe",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <Zap size={16} />
-            </div>
-          </div>
-          <div
-            style={{
-              fontSize: "24px",
-              fontWeight: 800,
-              color: kpis.spend > 0 ? (kpis.roas >= 2 ? "#34c77b" : kpis.roas >= 1 ? "#e3a72f" : "#ef5a5a") : "#b394ff",
-              display: "flex",
-              alignItems: "baseline",
-              gap: "6px",
-            }}
-          >
-            {kpis.spend > 0 ? `${kpis.roas.toFixed(2)}x` : kpis.revenue > 0 ? "100% orgânico" : "0.00x"}
-            {kpis.spend > 0 && (
-              <span
-                style={{
-                  fontSize: "11px",
-                  padding: "2px 7px",
-                  borderRadius: "999px",
-                  background: kpis.roas >= 2 ? "rgba(52, 199, 123, 0.2)" : "rgba(227, 167, 47, 0.2)",
-                  color: kpis.roas >= 2 ? "#34c77b" : "#e3a72f",
-                  fontWeight: 700,
-                }}
-              >
-                {kpis.roas >= 2 ? "ESCALA ALTA" : "EQUILÍBRIO"}
-              </span>
-            )}
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "8px", fontSize: "12px", color: "#9a92ad" }}>
-            <span>
-              ROI: {kpis.spend > 0 ? (kpis.roiPercent > 0 ? `+${kpis.roiPercent}%` : `${kpis.roiPercent}%`) : "Sem gasto informado"}
-            </span>
-          </div>
-        </div>
-
-        {/* Card 4: Leads & CPA */}
-        <div className="card" style={{ position: "relative", overflow: "hidden" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-            <span style={{ fontSize: "12px", fontWeight: 600, color: "#9a92ad" }}>Leads / WhatsApp</span>
-            <div
-              style={{
-                width: "28px",
-                height: "28px",
-                borderRadius: "8px",
-                background: "rgba(255, 255, 255, 0.08)",
-                color: "#ebe8f2",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <MessageSquare size={16} />
-            </div>
-          </div>
-          <div style={{ fontSize: "24px", fontWeight: 800, color: "#ebe8f2" }}>
-            {formatNumber(kpis.leads)}
-          </div>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "8px", fontSize: "12px", color: "#9a92ad" }}>
-            <span>Conv: {kpis.conversionRate}%</span>
-            <span>Ticket: {formatMoney(kpis.averageTicket, currency)}</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Gráfico Animado de Desempenho Diário */}
-      <div className="card" style={{ padding: "20px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "18px" }}>
-          <div>
-            <h2 style={{ margin: 0, fontSize: "17px", fontWeight: 700 }}>Evolução Diária de Conversões</h2>
-            <p className="muted small" style={{ margin: "2px 0 0 0" }}>
-              Comparativo visual entre investimento e faturamento rastreado.
-            </p>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "16px", fontSize: "12px" }}>
-            <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-              <span style={{ width: "10px", height: "10px", borderRadius: "2px", background: "#34c77b" }} />
-              Faturamento
-            </span>
-            <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-              <span style={{ width: "10px", height: "10px", borderRadius: "2px", background: "#7b39fc" }} />
-              Investimento
-            </span>
-          </div>
-        </div>
-
-        {/* Visualização de Gráfico em Barras Dinâmicas */}
-        <div
-          style={{
-            height: "180px",
-            display: "flex",
-            alignItems: "flex-end",
-            gap: "8px",
-            paddingTop: "20px",
-            borderBottom: "1px solid var(--border)",
-            position: "relative",
-          }}
-        >
-          {chart.map((point, index) => {
-            const revHeight = maxVal > 0 ? (point.revenue / maxVal) * 140 : 4;
-            const spendHeight = maxVal > 0 ? (point.spend / maxVal) * 140 : 4;
-            const isHovered = hoveredPoint === index;
-
-            return (
-              <div
-                key={point.date}
-                onMouseEnter={() => setHoveredPoint(index)}
-                onMouseLeave={() => setHoveredPoint(null)}
-                style={{
-                  flex: 1,
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  height: "100%",
-                  justifyContent: "flex-end",
-                  cursor: "pointer",
-                  position: "relative",
-                }}
-              >
-                {/* Tooltip ao passar o mouse */}
-                {isHovered && (
-                  <div
-                    style={{
-                      position: "absolute",
-                      bottom: "100%",
-                      marginBottom: "8px",
-                      background: "rgba(21, 18, 29, 0.95)",
-                      border: "1px solid var(--border-strong)",
-                      borderRadius: "8px",
-                      padding: "8px 12px",
-                      fontSize: "11px",
-                      boxShadow: "0 10px 25px rgba(0, 0, 0, 0.6)",
-                      zIndex: 10,
-                      whiteSpace: "nowrap",
-                      pointerEvents: "none",
-                    }}
-                  >
-                    <div style={{ fontWeight: 700, marginBottom: "4px" }}>{point.label}</div>
-                    <div style={{ color: "#34c77b" }}>Vendas: {formatMoney(point.revenue, currency)} ({point.sales})</div>
-                    <div style={{ color: "#b394ff" }}>Gasto: {formatMoney(point.spend, currency)}</div>
-                    <div style={{ color: "#9a92ad" }}>Leads: {point.leads}</div>
-                  </div>
-                )}
-
-                {/* Barras lado a lado */}
-                <div style={{ display: "flex", alignItems: "flex-end", gap: "2px", width: "100%", justifyContent: "center" }}>
-                  {/* Barra de Faturamento */}
-                  <div
-                    style={{
-                      width: "45%",
-                      maxWidth: "14px",
-                      height: `${Math.max(revHeight, 4)}px`,
-                      background: "linear-gradient(180deg, #34c77b 0%, rgba(52, 199, 123, 0.3) 100%)",
-                      borderRadius: "3px 3px 0 0",
-                      transition: "height 300ms ease, opacity 200ms ease",
-                      opacity: isHovered ? 1 : 0.85,
-                      boxShadow: isHovered ? "0 0 8px #34c77b" : "none",
-                    }}
-                  />
-                  {/* Barra de Gasto */}
-                  <div
-                    style={{
-                      width: "45%",
-                      maxWidth: "14px",
-                      height: `${Math.max(spendHeight, 4)}px`,
-                      background: "linear-gradient(180deg, #7b39fc 0%, rgba(123, 57, 252, 0.3) 100%)",
-                      borderRadius: "3px 3px 0 0",
-                      transition: "height 300ms ease, opacity 200ms ease",
-                      opacity: isHovered ? 1 : 0.85,
-                      boxShadow: isHovered ? "0 0 8px #7b39fc" : "none",
-                    }}
-                  />
-                </div>
-                {/* Rótulo da data */}
-                <span
-                  style={{
-                    fontSize: "10px",
-                    color: isHovered ? "#ebe8f2" : "#6d6582",
-                    marginTop: "6px",
-                    fontFamily: "var(--font-mono, monospace)",
-                  }}
-                >
-                  {index % Math.ceil(chart.length / 10) === 0 ? point.label : ""}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Abas e Tabelas Detalhadas Estilo UTMfy */}
-      <div className="card" style={{ padding: "0" }}>
-        {/* Navegação entre Abas */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            borderBottom: "1px solid var(--border)",
-            padding: "12px 18px",
-            flexWrap: "wrap",
-            gap: "12px",
-          }}
-        >
-          <div style={{ display: "flex", gap: "6px" }}>
-            {[
-              { id: "campanhas", label: "Campanhas", icon: Layers },
-              { id: "conjuntos", label: "Conjuntos (AdSets)", icon: Target },
-              { id: "anuncios", label: "Criativos (Ads)", icon: BarChart3 },
-              { id: "funil", label: "Funil de Conversão", icon: TrendingUp },
-            ].map((t) => {
-              const active = activeTab === t.id;
-              const Icon = t.icon;
-              return (
-                <button
-                  key={t.id}
-                  onClick={() => setActiveTab(t.id as any)}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "6px",
-                    padding: "7px 14px",
-                    borderRadius: "8px",
-                    border: "none",
-                    background: active ? "var(--surface-2)" : "transparent",
-                    color: active ? "var(--text)" : "var(--text-muted)",
-                    fontWeight: active ? 700 : 500,
-                    fontSize: "13px",
-                    cursor: "pointer",
-                    transition: "all 150ms ease",
-                  }}
-                >
-                  <Icon size={15} color={active ? "var(--brand)" : undefined} />
-                  {t.label}
-                </button>
-              );
-            })}
-          </div>
-
-          {activeTab !== "funil" && (
-            <div style={{ position: "relative", minWidth: "220px" }}>
-              <input
-                type="text"
-                placeholder="Filtrar por nome…"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                style={{
-                  width: "100%",
-                  padding: "6px 10px 6px 30px",
-                  borderRadius: "6px",
-                  fontSize: "12px",
-                  background: "var(--bg)",
-                  border: "1px solid var(--border)",
-                  color: "var(--text)",
-                }}
-              />
-              <Search
-                size={14}
-                style={{
-                  position: "absolute",
-                  left: "9px",
-                  top: "50%",
-                  transform: "translateY(-50%)",
-                  color: "#9a92ad",
-                }}
-              />
-            </div>
+          {notice.kind === "error" ? (
+            <Info size={17} />
+          ) : (
+            <CheckCircle2 size={17} />
           )}
+          <span>{notice.text}</span>
+          <button
+            type="button"
+            aria-label="Fechar aviso"
+            onClick={() => setNotice(null)}
+          >
+            <X size={15} />
+          </button>
         </div>
+      )}
+      {dataQuality.partial && (
+        <div className={`${styles.notice} ${styles.errorNotice}`} role="alert">
+          <Info size={17} />
+          <span>
+            Esta consulta atingiu o limite de registros. Os resultados são
+            parciais; selecione um cliente para reduzir o volume.
+          </span>
+        </div>
+      )}
 
-        {/* Conteúdo da Aba: Campanhas */}
-        {activeTab === "campanhas" && (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Campanha</th>
-                  <th>Status</th>
-                  <th>Gasto</th>
-                  <th>Leads</th>
-                  <th>Vendas</th>
-                  <th>Faturamento</th>
-                  <th>CPA</th>
-                  <th>ROAS</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredCampaigns.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} style={{ textAlign: "center", padding: "32px", color: "#9a92ad" }}>
-                      Nenhuma campanha encontrada para este período.
-                    </td>
-                  </tr>
-                ) : (
-                  filteredCampaigns.map((camp) => (
-                    <tr key={camp.id}>
-                      <td style={{ fontWeight: 600 }}>{camp.name}</td>
-                      <td>
-                        <span className="badge badge-ok">{camp.status}</span>
-                      </td>
-                      <td className="mono">{formatMoney(camp.spend, currency)}</td>
-                      <td>{formatNumber(camp.leads)}</td>
-                      <td>
-                        <strong style={{ color: "#34c77b" }}>{camp.purchases}</strong>
-                      </td>
-                      <td className="mono" style={{ fontWeight: 700, color: "#34c77b" }}>
-                        {formatMoney(camp.revenue, currency)}
-                      </td>
-                      <td className="mono">{formatMoney(camp.cpa, currency)}</td>
-                      <td>
-                        {camp.spend > 0 ? (
-                          <span
-                            style={{
-                              fontSize: "12px",
-                              fontWeight: 700,
-                              padding: "3px 8px",
-                              borderRadius: "6px",
-                              background: camp.roas >= 2 ? "rgba(52, 199, 123, 0.15)" : "rgba(227, 167, 47, 0.15)",
-                              color: camp.roas >= 2 ? "#34c77b" : "#e3a72f",
-                            }}
-                          >
-                            {camp.roas.toFixed(2)}x
-                          </span>
-                        ) : (
-                          <span className="muted small" style={{ fontSize: "11px" }}>
-                            {camp.revenue > 0 ? "100% orgânico" : "0.00x"}
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+      <section
+        className={styles.metrics}
+        aria-label="Indicadores principais"
+        aria-busy={isRefreshing}
+      >
+        <article className={`${styles.metricCard} ${styles.featuredMetric}`}>
+          <div className={styles.metricTop}>
+            <span>Receita registrada</span>
+            <span className={styles.metricIcon}>
+              <DollarSign size={18} />
+            </span>
           </div>
-        )}
-
-        {/* Conteúdo da Aba: Conjuntos (AdSets) */}
-        {activeTab === "conjuntos" && (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Conjunto de Anúncios</th>
-                  <th>Campanha</th>
-                  <th>Gasto</th>
-                  <th>Leads</th>
-                  <th>Vendas</th>
-                  <th>Faturamento</th>
-                  <th>ROAS</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredAdSets.length === 0 ? (
-                  <tr>
-                    <td colSpan={7} style={{ textAlign: "center", padding: "32px", color: "#9a92ad" }}>
-                      Nenhum conjunto encontrado para este período.
-                    </td>
-                  </tr>
-                ) : (
-                  filteredAdSets.map((adset) => (
-                    <tr key={adset.id}>
-                      <td style={{ fontWeight: 600 }}>{adset.name}</td>
-                      <td className="muted small">{adset.campaign_name}</td>
-                      <td className="mono">{formatMoney(adset.spend, currency)}</td>
-                      <td>{formatNumber(adset.leads)}</td>
-                      <td>{adset.purchases}</td>
-                      <td className="mono" style={{ fontWeight: 700, color: "#34c77b" }}>
-                        {formatMoney(adset.revenue, currency)}
-                      </td>
-                      <td>
-                        {adset.spend > 0 ? (
-                          <span
-                            style={{
-                              fontSize: "12px",
-                              fontWeight: 700,
-                              padding: "3px 8px",
-                              borderRadius: "6px",
-                              background: adset.roas >= 2 ? "rgba(52, 199, 123, 0.15)" : "rgba(227, 167, 47, 0.15)",
-                              color: adset.roas >= 2 ? "#34c77b" : "#e3a72f",
-                            }}
-                          >
-                            {adset.roas.toFixed(2)}x
-                          </span>
-                        ) : (
-                          <span className="muted small" style={{ fontSize: "11px" }}>
-                            {adset.revenue > 0 ? "100% orgânico" : "0.00x"}
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+          <strong className={styles.metricValue}>
+            {multiCurrency
+              ? "Multi-moeda"
+              : formatMoney(kpis.revenue, currency)}
+          </strong>
+          <div className={styles.metricFoot}>
+            <span className={styles.purpleTag}>Produção</span>
+            <span>
+              {multiCurrency
+                ? `${currentData.revenueByCurrency.length} moedas, sem somar valores`
+                : "Compras do período selecionado"}
+            </span>
           </div>
-        )}
-
-        {/* Conteúdo da Aba: Criativos (Ads) */}
-        {activeTab === "anuncios" && (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Criativo / Anúncio</th>
-                  <th>Campanha</th>
-                  <th>Gasto</th>
-                  <th>Conversas</th>
-                  <th>Vendas</th>
-                  <th>Faturamento</th>
-                  <th>ROAS</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredAds.length === 0 ? (
-                  <tr>
-                    <td colSpan={7} style={{ textAlign: "center", padding: "32px", color: "#9a92ad" }}>
-                      Nenhum criativo encontrado para este período.
-                    </td>
-                  </tr>
-                ) : (
-                  filteredAds.map((ad) => (
-                    <tr key={ad.id}>
-                      <td>
-                        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                          {ad.thumbnail_url ? (
-                            <img
-                              src={ad.thumbnail_url}
-                              alt=""
-                              style={{ width: "36px", height: "36px", borderRadius: "6px", objectFit: "cover" }}
-                            />
-                          ) : (
-                            <div
-                              style={{
-                                width: "36px",
-                                height: "36px",
-                                borderRadius: "6px",
-                                background: "var(--surface-2)",
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                color: "#9a92ad",
-                              }}
-                            >
-                              <BarChart3 size={18} />
-                            </div>
-                          )}
-                          <div>
-                            <div style={{ fontWeight: 600 }}>{ad.name}</div>
-                            {ad.creative_title && <div className="muted small">{ad.creative_title}</div>}
-                          </div>
-                        </div>
-                      </td>
-                      <td className="muted small">{ad.campaign_name}</td>
-                      <td className="mono">{formatMoney(ad.spend, currency)}</td>
-                      <td>{formatNumber(ad.conversations)}</td>
-                      <td>{ad.purchases}</td>
-                      <td className="mono" style={{ fontWeight: 700, color: "#34c77b" }}>
-                        {formatMoney(ad.revenue, currency)}
-                      </td>
-                      <td>
-                        {ad.spend > 0 ? (
-                          <span
-                            style={{
-                              fontSize: "12px",
-                              fontWeight: 700,
-                              padding: "3px 8px",
-                              borderRadius: "6px",
-                              background: ad.roas >= 2 ? "rgba(52, 199, 123, 0.15)" : "rgba(227, 167, 47, 0.15)",
-                              color: ad.roas >= 2 ? "#34c77b" : "#e3a72f",
-                            }}
-                          >
-                            {ad.roas.toFixed(2)}x
-                          </span>
-                        ) : (
-                          <span className="muted small" style={{ fontSize: "11px" }}>
-                            {ad.revenue > 0 ? "100% orgânico" : "0.00x"}
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+          <Sparkline values={chart.map((point) => point.revenue || 0)} />
+        </article>
+        <article className={styles.metricCard}>
+          <div className={styles.metricTop}>
+            <span>Vendas registradas</span>
+            <span className={`${styles.metricIcon} ${styles.greenIcon}`}>
+              <ShoppingBag size={18} />
+            </span>
           </div>
-        )}
+          <strong className={styles.metricValue}>
+            {formatNumber(kpis.purchases)}
+          </strong>
+          <div className={styles.metricFoot}>
+            <span className={styles.greenTag}>
+              <Check size={11} /> Eventos únicos
+            </span>
+            <span>Sem testes ou tentativas repetidas</span>
+          </div>
+          <Sparkline
+            values={chart.map((point) => point.sales)}
+            color="#19a777"
+          />
+        </article>
+        <article className={styles.metricCard}>
+          <div className={styles.metricTop}>
+            <span>Novos contatos</span>
+            <span className={`${styles.metricIcon} ${styles.blueIcon}`}>
+              <MessageCircle size={18} />
+            </span>
+          </div>
+          <strong className={styles.metricValue}>
+            {formatNumber(kpis.leads)}
+          </strong>
+          <div className={styles.metricFoot}>
+            <span className={styles.blueTag}>
+              {kpis.conversionRate}% converteram
+            </span>
+            <span>Contatos únicos por cliente</span>
+          </div>
+          <Sparkline
+            values={chart.map((point) => point.leads)}
+            color="#4f86e9"
+          />
+        </article>
+        <article className={styles.metricCard}>
+          <div className={styles.metricTop}>
+            <span>Retorno sobre anúncios</span>
+            <span className={styles.metricIcon}>
+              <Target size={18} />
+            </span>
+          </div>
+          <strong
+            className={`${styles.metricValue} ${styles.unavailableValue}`}
+          >
+            {kpis.roas === null ? "—" : `${kpis.roas.toFixed(2)}×`}
+          </strong>
+          <div className={styles.metricFoot}>
+            <span className={styles.neutralTag}>ROAS</span>
+            <span>Requer investimento do período</span>
+          </div>
+          <button
+            type="button"
+            className={styles.metricInfoButton}
+            onClick={() => setShowQuality((value) => !value)}
+            aria-label="Entender disponibilidade do ROAS"
+          >
+            <CircleHelp size={16} />
+          </button>
+        </article>
+      </section>
 
-        {/* Conteúdo da Aba: Funil de Mensagens */}
-        {activeTab === "funil" && (
-          <div style={{ padding: "28px" }}>
-            <div style={{ maxWidth: "680px", margin: "0 auto", display: "flex", flexDirection: "column", gap: "16px" }}>
-              <h3 style={{ margin: "0 0 16px 0", fontSize: "16px", textAlign: "center" }}>
-                Funil de Conversão Click-to-WhatsApp
-              </h3>
+      {multiCurrency && (
+        <div className={styles.currencyBreakdown}>
+          {currentData.revenueByCurrency.map((row) => (
+            <span key={row.currency}>
+              <span>{row.currency}</span>
+              <strong>{formatMoney(row.value, row.currency)}</strong>
+            </span>
+          ))}
+        </div>
+      )}
 
-              {funnel.map((step, idx) => (
-                <div key={idx} style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px", fontWeight: 600 }}>
-                    <span>{step.name}</span>
-                    <span style={{ color: "#34c77b" }}>
-                      {formatNumber(step.count)} ({step.percent}%)
-                    </span>
-                  </div>
-                  <div
-                    style={{
-                      height: "12px",
-                      width: "100%",
-                      background: "rgba(255, 255, 255, 0.06)",
-                      borderRadius: "999px",
-                      overflow: "hidden",
-                    }}
-                  >
-                    <div
-                      style={{
-                        height: "100%",
-                        width: `${Math.max(step.percent, 3)}%`,
-                        background:
-                          idx === 4
-                            ? "linear-gradient(90deg, #34c77b, #00f2fe)"
-                            : "linear-gradient(90deg, #7b39fc, #34c77b)",
-                        borderRadius: "999px",
-                        transition: "width 600ms cubic-bezier(0.1, 0.9, 0.2, 1)",
-                      }}
-                    />
-                  </div>
-                </div>
+      <div className={styles.analyticsGrid}>
+        <section
+          className={styles.chartCard}
+          aria-label="Evolução dos resultados"
+        >
+          <div className={styles.cardHeading}>
+            <div>
+              <h2>Seu desempenho, dia a dia</h2>
+              <p>{currentData.rangeLabel}</p>
+            </div>
+            <div
+              className={styles.segmented}
+              role="group"
+              aria-label="Métrica do gráfico"
+            >
+              {(
+                [
+                  { id: "receita", label: "Receita" },
+                  { id: "conversas", label: "Contatos" },
+                  { id: "vendas", label: "Vendas" },
+                ] as const
+              ).map((mode) => (
+                <button
+                  type="button"
+                  key={mode.id}
+                  onClick={() => setChartMode(mode.id)}
+                  className={
+                    effectiveChartMode === mode.id ? styles.segmentActive : ""
+                  }
+                  disabled={mode.id === "receita" && multiCurrency}
+                  aria-pressed={effectiveChartMode === mode.id}
+                >
+                  {mode.label}
+                </button>
               ))}
             </div>
           </div>
-        )}
+          <div className={styles.chartSummary}>
+            <strong>{chartValue(chartTotal)}</strong>
+            <span>
+              {effectiveChartMode === "receita"
+                ? "receita registrada"
+                : effectiveChartMode === "vendas"
+                  ? "compras em produção"
+                  : "novos contatos"}
+              {dataQuality.chartLimited ? " · últimos 60 dias" : " no período"}
+            </span>
+            <span className={styles.chartLegend}>
+              <i />
+              {effectiveChartMode === "receita"
+                ? "Receita"
+                : effectiveChartMode === "vendas"
+                  ? "Vendas"
+                  : "Contatos"}
+            </span>
+          </div>
+          <div className={styles.chartArea}>
+            <div className={styles.chartAxis}>
+              {[1, 0.75, 0.5, 0.25, 0].map((fraction) => (
+                <span key={fraction}>
+                  {effectiveChartMode === "receita"
+                    ? chartMax * fraction >= 1000
+                      ? `${((chartMax * fraction) / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} mil`
+                      : Math.round(chartMax * fraction).toLocaleString("pt-BR")
+                    : Math.round(chartMax * fraction)}
+                </span>
+              ))}
+            </div>
+            <div className={styles.chartPlot}>
+              <svg
+                viewBox="0 0 1000 230"
+                role="img"
+                aria-label={`${effectiveChartMode === "receita" ? "Receita" : effectiveChartMode === "vendas" ? "Vendas" : "Contatos"} por dia. Total: ${chartValue(chartTotal)}.`}
+                preserveAspectRatio="none"
+                onMouseMove={(event) => {
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  setHoveredPoint(
+                    Math.max(
+                      0,
+                      Math.min(
+                        chart.length - 1,
+                        Math.round(
+                          ((event.clientX - rect.left) / rect.width) *
+                            (chart.length - 1),
+                        ),
+                      ),
+                    ),
+                  );
+                }}
+                onMouseLeave={() => setHoveredPoint(null)}
+              >
+                <defs>
+                  <linearGradient
+                    id="dashboard-area"
+                    x1="0"
+                    x2="0"
+                    y1="0"
+                    y2="1"
+                  >
+                    <stop offset="0%" stopColor="#7b39fc" stopOpacity=".19" />
+                    <stop offset="100%" stopColor="#7b39fc" stopOpacity=".01" />
+                  </linearGradient>
+                </defs>
+                {[38, 79.5, 121, 162.5, 204].map((y) => (
+                  <line
+                    key={y}
+                    x1="0"
+                    x2="1000"
+                    y1={y}
+                    y2={y}
+                    className={styles.chartGrid}
+                    strokeDasharray="4 6"
+                  />
+                ))}
+                {area && <polygon points={area} fill="url(#dashboard-area)" />}
+                {line && (
+                  <polyline
+                    points={line}
+                    fill="none"
+                    stroke="#7b39fc"
+                    strokeWidth="3"
+                    strokeLinejoin="round"
+                    strokeLinecap="round"
+                    vectorEffect="non-scaling-stroke"
+                  />
+                )}
+                {hoveredPoint !== null && plot[hoveredPoint] && (
+                  <>
+                    <line
+                      x1={plot[hoveredPoint].x}
+                      x2={plot[hoveredPoint].x}
+                      y1="20"
+                      y2="214"
+                      stroke="#aa86f0"
+                      strokeDasharray="4 4"
+                    />
+                    <circle
+                      cx={plot[hoveredPoint].x}
+                      cy={plot[hoveredPoint].y}
+                      r="5"
+                      fill="#7b39fc"
+                      stroke="white"
+                      strokeWidth="3"
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  </>
+                )}
+              </svg>
+              {hover && (
+                <div
+                  className={styles.chartTooltip}
+                  style={{
+                    left: `${Math.max(13, Math.min(87, ((hoveredPoint || 0) / Math.max(chart.length - 1, 1)) * 100))}%`,
+                  }}
+                >
+                  <span>{hover.label}</span>
+                  <strong>{chartValue(points[hoveredPoint || 0])}</strong>
+                </div>
+              )}
+              <div className={styles.chartDates}>
+                {chart
+                  .filter(
+                    (_, index) =>
+                      index === 0 ||
+                      index === chart.length - 1 ||
+                      index % Math.max(1, Math.floor(chart.length / 5)) === 0,
+                  )
+                  .map((point) => (
+                    <span key={point.date}>{point.label}</span>
+                  ))}
+              </div>
+            </div>
+          </div>
+          <div className={styles.chartFooter}>
+            <span>
+              <span className={styles.greenDot} />
+              Somente dados registrados em produção
+            </span>
+            <span>Fuso de São Paulo</span>
+          </div>
+        </section>
+
+        <section
+          className={styles.funnelCard}
+          aria-label="Funil dos novos contatos"
+        >
+          <div className={styles.cardHeading}>
+            <div>
+              <h2>Do contato à venda</h2>
+              <p>Funil dos novos contatos do período</p>
+            </div>
+            <TrendingUp size={18} className={styles.subtleIcon} />
+          </div>
+          <div className={styles.funnelList}>
+            {funnel.map((step, index) => (
+              <div className={styles.funnelStep} key={step.name}>
+                <div className={styles.funnelStepTop}>
+                  <span>
+                    <i className={styles.funnelIndex}>
+                      {String(index + 1).padStart(2, "0")}
+                    </i>
+                    {step.name}
+                  </span>
+                  <strong>{formatNumber(step.count)}</strong>
+                </div>
+                <div className={styles.funnelTrack}>
+                  <span
+                    style={{
+                      width: `${step.percent}%`,
+                      opacity: 1 - index * 0.13,
+                    }}
+                  />
+                </div>
+                <div className={styles.funnelPercent}>
+                  {step.percent}% dos novos contatos
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className={styles.funnelResult}>
+            <div>
+              <span>Conversão em compra</span>
+              <strong>{kpis.conversionRate.toLocaleString("pt-BR")}%</strong>
+            </div>
+            <span className={styles.funnelResultIcon}>
+              <ArrowUpRight size={23} />
+            </span>
+          </div>
+        </section>
       </div>
+
+      <section
+        className={styles.performanceCard}
+        aria-label="Desempenho por anúncio"
+      >
+        <div className={styles.performanceHeader}>
+          <div>
+            <h2>Onde seus resultados acontecem</h2>
+            <p>Contatos e compras organizados por origem.</p>
+          </div>
+          <div className={styles.performanceActions}>
+            <button
+              type="button"
+              onClick={() => {
+                void handleCopy();
+              }}
+              title="Copiar resumo do período"
+              aria-label="Copiar resumo do período"
+            >
+              <Copy size={16} />
+            </button>
+            <button
+              type="button"
+              onClick={() => window.print()}
+              title="Imprimir ou salvar PDF"
+              aria-label="Imprimir ou salvar PDF"
+            >
+              <Printer size={16} />
+            </button>
+          </div>
+        </div>
+        <div
+          className={styles.campaignControls}
+          aria-label="Filtros de campanhas"
+        >
+          <label className={styles.campaignStatusFilter}>
+            Status da campanha
+            <select
+              aria-label="Status das campanhas"
+              disabled={isSyncing || isLoadingCampaigns}
+              value={campaignStatus}
+              onChange={(event) => {
+                setCampaignStatus(
+                  event.target.value as "active" | "paused" | "all",
+                );
+                setCampaignIds([]);
+                setPage(1);
+              }}
+            >
+              <option value="active">Somente ativas</option>
+              <option value="paused">Somente pausadas</option>
+              <option value="all">Todos os status</option>
+            </select>
+          </label>
+          <details className={styles.campaignPicker}>
+            <summary>
+              Selecionar campanhas{" "}
+              <span>
+                {campaignIds.length
+                  ? `${campaignIds.length} selecionada(s)`
+                  : "Todas do status"}
+              </span>
+              <ChevronDown size={14} />
+            </summary>
+            <div className={styles.campaignPickerPanel}>
+              <input
+                type="search"
+                aria-label="Buscar campanhas para selecionar"
+                placeholder="Nome ou ID da campanha…"
+                value={campaignSearch}
+                onChange={(event) => setCampaignSearch(event.target.value)}
+              />
+              <button type="button" onClick={() => setCampaignIds([])}>
+                Usar todas deste status
+              </button>
+              {!clientId && (
+                <p className={styles.campaignScope}>
+                  Selecione uma empresa no filtro acima para escolher campanhas
+                  específicas da conta.
+                </p>
+              )}
+              <div className={styles.campaignOptions}>
+                {availableCampaigns.map((campaign) => (
+                  <label key={`${campaign.clientId}:${campaign.id}`}>
+                    <input
+                      type="checkbox"
+                      aria-label={`Selecionar campanha ${campaign.name}`}
+                      checked={campaignIds.includes(campaign.id)}
+                      disabled={
+                        !clientId ||
+                        isSyncing ||
+                        isLoadingCampaigns ||
+                        (!campaignIds.includes(campaign.id) &&
+                          campaignIds.length >= 200)
+                      }
+                      onChange={(event) => {
+                        setCampaignIds((previous) =>
+                          event.target.checked
+                            ? [...new Set([...previous, campaign.id])]
+                            : previous.filter((id) => id !== campaign.id),
+                        );
+                        setPage(1);
+                      }}
+                    />
+                    <span>
+                      <strong>{campaign.name}</strong>
+                      <small>
+                        {campaign.clientName} · {campaign.id}
+                      </small>
+                    </span>
+                  </label>
+                ))}
+                {!availableCampaigns.length && (
+                  <p>
+                    Nenhuma campanha disponível neste filtro. Carregue as
+                    campanhas da conta ou altere o status.
+                  </p>
+                )}
+              </div>
+            </div>
+          </details>
+          <button
+            type="button"
+            className={styles.filterButton}
+            disabled={isLoadingCampaigns || isSyncing}
+            onClick={() => void handleLoadCampaigns()}
+          >
+            {isLoadingCampaigns ? (
+              <LoaderCircle size={15} className={styles.spin} />
+            ) : (
+              <RefreshCw size={15} />
+            )}{" "}
+            {isLoadingCampaigns
+              ? "Carregando campanhas…"
+              : "Carregar campanhas da conta"}
+          </button>
+          {!!campaignIds.length && (
+            <button
+              type="button"
+              className={styles.resetButton}
+              onClick={() => {
+                setCampaignIds([]);
+                setPage(1);
+              }}
+            >
+              <X size={13} />
+              Limpar seleção
+            </button>
+          )}
+        </div>
+        <p className={styles.campaignScope}>
+          Status e seleção filtram esta tabela e a sincronização da Meta. Os
+          indicadores gerais acima mantêm todos os contatos e vendas do período.
+          Campanha ativa pode conter anúncios pausados.
+        </p>
+        {currentData.campaignCatalogSyncedAt && (
+          <p className={styles.campaignScope}>
+            Catálogo consultado:{" "}
+            {formatDateTime(currentData.campaignCatalogSyncedAt)}. Use “Carregar
+            campanhas da conta” para atualizar os status na Meta.
+          </p>
+        )}
+        {!!currentData.campaignCatalogWarnings.length && (
+          <div className={styles.campaignWarning} role="status">
+            {currentData.campaignCatalogWarnings.join(" ")}
+          </div>
+        )}
+        <div className={styles.tableToolbar}>
+          <div
+            className={styles.tabs}
+            role="tablist"
+            aria-label="Agrupamento dos resultados"
+          >
+            {TABS.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === tab.id}
+                className={activeTab === tab.id ? styles.tabActive : ""}
+                onClick={() => {
+                  setActiveTab(tab.id);
+                  setPage(1);
+                }}
+              >
+                {tab.label}
+                <span>
+                  {
+                    currentData[
+                      tab.id === "campanhas"
+                        ? "campaigns"
+                        : tab.id === "conjuntos"
+                          ? "adsets"
+                          : "ads"
+                    ].length
+                  }
+                </span>
+              </button>
+            ))}
+          </div>
+          <label className={styles.tableSearch}>
+            <Search size={15} />
+            <input
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setPage(1);
+              }}
+              placeholder="Buscar campanha ou anúncio…"
+              aria-label="Buscar nos resultados"
+            />
+            {query && (
+              <button
+                type="button"
+                onClick={() => {
+                  setQuery("");
+                  setPage(1);
+                }}
+                aria-label="Limpar busca"
+              >
+                <X size={13} />
+              </button>
+            )}
+          </label>
+        </div>
+        <div
+          className={styles.tableScroll}
+          role="tabpanel"
+          aria-label={TABS.find((tab) => tab.id === activeTab)?.label}
+        >
+          <table className={styles.performanceTable}>
+            <thead>
+              <tr>
+                <th>
+                  {activeTab === "campanhas"
+                    ? "Campanha"
+                    : activeTab === "conjuntos"
+                      ? "Conjunto de anúncios"
+                      : "Anúncio"}
+                </th>
+                {activeTab === "campanhas" && <th>Status</th>}
+                <th>
+                  <button type="button" onClick={() => changeSort("leads")}>
+                    Contatos{" "}
+                    {sortKey === "leads" && (
+                      <ChevronDown
+                        size={12}
+                        className={!sortDescending ? styles.reversed : ""}
+                      />
+                    )}
+                  </button>
+                </th>
+                <th>
+                  <button type="button" onClick={() => changeSort("purchases")}>
+                    Vendas{" "}
+                    {sortKey === "purchases" && (
+                      <ChevronDown
+                        size={12}
+                        className={!sortDescending ? styles.reversed : ""}
+                      />
+                    )}
+                  </button>
+                </th>
+                <th>
+                  <button type="button" onClick={() => changeSort("revenue")}>
+                    Receita{" "}
+                    {sortKey === "revenue" && (
+                      <ChevronDown
+                        size={12}
+                        className={!sortDescending ? styles.reversed : ""}
+                      />
+                    )}
+                  </button>
+                </th>
+                <th>
+                  ROAS{" "}
+                  <span title="Requer investimento diário correspondente ao período">
+                    <CircleHelp size={12} />
+                  </span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleRows.map((row, index) => (
+                <tr key={row.id}>
+                  <td>
+                    <div className={styles.campaignName}>
+                      {row.image ? (
+                        <img
+                          src={row.image}
+                          alt=""
+                          className={styles.creativeImage}
+                        />
+                      ) : (
+                        <span
+                          className={`${styles.campaignIcon} ${index % 3 === 1 ? styles.campaignIconBlue : index % 3 === 2 ? styles.campaignIconGreen : ""}`}
+                        >
+                          <BarChart3 size={17} />
+                        </span>
+                      )}
+                      <span>
+                        <strong>{row.name}</strong>
+                        <small>
+                          {row.detail}
+                          {activeTab !== "campanhas" && ` · ${row.client}`}
+                        </small>
+                      </span>
+                    </div>
+                  </td>
+                  {activeTab === "campanhas" && (
+                    <td>
+                      <span
+                        className={
+                          row.status === "ACTIVE"
+                            ? styles.activeStatus
+                            : styles.neutralStatus
+                        }
+                      >
+                        <i />
+                        {row.status === "ACTIVE"
+                          ? "Ativa"
+                          : row.status === "PAUSED"
+                            ? "Pausada"
+                            : row.status === "ARCHIVED"
+                              ? "Arquivada"
+                              : "Não informado"}
+                      </span>
+                    </td>
+                  )}
+                  <td>{formatNumber(row.leads)}</td>
+                  <td>
+                    <span className={styles.purchaseCount}>
+                      {formatNumber(row.purchases)}
+                    </span>
+                  </td>
+                  <td className={styles.revenueCell}>
+                    {formatMoney(row.revenue, row.currency)}
+                  </td>
+                  <td className={styles.emptyRoas}>—</td>
+                </tr>
+              ))}
+              {!visibleRows.length && (
+                <tr>
+                  <td colSpan={activeTab === "campanhas" ? 6 : 5}>
+                    <div className={styles.emptyState}>
+                      <span className={styles.emptyIcon}>
+                        <Search size={23} />
+                      </span>
+                      <strong>
+                        {query
+                          ? "Nenhum resultado para essa busca"
+                          : "Nenhum resultado neste filtro"}
+                      </strong>
+                      <p>
+                        {query
+                          ? "Tente outro nome de campanha, anúncio ou cliente."
+                          : "Carregue as campanhas da conta e confira o status e a seleção. As campanhas também podem aparecer sem contatos registrados."}
+                      </p>
+                      {!currentData.clients.length && (
+                        <Link
+                          href="/clientes/novo"
+                          className={styles.primaryButton}
+                        >
+                          Cadastrar cliente
+                          <ArrowRight size={14} />
+                        </Link>
+                      )}
+                      {query && (
+                        <button
+                          type="button"
+                          className={styles.secondaryButton}
+                          onClick={() => setQuery("")}
+                        >
+                          Limpar busca
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div className={styles.tableFooter}>
+          <span>
+            {filteredRows.length
+              ? `${(currentPage - 1) * 6 + 1}–${Math.min(currentPage * 6, filteredRows.length)} de ${filteredRows.length} resultados`
+              : "Nenhum resultado"}
+          </span>
+          <div>
+            <button
+              type="button"
+              aria-label="Página anterior"
+              disabled={currentPage <= 1}
+              onClick={() => setPage(currentPage - 1)}
+            >
+              <ChevronLeft size={15} />
+            </button>
+            <span>
+              Página {currentPage} de {maxPage}
+            </span>
+            <button
+              type="button"
+              aria-label="Próxima página"
+              disabled={currentPage >= maxPage}
+              onClick={() => setPage(currentPage + 1)}
+            >
+              <ChevronRight size={15} />
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <div className={styles.bottomGrid}>
+        <div className={styles.insightCard}>
+          <span className={styles.insightIcon}>
+            <Target size={20} />
+          </span>
+          <div>
+            <h3>Ticket médio por compra</h3>
+            <p>
+              {multiCurrency
+                ? "Consulte a receita de cada moeda separadamente."
+                : "Valor médio dos eventos de compra no período."}
+            </p>
+          </div>
+          <strong>{formatMoney(kpis.averageTicket, currency)}</strong>
+        </div>
+        <div className={styles.insightCard}>
+          <span className={`${styles.insightIcon} ${styles.greenIcon}`}>
+            <CheckCircle2 size={20} />
+          </span>
+          <div>
+            <h3>Origem das compras</h3>
+            <p>
+              {currentData.unattributedPurchases
+                ? `${currentData.unattributedPurchases} compra(s) sem origem salva no evento.`
+                : hasData
+                  ? "As compras com origem estão organizadas por anúncio."
+                  : "Os dados de origem aparecem junto dos eventos."}
+            </p>
+          </div>
+          <strong>{dataQuality.attributionCoverage}%</strong>
+        </div>
+      </div>
+
+      <div className={styles.dataNote}>
+        <button
+          type="button"
+          onClick={() => setShowQuality((value) => !value)}
+          aria-expanded={showQuality}
+        >
+          <Info size={14} /> Como estes resultados são calculados
+          <ChevronDown
+            size={13}
+            className={showQuality ? styles.reversed : ""}
+          />
+        </button>
+        <span>
+          Atualizado em {formatDateTime(currentData.generatedAt)}
+          <button
+            type="button"
+            onClick={() => setRefreshTick((tick) => tick + 1)}
+            disabled={isRefreshing}
+            aria-label="Atualizar resultados agora"
+          >
+            <RefreshCw size={12} className={isRefreshing ? styles.spin : ""} />
+          </button>
+        </span>
+      </div>
+      {showQuality && (
+        <div className={styles.qualityPanel}>
+          <h3>Resultados claros, sem estimativas escondidas</h3>
+          <p>
+            Receita e vendas consideram somente eventos Purchase aceitos em
+            produção, contando cada identificador uma vez. Eventos de teste e
+            tentativas repetidas ficam fora dos totais.
+          </p>
+          <p>
+            ROAS, investimento, CPA e lucro aguardam dados de investimento do
+            mesmo período. O gasto acumulado de um anúncio não é comparado com a
+            receita de alguns dias.
+          </p>
+          <p>
+            {currentData.attributionNote} O funil acompanha apenas os novos
+            contatos do período, usando respostas e eventos registrados. A
+            conversão conta compradores únicos desse grupo.
+          </p>
+          <div>
+            <span>
+              {dataQuality.excludedTestEvents} evento(s) de teste excluído(s)
+            </span>
+            <span>
+              {dataQuality.duplicateAttempts} tentativa(s) repetida(s)
+              desconsiderada(s)
+            </span>
+            {dataQuality.chartLimited && (
+              <span>
+                Gráfico limitado aos últimos 60 dias; totais preservados
+              </span>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

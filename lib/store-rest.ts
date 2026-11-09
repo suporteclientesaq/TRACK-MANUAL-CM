@@ -12,10 +12,12 @@ import {
   toClient,
   toEvent,
   toLead,
+  withDispatchLease,
   type Row,
   type StoreImpl,
 } from "./store-rows";
 import type { EventRow } from "./types";
+import { mergeLeadUpdate } from "./lead-tracking";
 
 /**
  * Modo online pela API do Supabase (PostgREST), sem string de conexão do Postgres.
@@ -34,7 +36,11 @@ export function restConfig(): RestConfig | null {
     process.env.NEXT_PUBLIC_SUPABASE_URL ||
     ""
   ).trim();
-  const key = (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || "").trim();
+  const key = (
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_SERVICE_KEY ||
+    ""
+  ).trim();
   if (!raw || !key || !/^https?:\/\//i.test(raw)) return null;
   const url = raw.replace(/\/+$/, "");
   let hostname = "";
@@ -44,7 +50,8 @@ export function restConfig(): RestConfig | null {
     return null;
   }
   let base = url;
-  if (/\.supabase\.(co|in|red)$/i.test(hostname) && !/\/rest\/v1$/.test(url)) base = `${url}/rest/v1`;
+  if (/\.supabase\.(co|in|red)$/i.test(hostname) && !/\/rest\/v1$/.test(url))
+    base = `${url}/rest/v1`;
   return { base, key, url };
 }
 
@@ -53,13 +60,17 @@ export function restConfig(): RestConfig | null {
  * anon / service_role) e as novas (sb_publishable_… / sb_secret_…). O painel
  * precisa da chave de serviço; com a pública, a RLS esconde tudo e nada grava.
  */
-export function keyRole(key: string): "service_role" | "anon" | "secret" | "publishable" | "unknown" {
+export function keyRole(
+  key: string,
+): "service_role" | "anon" | "secret" | "publishable" | "unknown" {
   if (key.startsWith("sb_secret_")) return "secret";
   if (key.startsWith("sb_publishable_")) return "publishable";
   const parts = key.split(".");
   if (parts.length === 3) {
     try {
-      const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as { role?: string };
+      const payload = JSON.parse(
+        Buffer.from(parts[1], "base64url").toString("utf8"),
+      ) as { role?: string };
       if (payload.role === "service_role") return "service_role";
       if (payload.role === "anon") return "anon";
     } catch {
@@ -74,7 +85,16 @@ export class RestError extends Error {
   code: string;
   details: string;
   hint: string;
-  constructor(status: number, body: { code?: string; message?: string; details?: string; hint?: string } | null, fallback: string) {
+  constructor(
+    status: number,
+    body: {
+      code?: string;
+      message?: string;
+      details?: string;
+      hint?: string;
+    } | null,
+    fallback: string,
+  ) {
     super(body?.message || fallback);
     this.name = "RestError";
     this.status = status;
@@ -97,14 +117,22 @@ type Result<T> = { data: T; count: number | null; status: number };
 
 function cfg(): RestConfig {
   const c = restConfig();
-  if (!c) throw new Error("SUPABASE_DATABASE_URL / SUPABASE_SERVICE_ROLE_KEY não configuradas.");
+  if (!c)
+    throw new Error(
+      "SUPABASE_DATABASE_URL / SUPABASE_SERVICE_ROLE_KEY não configuradas.",
+    );
   return c;
 }
 
-async function req<T = unknown>(method: string, table: string, o: ReqOptions = {}): Promise<Result<T>> {
+async function req<T = unknown>(
+  method: string,
+  table: string,
+  o: ReqOptions = {},
+): Promise<Result<T>> {
   const c = cfg();
   const qs = new URLSearchParams();
-  for (const [k, v] of Object.entries(o.query || {})) if (v !== undefined) qs.append(k, String(v));
+  for (const [k, v] of Object.entries(o.query || {}))
+    if (v !== undefined) qs.append(k, String(v));
   const url = `${c.base}/${table}${qs.size ? "?" + qs.toString() : ""}`;
   const headers: Record<string, string> = {
     apikey: c.key,
@@ -123,7 +151,12 @@ async function req<T = unknown>(method: string, table: string, o: ReqOptions = {
   });
   const text = method === "HEAD" ? "" : await res.text();
   if (!res.ok) {
-    let body: { code?: string; message?: string; details?: string; hint?: string } | null = null;
+    let body: {
+      code?: string;
+      message?: string;
+      details?: string;
+      hint?: string;
+    } | null = null;
     try {
       body = text ? JSON.parse(text) : null;
     } catch {
@@ -141,15 +174,43 @@ async function req<T = unknown>(method: string, table: string, o: ReqOptions = {
   return { data, count, status: res.status };
 }
 
-const get = <T = Row[]>(table: string, query: Query, prefer?: string[]) => req<T>("GET", table, { query, prefer });
+const get = <T = Row[]>(table: string, query: Query, prefer?: string[]) =>
+  req<T>("GET", table, { query, prefer });
+
+/** Follow the actual returned range, including projects with a lower PostgREST max-rows. */
+async function getAll(table: string, query: Query): Promise<Row[]> {
+  const rows: Row[] = [];
+  const start = Number(query.offset || 0);
+  const requested =
+    query.limit === undefined
+      ? Number.POSITIVE_INFINITY
+      : Math.max(0, Number(query.limit));
+  while (rows.length < requested) {
+    const limit = Math.min(200, requested - rows.length);
+    const page = await get<Row[]>(
+      table,
+      { ...query, limit, offset: start + rows.length },
+      ["count=exact"],
+    );
+    if (!page.data.length) break;
+    rows.push(...page.data);
+    if (page.count !== null && start + rows.length >= page.count) break;
+    if (page.count === null && page.data.length < limit) break;
+  }
+  return rows;
+}
 
 async function count(table: string, query: Query): Promise<number> {
-  const r = await req("HEAD", table, { query: { ...query, select: "id" }, prefer: ["count=exact"] });
+  const r = await req("HEAD", table, {
+    query: { ...query, select: "id" },
+    prefer: ["count=exact"],
+  });
   return r.count ?? 0;
 }
 
 /** Valor entre aspas para os filtros do PostgREST (vírgula, ponto e parênteses são reservados). */
-const quote = (v: unknown) => `"${String(v).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+const quote = (v: unknown) =>
+  `"${String(v).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 const inList = (values: unknown[]) => `in.(${values.map(quote).join(",")})`;
 
 function toSql(v: unknown): unknown {
@@ -192,16 +253,19 @@ export const restStore: StoreImpl = {
   kind: "supabase-rest",
 
   async listClients() {
-    return (await get("clients", { select: "*", order: "name.asc" })).data.map(toClient).sort((a, b) =>
-      a.name.toLowerCase().localeCompare(b.name.toLowerCase())
-    );
+    return (await getAll("clients", { select: "*", order: "name.asc" }))
+      .map(toClient)
+      .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
   },
   async getClient(id) {
-    const r = (await get("clients", { select: "*", id: `eq.${id}`, limit: 1 })).data[0];
+    const r = (await get("clients", { select: "*", id: `eq.${id}`, limit: 1 }))
+      .data[0];
     return r ? toClient(r) : null;
   },
   async getClientByWebhookKey(key) {
-    const r = (await get("clients", { select: "*", webhook_key: `eq.${key}`, limit: 1 })).data[0];
+    const r = (
+      await get("clients", { select: "*", webhook_key: `eq.${key}`, limit: 1 })
+    ).data[0];
     return r ? toClient(r) : null;
   },
   async insertClient(row) {
@@ -230,23 +294,44 @@ export const restStore: StoreImpl = {
     return id;
   },
   async updateClient(id, patch) {
-    const keys = Object.keys(patch).filter((k) => (CLIENT_COLS as readonly string[]).includes(k));
-    const body = pick({ ...patch, updated_at: nowIso() }, [...keys, "updated_at"]);
-    await req("PATCH", "clients", { query: { id: `eq.${id}` }, body, prefer: ["return=minimal"] });
+    const keys = Object.keys(patch).filter((k) =>
+      (CLIENT_COLS as readonly string[]).includes(k),
+    );
+    const body = pick({ ...patch, updated_at: nowIso() }, [
+      ...keys,
+      "updated_at",
+    ]);
+    await req("PATCH", "clients", {
+      query: { id: `eq.${id}` },
+      body,
+      prefer: ["return=minimal"],
+    });
   },
 
   async getLead(id) {
-    const r = (await get("leads", { select: "*", id: `eq.${id}`, limit: 1 })).data[0];
+    const r = (await get("leads", { select: "*", id: `eq.${id}`, limit: 1 }))
+      .data[0];
     return r ? toLead(r) : null;
   },
   async findLead(clientId, phone) {
-    const r = (await get("leads", { select: "*", client_id: `eq.${clientId}`, phone: `eq.${phone}`, limit: 1 })).data[0];
+    const r = (
+      await get("leads", {
+        select: "*",
+        client_id: `eq.${clientId}`,
+        phone: `eq.${phone}`,
+        limit: 1,
+      })
+    ).data[0];
     return r ? toLead(r) : null;
   },
   async findLeadsByPhones(clientId, phones) {
     const out = [];
     for (const part of chunks([...new Set(phones)], IN_CHUNK)) {
-      const rows = (await get("leads", { select: "*", client_id: `eq.${clientId}`, phone: inList(part) })).data;
+      const rows = await getAll("leads", {
+        select: "*",
+        client_id: `eq.${clientId}`,
+        phone: inList(part),
+      });
       out.push(...rows.map(toLead));
     }
     return out;
@@ -254,22 +339,50 @@ export const restStore: StoreImpl = {
   async listLeads(f) {
     const conds: string[] = [];
     if (f.clientId) conds.push(`client_id.eq.${quote(f.clientId)}`);
-    if (f.filter === "com-ctwa") conds.push("ctwa_clid.not.is.null", 'ctwa_clid.neq.""');
-    if (f.filter === "sem-ctwa") conds.push('or(ctwa_clid.is.null,ctwa_clid.eq."")');
+    if (f.filter === "com-ctwa")
+      conds.push(
+        "ctwa_clid.not.is.null",
+        'ctwa_clid.neq.""',
+        "ctwa_clid.not.like.ctwa\\_ad\\_*",
+        "ctwa_clid.not.like.ad\\_*",
+      );
+    if (f.filter === "sem-ctwa")
+      conds.push(
+        'or(ctwa_clid.is.null,ctwa_clid.eq."",ctwa_clid.like.ctwa\\_ad\\_*,ctwa_clid.like.ad\\_*)',
+      );
     const text = (f.q || "").trim();
     if (text) {
       const digits = text.replace(/\D/g, "");
-      const parts = [`name.ilike.${quote(`*${text.replace(/\*/g, " ")}*`)}`, `source_id.eq.${quote(digits || "-")}`];
+      const parts = [
+        `name.ilike.${quote(`*${text.replace(/\*/g, " ")}*`)}`,
+        `source_id.eq.${quote(digits || "-")}`,
+      ];
       if (digits.length >= 4) parts.push(`phone.like.${quote(`*${digits}*`)}`);
       conds.push(`or(${parts.join(",")})`);
     }
-    const query: Query = { select: "*", order: "updated_at.desc", limit: f.limit, offset: f.offset };
+    const query: Query = {
+      select: "*",
+      order: "updated_at.desc",
+      limit: f.limit,
+      offset: f.offset,
+    };
+    if (f.filter === "com-venda" || f.filter === "sem-venda") {
+      query.select = "*,sale_events:events(id)";
+      query["sale_events.event_name"] = "eq.Purchase";
+      query["sale_events.status"] = "eq.enviado";
+      query["sale_events.is_test"] = "eq.false";
+      query.sale_events = f.filter === "com-venda" ? "not.is.null" : "is.null";
+      if (f.clientId) query["sale_events.client_id"] = `eq.${f.clientId}`;
+    }
     if (conds.length) query.and = `(${conds.join(",")})`;
-    return (await get("leads", query)).data.map(toLead);
+    return (await getAll("leads", query)).map(toLead);
   },
   async insertLead(row) {
     const id = randomUUID();
-    await req("POST", "leads", { body: leadRow(row, id), prefer: ["return=minimal"] });
+    await req("POST", "leads", {
+      body: leadRow(row, id),
+      prefer: ["return=minimal"],
+    });
     return id;
   },
   async insertLeads(rows) {
@@ -284,9 +397,63 @@ export const restStore: StoreImpl = {
     return rows.length;
   },
   async updateLead(id, patch) {
-    const keys = Object.keys(patch).filter((k) => (LEAD_COLS as readonly string[]).includes(k));
-    const body = pick({ ...patch, updated_at: nowIso() }, [...keys, "updated_at"]);
-    await req("PATCH", "leads", { query: { id: `eq.${id}` }, body, prefer: ["return=minimal"] });
+    if (patch.client_id !== undefined) {
+      const existing = await restStore.getLead(id);
+      if (
+        existing &&
+        patch.client_id !== existing.client_id &&
+        (await restStore.listEventsForLead(id)).length
+      )
+        throw new Error(
+          "Não é possível mover um lead com histórico de eventos para outro cliente.",
+        );
+    }
+    const keys = Object.keys(patch).filter((k) =>
+      (LEAD_COLS as readonly string[]).includes(k),
+    );
+    const body = pick({ ...patch, updated_at: nowIso() }, [
+      ...keys,
+      "updated_at",
+    ]);
+    await req("PATCH", "leads", {
+      query: { id: `eq.${id}` },
+      body,
+      prefer: ["return=minimal"],
+    });
+  },
+  async updateLeadWithRaw(id, patch, incomingRaw) {
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const current = (
+        await get("leads", {
+          select: "*",
+          id: `eq.${id}`,
+          limit: 1,
+        })
+      ).data[0];
+      if (!current) throw new Error("Lead não encontrado.");
+      const at = new Date(
+        Math.max(Date.now(), Date.parse(String(current.updated_at)) + 1),
+      ).toISOString();
+      const full = mergeLeadUpdate(current, patch, incomingRaw, at);
+      const keys = Object.keys(full).filter(
+        (key) =>
+          (LEAD_COLS as readonly string[]).includes(key) && key !== "raw",
+      );
+      const body = { ...pick(full, keys), raw: full.raw, updated_at: at };
+      const result = await req<Row[]>("PATCH", "leads", {
+        query: {
+          id: `eq.${id}`,
+          updated_at: `eq.${current.updated_at}`,
+          select: "id",
+        },
+        body,
+        prefer: ["return=representation"],
+      });
+      if (result.data.length === 1) return;
+    }
+    throw new Error(
+      "A conversa recebeu muitas atualizações simultâneas. Tente novamente.",
+    );
   },
   async updateLeadsBulk(rows) {
     if (rows.length === 0) return 0;
@@ -297,13 +464,22 @@ export const restStore: StoreImpl = {
       const ids = part.map((r) => String(r.id));
       const base = new Map<string, Row>();
       for (const ip of chunks(ids, IN_CHUNK)) {
-        for (const r of (await get("leads", { select: "id,client_id,first_seen_at", id: inList(ip) })).data) base.set(String(r.id), r);
+        for (const r of (
+          await get("leads", {
+            select: "id,client_id,first_seen_at",
+            id: inList(ip),
+          })
+        ).data)
+          base.set(String(r.id), r);
       }
       const body = part
         .filter((r) => base.has(String(r.id)))
         .map((r) => {
           const b = base.get(String(r.id))!;
-          const full = pick({ ...r, client_id: b.client_id, first_seen_at: b.first_seen_at }, cols);
+          const full = pick(
+            { ...r, client_id: b.client_id, first_seen_at: b.first_seen_at },
+            cols,
+          );
           full.country = r.country || "br";
           full.updated_at = r.updated_at || nowIso();
           return full;
@@ -318,11 +494,20 @@ export const restStore: StoreImpl = {
     return rows.length;
   },
   async deleteLead(id) {
-    await req("DELETE", "leads", { query: { id: `eq.${id}` }, prefer: ["return=minimal"] });
+    await req("DELETE", "leads", {
+      query: { id: `eq.${id}` },
+      prefer: ["return=minimal"],
+    });
   },
 
   async listEventsForLead(leadId) {
-    return (await get("events", { select: "*", lead_id: `eq.${leadId}`, order: "created_at.desc" })).data.map(toEvent);
+    return (
+      await getAll("events", {
+        select: "*",
+        lead_id: `eq.${leadId}`,
+        order: "created_at.desc",
+      })
+    ).map(toEvent);
   },
   async listEvents(f) {
     const query: Query = {
@@ -331,8 +516,9 @@ export const restStore: StoreImpl = {
       limit: f.limit,
       offset: f.offset,
     };
-    if (f.status === "enviado" || f.status === "erro") query.status = `eq.${f.status}`;
-    const rows = (await get("events", query)).data;
+    if (f.status === "enviado" || f.status === "erro")
+      query.status = `eq.${f.status}`;
+    const rows = await getAll("events", query);
     return rows.map((r) => {
       const lead = (r.leads || null) as Row | null;
       const client = (r.clients || null) as Row | null;
@@ -345,11 +531,35 @@ export const restStore: StoreImpl = {
     });
   },
   async getEvent(id) {
-    const r = (await get("events", { select: "*", id: `eq.${id}`, limit: 1 })).data[0];
+    const r = (await get("events", { select: "*", id: `eq.${id}`, limit: 1 }))
+      .data[0];
     return r ? toEvent(r) : null;
   },
+  async getEventByExternalId(clientId, eventId) {
+    const row = (
+      await get("events", {
+        select: "*",
+        client_id: `eq.${clientId}`,
+        event_id: `eq.${eventId}`,
+        order: "created_at.desc",
+        limit: 1,
+      })
+    ).data[0];
+    return row ? toEvent(row) : null;
+  },
   async insertEvent(row) {
-    const id = randomUUID();
+    const previous = await restStore.getEventByExternalId(
+      String(row.client_id),
+      String(row.event_id),
+    );
+    if (previous) return previous.id;
+    const id = await restStore.getOrCreateSetting(
+      `conversion:${row.client_id}:${row.event_id}`,
+      randomUUID(),
+    );
+    const lead = await restStore.getLead(String(row.lead_id));
+    if (!lead || lead.client_id !== row.client_id)
+      throw new Error("O lead não pertence ao cliente do evento.");
     await req("POST", "events", {
       body: {
         id,
@@ -372,18 +582,61 @@ export const restStore: StoreImpl = {
         response: row.response ?? null,
         created_at: nowIso(),
       },
-      prefer: ["return=minimal"],
+      query: { on_conflict: "id" },
+      prefer: ["resolution=ignore-duplicates", "return=minimal"],
     });
     return id;
   },
+  async updateEvent(id, patch) {
+    const keys = Object.keys(patch).filter((key) =>
+      [
+        "status",
+        "http_status",
+        "events_received",
+        "fbtrace_id",
+        "error_message",
+        "response",
+      ].includes(key),
+    );
+    if (!keys.length) return;
+    await req("PATCH", "events", {
+      query: { id: `eq.${id}` },
+      body: pick(patch, keys),
+      prefer: ["return=minimal"],
+    });
+  },
+  async claimEvent(id) {
+    const row = await restStore.getEvent(id);
+    if (!row) return false;
+    const cutoff = new Date(Date.now() - 120_000).toISOString();
+    const result = await req<Row[]>("PATCH", "events", {
+      query: {
+        id: `eq.${id}`,
+        or: `(status.in.(pendente,erro,incerto),and(status.eq.enviando,response->request_context->>dispatch_started_at.lt.${cutoff}))`,
+        select: "id",
+      },
+      body: { status: "enviando", response: withDispatchLease(row.response) },
+      prefer: ["return=representation"],
+    });
+    return result.data.length === 1;
+  },
   async countSent(leadId, eventName) {
-    return count("events", { lead_id: `eq.${leadId}`, event_name: `eq.${eventName}`, ...SENT });
+    return count("events", {
+      lead_id: `eq.${leadId}`,
+      event_name: `eq.${eventName}`,
+      ...SENT,
+    });
   },
   async sentForLeads(leadIds) {
     const out = new Map<string, EventRow[]>();
     if (leadIds.length === 0) return out;
     for (const part of chunks([...new Set(leadIds)], IN_CHUNK)) {
-      const rows = (await get("events", { select: "*", ...SENT, lead_id: inList(part), order: "created_at.asc" })).data;
+      const rows = await getAll("events", {
+        select: "*",
+        ...SENT,
+        lead_id: inList(part),
+        order: "created_at.asc",
+      });
       for (const r of rows) {
         const ev = toEvent(r);
         out.set(ev.lead_id, [...(out.get(ev.lead_id) || []), ev]);
@@ -392,8 +645,15 @@ export const restStore: StoreImpl = {
     return out;
   },
   async recentSent(sinceIso) {
-    const rows = (await get("events", { select: "event_name,value", ...SENT, created_at: `gte.${sinceIso}`, limit: 5000 })).data;
-    return rows.map((r) => ({ event_name: String(r.event_name), value: num(r.value) }));
+    const rows = await getAll("events", {
+      select: "event_name,value",
+      ...SENT,
+      created_at: `gte.${sinceIso}`,
+    });
+    return rows.map((r) => ({
+      event_name: String(r.event_name),
+      value: num(r.value),
+    }));
   },
   async contentNames(clientId) {
     const rows = (
@@ -418,14 +678,24 @@ export const restStore: StoreImpl = {
   },
 
   async getAd(clientId, adId) {
-    const r = (await get("ad_cache", { select: "*", client_id: `eq.${clientId}`, ad_id: `eq.${adId}`, limit: 1 })).data[0];
+    const r = (
+      await get("ad_cache", {
+        select: "*",
+        client_id: `eq.${clientId}`,
+        ad_id: `eq.${adId}`,
+        limit: 1,
+      })
+    ).data[0];
     return r ? toAd(r) : null;
   },
   async adsFor(pairs) {
     const out = new Map();
     const adIds = [...new Set(pairs.map((p) => p.adId))];
     for (const part of chunks(adIds, IN_CHUNK)) {
-      for (const r of (await get("ad_cache", { select: "*", ad_id: inList(part) })).data) {
+      for (const r of await getAll("ad_cache", {
+        select: "*",
+        ad_id: inList(part),
+      })) {
         const ad = toAd(r);
         out.set(`${ad.client_id}:${ad.ad_id}`, ad);
       }
@@ -433,7 +703,15 @@ export const restStore: StoreImpl = {
     return out;
   },
   async upsertAd(row) {
-    const body = pick({ ...row, fetched_at: nowIso() }, ["client_id", "ad_id", ...AD_COLS, "fetched_at"]);
+    const cols = AD_COLS.filter(
+      (col) => Object.hasOwn(row, col) && row[col] !== undefined,
+    );
+    const body = pick({ ...row, fetched_at: nowIso() }, [
+      "client_id",
+      "ad_id",
+      ...cols,
+      "fetched_at",
+    ]);
     await req("POST", "ad_cache", {
       query: { on_conflict: "client_id,ad_id" },
       body,
@@ -442,8 +720,21 @@ export const restStore: StoreImpl = {
   },
 
   async getSetting(key) {
-    const r = (await get("settings", { select: "value", key: `eq.${key}`, limit: 1 })).data[0];
+    const r = (
+      await get("settings", { select: "value", key: `eq.${key}`, limit: 1 })
+    ).data[0];
     return r ? String(r.value) : null;
+  },
+  async getOrCreateSetting(key, value) {
+    await req("POST", "settings", {
+      query: { on_conflict: "key" },
+      body: { key, value },
+      prefer: ["resolution=ignore-duplicates", "return=minimal"],
+    });
+    const winner = await restStore.getSetting(key);
+    if (winner === null)
+      throw new Error("Não foi possível criar a configuração.");
+    return winner;
   },
   async setSettings(values) {
     const body = Object.entries(values).map(([key, value]) => ({ key, value }));
@@ -456,7 +747,11 @@ export const restStore: StoreImpl = {
   },
 
   async stats() {
-    const [clients, leads, events] = await Promise.all([count("clients", {}), count("leads", {}), count("events", {})]);
+    const [clients, leads, events] = await Promise.all([
+      count("clients", {}),
+      count("leads", {}),
+      count("events", {}),
+    ]);
     return { clients, leads, events, dbBytes: null };
   },
   isUniqueViolation(e) {
@@ -474,21 +769,38 @@ export function explainRestError(err: unknown, c: RestConfig): string {
     }
   })();
   if (err instanceof RestError) {
-    if (err.code === "PGRST205" || err.code === "42P01" || (err.status === 404 && /relation|table|schema cache/i.test(err.message))) {
+    if (
+      err.code === "PGRST205" ||
+      err.code === "42P01" ||
+      (err.status === 404 && /relation|table|schema cache/i.test(err.message))
+    ) {
       return "TABELAS_FALTANDO";
     }
-    if (err.status === 401 || err.status === 403 || /JWT|jwt|invalid.*key|permission denied/i.test(err.message)) {
+    if (
+      err.status === 401 ||
+      err.status === 403 ||
+      /JWT|jwt|invalid.*key|permission denied/i.test(err.message)
+    ) {
       return `O Supabase recusou a chave (${err.message}). A variável SUPABASE_SERVICE_ROLE_KEY precisa ser a chave "service_role" do projeto ${host} (Project Settings > API Keys). A extensão do Supabase no Netlify preenche isso sozinha; se você editou a variável na mão, apague e deixe a extensão recriar.`;
     }
     if (err.status === 404) {
       return `A API do Supabase não respondeu no endereço ${c.base} (404). Confira a variável SUPABASE_DATABASE_URL: tem de ser https://<código do projeto>.supabase.co.`;
     }
-    if (err.status === 540 || err.status === 503 || /paused|pausado/i.test(err.message)) {
+    if (
+      err.status === 540 ||
+      err.status === 503 ||
+      /paused|pausado/i.test(err.message)
+    ) {
       return `O projeto ${host} parece pausado no Supabase (projetos gratuitos pausam depois de uma semana sem uso). Abra o projeto no Supabase e clique em Restore.`;
     }
     return `A API do Supabase (${host}) devolveu um erro: ${err.message}${err.hint ? ` (${err.hint})` : ""}`;
   }
-  const e = err as { name?: string; code?: string; message?: string; cause?: { code?: string; message?: string } };
+  const e = err as {
+    name?: string;
+    code?: string;
+    message?: string;
+    cause?: { code?: string; message?: string };
+  };
   const cause = e?.cause?.code || e?.code || "";
   if (e?.name === "TimeoutError" || e?.name === "AbortError") {
     return `A API do Supabase (${host}) não respondeu. Confira se o projeto está ativo (Restore, se estiver pausado) e se o endereço em SUPABASE_DATABASE_URL está certo.`;
@@ -499,7 +811,9 @@ export function explainRestError(err: unknown, c: RestConfig): string {
   return `Não consegui falar com a API do Supabase (${host}): ${e?.cause?.message || e?.message || String(err)}`;
 }
 
-const g = globalThis as unknown as { __trackRestCheck?: { base: string; at: number; problem: string | null } };
+const g = globalThis as unknown as {
+  __trackRestCheck?: { base: string; at: number; problem: string | null };
+};
 
 /**
  * Testa a API e as tabelas. Devolve null quando está tudo certo, "TABELAS_FALTANDO"
@@ -507,7 +821,8 @@ const g = globalThis as unknown as { __trackRestCheck?: { base: string; at: numb
  */
 export async function checkRest(): Promise<string | null> {
   const c = restConfig();
-  if (!c) return "SUPABASE_DATABASE_URL / SUPABASE_SERVICE_ROLE_KEY não configuradas.";
+  if (!c)
+    return "SUPABASE_DATABASE_URL / SUPABASE_SERVICE_ROLE_KEY não configuradas.";
   const role = keyRole(c.key);
   if (role === "anon" || role === "publishable") {
     return `A variável SUPABASE_SERVICE_ROLE_KEY está com a chave pública (${role === "anon" ? "anon" : "publishable"}) do projeto, e com ela o painel não consegue gravar nada. Ela precisa ser a chave "service_role" (Project Settings > API Keys > service_role, em "Legacy API keys") ou uma chave "secret". A extensão do Supabase no Netlify preenche isso sozinha; se a variável foi editada na mão, apague e deixe a extensão recriar.`;
@@ -516,7 +831,12 @@ export async function checkRest(): Promise<string | null> {
   const now = Date.now();
   // Sucesso vale para sempre; erro vale 15 s; "faltam tabelas" é testado a cada acesso,
   // para a tela mudar assim que a pessoa rodar o SQL e recarregar.
-  if (cached && cached.base === c.base && cached.problem !== "TABELAS_FALTANDO" && (cached.problem === null || now - cached.at < 15_000)) {
+  if (
+    cached &&
+    cached.base === c.base &&
+    cached.problem !== "TABELAS_FALTANDO" &&
+    (cached.problem === null || now - cached.at < 15_000)
+  ) {
     return cached.problem;
   }
   let problem: string | null = null;

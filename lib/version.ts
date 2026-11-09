@@ -1,16 +1,37 @@
 /**
  * Informações de versão e build do Track Manual.
  */
-export const APP_VERSION = "2.6.2";
-export const APP_RELEASE_NAME = "Track Manual Pro — Inbox em Tempo Real WhatsApp Web & Resgate Profundo de Nomes";
-export const APP_BUILD_DATE = "08/11/2026";
+export const APP_VERSION = "3.0.1";
+export const APP_RELEASE_NAME = "Track Manual Flow — Atendimento e conversões";
+export const APP_BUILD_DATE = "09/11/2026";
 export const APP_UPDATE_STATUS = "Atualizado";
 
 export const APP_CHANGELOG = [
   {
+    version: "3.0.1",
+    date: "09/11/2026",
+    title: "CTWA e seleção de campanhas",
+    highlights: [
+      "Campanhas ativas por padrão, seleção por campanha e paginação completa com avisos de limite",
+      "CTWA exige origem explícita e Página/WABA; referência de clique preservada em conjunto",
+      "Proteção contra mistura de anúncios, cliques antigos e recuperação por telefone de outro contexto",
+    ],
+  },
+  {
+    version: "3.0.0",
+    date: "09/11/2026",
+    title: "Workspace Flow",
+    highlights: [
+      "Nova navegação, inbox responsivo e funil com etapas persistidas",
+      "Conversões conferidas, idempotência e indicadores sem eventos de teste",
+      "Proteção de sessões, backup consistente e credenciais por canal",
+    ],
+  },
+  {
     version: "2.6.2",
     date: "08/11/2026",
-    title: "Inbox em Tempo Real Estilo WhatsApp Web e Resgate Profundo de Nomes",
+    title:
+      "Inbox em Tempo Real Estilo WhatsApp Web e Resgate Profundo de Nomes",
     highlights: [
       "Extração e live polling de mensagens acelerado para 2s em tempo real estilo WhatsApp Web",
       "Novo botão de 'Sincronizar' no topo da Central de Conversas para atualização instantânea e resgate forçado",
@@ -34,7 +55,8 @@ export const APP_CHANGELOG = [
   {
     version: "2.6.0",
     date: "08/11/2026",
-    title: "Favicon Customizável, Recuperação de Nomes WhatsApp, Auto-Limpeza e Correção de Seleção",
+    title:
+      "Favicon Customizável, Recuperação de Nomes WhatsApp, Auto-Limpeza e Correção de Seleção",
     highlights: [
       "Favicon customizável nas Configurações com Upload de imagem, Preview em tempo real e 4 Presets estilizados",
       "Auto-limpeza de mídias pesadas antigas com chave Liga/Desliga e botão de execução imediata",
@@ -49,7 +71,8 @@ export const APP_CHANGELOG = [
   {
     version: "2.5.0",
     date: "08/11/2026",
-    title: "Envio de Mídia, Notificações Sonoras, Atalhos de Barra e Exportação Executiva",
+    title:
+      "Envio de Mídia, Notificações Sonoras, Atalhos de Barra e Exportação Executiva",
     highlights: [
       "Envio de fotos, comprovantes e arquivos PDF diretamente pelo painel de conversas",
       "Notificação sonora Web Audio e alerta no título da aba em novas mensagens de WhatsApp",

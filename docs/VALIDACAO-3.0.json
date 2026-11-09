@@ -1,0 +1,103 @@
+{
+  "projeto": "suporteclientesaq/TRACK-MANUAL-CM",
+  "versao": "3.0.1",
+  "base_commit": "7a42f374440688273d15c6beb5c946f3e24f5ca8",
+  "branch_local": "codex/leona-flow-redesign",
+  "validado_em_utc": "2026-11-09T12:48:43.393064+00:00",
+  "ambiente": {
+    "node": "24.22.1",
+    "next": "16.4.5",
+    "dados": "Fictícios; sem envios reais Meta ou WhatsApp"
+  },
+  "unitarios": {
+    "aprovados": 235,
+    "arquivos": 20,
+    "falhas": 0
+  },
+  "typescript": {
+    "comando": "npm run typecheck",
+    "resultado": "aprovado; next typegen + tsc sem emissão"
+  },
+  "build": {
+    "comando": "npm run build",
+    "resultado": "aprovado com checagem de tipos ativa"
+  },
+  "dependencias": {
+    "info": 0,
+    "low": 0,
+    "moderate": 0,
+    "high": 0,
+    "critical": 0,
+    "total": 0
+  },
+  "navegador_producao": {
+    "checks": [
+      "Rascunhos separados por contato e destinatário correto",
+      "Anotação salva pela interface e confirmada no SQLite",
+      "Venda sem credenciais permanece bloqueada na conferência",
+      "Movimentação de etapa persiste após recarregar e preserva mensagens",
+      "Tema e cor aplicam e persistem no navegador",
+      "Preferências de notificação salvas de fato",
+      "Exportação completa dos 24 contatos com resposta CSV autenticada",
+      "Backup baixado e restaurado com todos os registros confirmados",
+      "APIs anônimas retornam401 e sessão desconhecida404",
+      "Celular390px: composer visível, lista/conversa/detalhes e menu funcionam",
+      "Todas as telas principais e cadastros respondem200 sem erro de página"
+    ],
+    "errors": [],
+    "consoleErrors": []
+  },
+  "capturas_producao_e_mobile": {
+    "statuses": {
+      "conversas": 200,
+      "dashboard": 200,
+      "leads": 200,
+      "funil": 200,
+      "whatsapp": 200,
+      "configuracoes": 200
+    },
+    "mobileWidths": {
+      "/dashboard": {
+        "body": 390,
+        "document": 390,
+        "viewport": 390
+      },
+      "/funil": {
+        "body": 390,
+        "document": 390,
+        "viewport": 390
+      },
+      "/": {
+        "body": 390,
+        "document": 390,
+        "viewport": 390
+      },
+      "/whatsapp": {
+        "body": 390,
+        "document": 390,
+        "viewport": 390
+      },
+      "/configuracoes": {
+        "body": 390,
+        "document": 390,
+        "viewport": 390
+      }
+    },
+    "errors": []
+  },
+  "github_origem": "Não alterado; conexão continentalstudio01-a11y com push=false",
+  "integracoes_externas": "Fluxos adicionais usam Graph local simulado; Meta/WhatsApp e bancos remotos reais não exercitados. Homologação necessária.",
+  "ctwa_e_campanhas_producao_graph_simulado": {
+    "checks": [
+      "Catálogo completo com 4 campanhas; tabela padrão mostra apenas as 2 ativas, mesmo sem contatos",
+      "Seleção de campanha específica filtra resultados e permanece após recarregar",
+      "Navegador → ação → Graph simulado → SQLite: sincroniza só a campanha selecionada; status do anúncio não altera status da campanha",
+      "Alternar para pausadas limpa seleção incompatível e exibe apenas campanhas pausadas",
+      "Todos os status inclui ativas, pausadas e arquivadas sem alterar indicadores gerais",
+      "Filtros e seleção de campanhas funcionam em 390px sem overflow horizontal",
+      "CTWA real na prévia sem Página/WABA fica bloqueado, sem troca silenciosa para telefone",
+      "Prévia com Página válida conserva CTWA, ID correto, canal WhatsApp e business_messaging; nenhum envio externo executado"
+    ],
+    "errors": []
+  }
+}
