@@ -1371,24 +1371,6 @@ export async function disconnectWahaAction(opts: {
   return wahaLogout(opts);
 }
 
-export async function syncWahaChatsAction(opts: {
-  serverUrl: string;
-  apiKey?: string;
-  sessionName: string;
-  clientId: string;
-}): Promise<{ ok: boolean; syncedCount: number; error?: string }> {
-  await requireAuth();
-  const { wahaSyncLiveChats } = await import("@/lib/waha");
-  return wahaSyncLiveChats(
-    {
-      serverUrl: opts.serverUrl,
-      apiKey: opts.apiKey,
-      sessionName: opts.sessionName,
-    },
-    opts.clientId,
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Conexão WhatsApp Nativa / Direta (Baileys Integrado no Track Manual)
 // ---------------------------------------------------------------------------

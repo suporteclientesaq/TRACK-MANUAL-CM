@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import Link from "next/link";
 import {
   ArrowUpRight,
@@ -84,6 +84,19 @@ export function ChannelPanel({
     clients[0]?.configuration.sessionName || "default",
   );
   const [key, setKey] = useState("");
+  const [useDefaults, setUseDefaults] = useState(
+    !!clients[0]?.configuration.managedByEnvironment,
+  );
+  const sequence = useRef(0);
+  const operationBusy = useRef(false);
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const draft =
+    provider !== configs[selected]?.provider ||
+    useDefaults !== !!configs[selected]?.managedByEnvironment ||
+    (!useDefaults &&
+      (url !== configs[selected]?.serverUrl ||
+        session !== configs[selected]?.sessionName));
   const [status, setStatus] = useState<ChannelStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -95,42 +108,47 @@ export function ChannelPanel({
     setUrl(configuration?.serverUrl || "");
     setSession(configuration?.sessionName || "default");
     setKey("");
+    setUseDefaults(!!configuration?.managedByEnvironment);
+    sequence.current++;
     setStatus(null);
     setNotice(null);
   }, [selected]);
   useEffect(() => {
-    if (!selected) return;
+    if (!selected || draft) return;
     let active = true;
     let pending = false;
     const load = async () => {
-      if (pending || document.hidden) return;
+      if (pending || document.hidden || operationBusy.current) return;
       pending = true;
+      const version = sequence.current;
       try {
         const result = await inspectChannelAction(selected);
-        if (active)
-          setStatus((previous) => ({
-            ...result,
-            qrcode:
-              result.qrcode ||
-              (result.state === "connecting" ? previous?.qrcode || null : null),
-          }));
+        if (
+          active &&
+          version === sequence.current &&
+          selectedRef.current === selected
+        )
+          setStatus(result);
       } catch {
-        if (active)
+        if (active && version === sequence.current)
           setNotice("Não foi possível atualizar o canal. Tente novamente.");
       } finally {
         pending = false;
       }
     };
     void load();
-    const timer = setInterval(() => void load(), 8000);
+    const timer = setInterval(() => void load(), 5000);
     return () => {
       active = false;
       clearInterval(timer);
     };
-  }, [selected]);
+  }, [selected, draft]);
   const connect = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (busy) return;
+    if (operationBusy.current) return;
+    operationBusy.current = true;
+    const request = ++sequence.current;
+    const target = selected;
     setBusy(true);
     setNotice(null);
     try {
@@ -139,7 +157,10 @@ export function ChannelPanel({
         serverUrl: url,
         sessionName: session,
         apiKey: key,
+        useServerDefaults: provider === "waha" && useDefaults,
       });
+      if (request !== sequence.current || target !== selectedRef.current)
+        return;
       setStatus(result);
       if (result.ok) {
         setConfigs((previous) => ({
@@ -148,7 +169,15 @@ export function ChannelPanel({
             provider,
             serverUrl: url,
             sessionName: session,
-            hasApiKey: !!key || !!previous[selected]?.hasApiKey,
+            hasApiKey:
+              !!key ||
+              useDefaults ||
+              (previous[selected]?.provider === provider &&
+                previous[selected]?.serverUrl === url &&
+                !!previous[selected]?.hasApiKey),
+            managedByEnvironment: provider === "waha" && useDefaults,
+            serverDefaultsAvailable:
+              previous[selected]?.serverDefaultsAvailable,
           },
         }));
         setKey("");
@@ -163,16 +192,28 @@ export function ChannelPanel({
         error instanceof Error ? error.message : "Falha ao conectar o canal.",
       );
     } finally {
+      operationBusy.current = false;
       setBusy(false);
     }
   };
   const refresh = async () => {
+    if (operationBusy.current) return;
+    if (draft) {
+      setNotice("Salve a configuração antes de consultar o canal.");
+      return;
+    }
+    operationBusy.current = true;
+    const request = ++sequence.current;
+    const target = selected;
     setChecking(true);
     try {
-      setStatus(await inspectChannelAction(selected));
+      const result = await inspectChannelAction(target);
+      if (request === sequence.current && selectedRef.current === target)
+        setStatus(result);
     } catch {
       setNotice("Falha ao consultar o estado da conexão.");
     } finally {
+      operationBusy.current = false;
       setChecking(false);
     }
   };
@@ -183,6 +224,8 @@ export function ChannelPanel({
       )
     )
       return;
+    operationBusy.current = true;
+    sequence.current++;
     setBusy(true);
     try {
       const result = await disconnectChannelAction(selected);
@@ -193,7 +236,12 @@ export function ChannelPanel({
       );
       if (result.ok)
         setStatus({ ok: true, state: "close", qrcode: null, phone: null });
+    } catch {
+      setNotice(
+        "Não foi possível desconectar o canal. Consulte o estado antes de tentar novamente.",
+      );
     } finally {
+      operationBusy.current = false;
       setBusy(false);
     }
   };
@@ -254,6 +302,7 @@ export function ChannelPanel({
             {clients.map((item) => (
               <button
                 key={item.id}
+                disabled={busy || checking}
                 className={selected === item.id ? styles.activeClient : ""}
                 onClick={() => setSelected(item.id)}
               >
@@ -301,6 +350,11 @@ export function ChannelPanel({
                         : "Consultando"}
                 </span>
               </div>
+              {configs[selected]?.configurationError && (
+                <p className={styles.notice} role="status">
+                  {configs[selected].configurationError}
+                </p>
+              )}
               <form onSubmit={connect}>
                 <div className={styles.providers}>
                   {PROVIDERS.map((item) => (
@@ -310,7 +364,18 @@ export function ChannelPanel({
                       className={
                         provider === item.id ? styles.activeProvider : ""
                       }
-                      onClick={() => setProvider(item.id)}
+                      disabled={busy}
+                      onClick={() => {
+                        sequence.current++;
+                        setProvider(item.id);
+                        if (item.id !== "waha") setUseDefaults(false);
+                        setStatus(null);
+                        if (
+                          item.id === "waha" &&
+                          configs[selected]?.provider !== "waha"
+                        )
+                          setSession("default");
+                      }}
                     >
                       <item.icon size={21} />
                       <strong>{item.title}</strong>
@@ -342,50 +407,97 @@ export function ChannelPanel({
                   </div>
                 ) : (
                   <div className={styles.fields}>
-                    <label>
-                      Endereço do servidor
-                      <span>
-                        <Server size={14} />
-                        <input
-                          type="url"
-                          required
-                          placeholder="https://seu-servidor.exemplo.com"
-                          value={url}
-                          onChange={(event) => setUrl(event.target.value)}
-                        />
-                      </span>
-                    </label>
-                    <div>
-                      <label>
-                        Nome da sessão
-                        <input
-                          required
-                          value={session}
-                          onChange={(event) => setSession(event.target.value)}
-                          placeholder="minha-empresa"
-                        />
-                      </label>
-                      <label>
-                        Chave de acesso
-                        <span>
-                          <KeyRound size={14} />
+                    <p className={styles.serverHelp}>
+                      {provider === "waha" ? (
+                        <>
+                          O WAHA deve estar instalado e em execução na VPS. Estes
+                          dados ligam o Track Manual ao serviço. No WAHA Core,
+                          use a sessão <strong>default</strong>.
+                        </>
+                      ) : (
+                        "Informe o endereço da sua instalação Evolution, a sessão e a chave de API."
+                      )}
+                    </p>
+                    {provider === "waha" &&
+                      configs[selected]?.serverDefaultsAvailable && (
+                        <label className={styles.environmentOption}>
                           <input
-                            type="password"
-                            autoComplete="new-password"
-                            value={key}
-                            onChange={(event) => setKey(event.target.value)}
-                            placeholder={
-                              configs[selected]?.hasApiKey
-                                ? "Salva · preencha para substituir"
-                                : "Chave do provedor"
-                            }
+                            type="checkbox"
+                            checked={useDefaults}
+                            onChange={(event) => {
+                              sequence.current++;
+                              setUseDefaults(event.target.checked);
+                              setStatus(null);
+                            }}
                           />
-                        </span>
-                      </label>
-                    </div>
+                          Usar WAHA da VPS configurado no ambiente do servidor
+                        </label>
+                      )}
+                    {useDefaults && provider === "waha" ? (
+                      <p>
+                        O endereço, a sessão e a chave são lidos no servidor.
+                        Você não precisa digitar a chave aqui.
+                      </p>
+                    ) : (
+                      <>
+                        <label>
+                          Endereço do servidor
+                          <span>
+                            <Server size={14} />
+                            <input
+                              type="url"
+                              required
+                              placeholder="https://seu-servidor.exemplo.com"
+                              value={url}
+                              onChange={(event) => setUrl(event.target.value)}
+                            />
+                          </span>
+                        </label>
+                        <div>
+                          <label>
+                            Nome da sessão
+                            <input
+                              required
+                              value={session}
+                              onChange={(event) =>
+                                setSession(event.target.value)
+                              }
+                              placeholder={
+                                provider === "waha"
+                                  ? "default"
+                                  : "minha-empresa"
+                              }
+                            />
+                          </label>
+                          <label>
+                            {provider === "waha"
+                              ? "Chave de API do WAHA"
+                              : "Chave de acesso"}
+                            <span>
+                              <KeyRound size={14} />
+                              <input
+                                type="password"
+                                autoComplete="new-password"
+                                value={key}
+                                onChange={(event) => setKey(event.target.value)}
+                                placeholder={
+                                  configs[selected]?.provider === provider &&
+                                  configs[selected]?.serverUrl === url &&
+                                  configs[selected]?.hasApiKey
+                                    ? "Salva · preencha para substituir"
+                                    : "Chave do provedor"
+                                }
+                              />
+                            </span>
+                          </label>
+                        </div>
+                      </>
+                    )}
                     <p>
-                      <ShieldCheck size={12} />A chave é criptografada e não é
-                      devolvida ao navegador.
+                      <ShieldCheck size={12} />
+                      {provider === "waha" && useDefaults
+                        ? "A chave permanece no ambiente do servidor e não é devolvida ao navegador."
+                        : "A chave salva no banco é criptografada e não é devolvida ao navegador."}
                     </p>
                   </div>
                 )}

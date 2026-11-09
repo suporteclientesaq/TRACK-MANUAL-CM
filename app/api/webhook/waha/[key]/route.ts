@@ -81,19 +81,10 @@ async function handle(req: NextRequest, key: string) {
     );
   }
 
-  let contactName = parsed.lead.name;
-  if (
-    contactName &&
-    (/continental\s*studio/i.test(contactName) ||
-      contactName.toLowerCase() === client.name.toLowerCase())
-  ) {
-    contactName = null;
-  }
-
   const result = await ingestLead(
     client.id,
     {
-      name: contactName,
+      name: parsed.lead.name,
       phone: parsed.lead.phone,
       ctwa_clid: parsed.lead.ctwa_clid,
       source_id: parsed.lead.source_id,

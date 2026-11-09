@@ -128,11 +128,7 @@ const leadKey = (lead: Lead) =>
   `${lead.client_id}:${lead.phone.replace(/\D/g, "")}`;
 
 function displayName(lead: Lead) {
-  if (
-    lead.name?.trim() &&
-    lead.name.trim() !== "Sem Nome" &&
-    !/continental\s*studio/i.test(lead.name.trim())
-  )
+  if (lead.name?.trim() && lead.name.trim() !== "Sem Nome")
     return lead.name.trim();
   const raw = leadRaw(lead);
   for (const key of [
@@ -142,20 +138,7 @@ function displayName(lead: Lead) {
     "verifiedName",
     "name",
   ]) {
-    const val = stringValue(raw[key]).trim();
-    if (val && val !== "Sem Nome" && !/continental\s*studio/i.test(val))
-      return val;
-  }
-  const msgs = messagesFor(lead);
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    const m = msgs[i] as Record<string, unknown>;
-    if (!m.fromMe) {
-      for (const k of ["senderName", "pushName", "notifyName", "name"]) {
-        const val = stringValue(m[k]).trim();
-        if (val && val !== "Sem Nome" && !/continental\s*studio/i.test(val))
-          return val;
-      }
-    }
+    if (stringValue(raw[key]).trim()) return stringValue(raw[key]).trim();
   }
   return formatPhone(lead.phone);
 }

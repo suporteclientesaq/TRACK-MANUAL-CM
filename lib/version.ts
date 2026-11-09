@@ -1,12 +1,32 @@
 /**
  * Informações de versão e build do Track Manual.
  */
-export const APP_VERSION = "3.0.1";
+export const APP_VERSION = "3.0.3";
 export const APP_RELEASE_NAME = "Track Manual Flow — Atendimento e conversões";
 export const APP_BUILD_DATE = "09/11/2026";
 export const APP_UPDATE_STATUS = "Atualizado";
 
 export const APP_CHANGELOG = [
+  {
+    version: "3.0.3",
+    date: "09/11/2026",
+    title: "WAHA: VPS, sessões e QR",
+    highlights: [
+      "QR oficial em imagem, base64 e valor bruto; atualização automática sem reaproveitar QR antigo",
+      "Método PUT de sessão, erros de chave/início e recuperação de FAILED corrigidos",
+      "Vínculo WAHA por ambiente do servidor, sessão default no Core e configuração recuperável",
+    ],
+  },
+  {
+    version: "3.0.2",
+    date: "09/11/2026",
+    title: "Certificado SSL do Postgres",
+    highlights: [
+      "Suporte a certificado CA do provedor com verificação TLS e hostname preservados",
+      "Parâmetros da URI não removem a CA configurada e mudanças recriam o pool",
+      "Diagnósticos específicos por provedor, sem exigir Supabase para Postgres personalizado",
+    ],
+  },
   {
     version: "3.0.1",
     date: "09/11/2026",

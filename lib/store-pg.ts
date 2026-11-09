@@ -7,6 +7,7 @@ import {
   normalizeDatabaseUrl,
 } from "./db-url";
 import { SCHEMA_SQL } from "./schema-sql";
+import { buildPgConnectionOptions } from "./pg-connection";
 import {
   AD_COLS,
   CLIENT_COLS,
@@ -35,9 +36,9 @@ const SCHEMA = SCHEMA_SQL;
 
 const g = globalThis as unknown as {
   __trackPool?: Pool;
-  __trackPoolUrl?: string;
+  __trackPoolKey?: string;
   __trackSchema?: Promise<void>;
-  __trackCheck?: { url: string; at: number; problem: string | null };
+  __trackCheck?: { key: string; at: number; problem: string | null };
 };
 
 /**
@@ -69,69 +70,55 @@ export async function checkConnection(): Promise<string | null> {
   if (!url) return "DATABASE_URL não configurada.";
   const advice = databaseUrlAdvice(url);
   if (advice) return advice;
-  const c = g.__trackCheck;
   const now = Date.now();
-  if (c && c.url === url && (c.problem === null || now - c.at < 15_000))
+  let key: string;
+  try {
+    key = buildPgConnectionOptions(url).cacheKey;
+  } catch (error) {
+    return explainDatabaseError(error, url);
+  }
+  const c = g.__trackCheck;
+  if (c && c.key === key && (c.problem === null || now - c.at < 15_000))
     return c.problem;
   let problem: string | null = null;
   try {
-    await ready();
-    await pool().query("select 1");
+    const connection = await ready();
+    await connection.query("select 1");
   } catch (e) {
     problem = explainDatabaseError(e, url);
   }
-  g.__trackCheck = { url, at: now, problem };
+  g.__trackCheck = { key, at: now, problem };
   return problem;
 }
 
 function pool(): Pool {
   const url = databaseUrl();
   if (!url) throw new Error("DATABASE_URL não configurada.");
-  if (g.__trackPool && g.__trackPoolUrl === url) return g.__trackPool;
-  let host = "";
-  let sslmode = "";
-  try {
-    const u = new URL(url);
-    host = u.hostname;
-    sslmode = u.searchParams.get("sslmode") || "";
-  } catch {
-    host = "";
-  }
-  const local =
-    host === "localhost" ||
-    host === "127.0.0.1" ||
-    host === "::1" ||
-    host === "";
-  // Conexões remotas usam SSL por padrão.
-  // Provedores como db.yousecure.io, Supabase pooler, Neon, Render e VPS próprios usam
-  // certificados SSL auto-assinados ou cadeias customizadas.
-  // Por padrão, mantemos criptografia SSL ativa com rejectUnauthorized: false,
-  // a menos que o usuário exija explicitamente validação estrita via sslmode=verify-full.
-  const strictSsl = sslmode === "verify-full" || sslmode === "verify-ca";
-  const ssl =
-    sslmode === "disable" || local
-      ? undefined
-      : { rejectUnauthorized: strictSsl };
+  const { config, cacheKey } = buildPgConnectionOptions(url);
+  if (g.__trackPool && g.__trackPoolKey === cacheKey) return g.__trackPool;
+  const previousPool = g.__trackPool;
   g.__trackPool = new Pool({
-    connectionString: url,
-    ssl,
+    ...config,
     // Funções serverless abrem poucas conexões por instância; o Supabase tem limite.
     max: 3,
     idleTimeoutMillis: 30_000,
     // Abaixo do limite de 10 s das funções do Netlify, para o erro chegar à tela.
     connectionTimeoutMillis: 8_000,
   });
-  g.__trackPoolUrl = url;
+  g.__trackPoolKey = cacheKey;
   g.__trackSchema = undefined;
+  if (previousPool) void previousPool.end().catch(() => {});
   return g.__trackPool;
 }
 
 async function ready(): Promise<Pool> {
   const p = pool();
   if (!g.__trackSchema) {
-    g.__trackSchema = p.query(SCHEMA).then(() => undefined);
-    g.__trackSchema.catch(() => {
-      g.__trackSchema = undefined; // tenta de novo na próxima chamada
+    const schema = p.query(SCHEMA).then(() => undefined);
+    g.__trackSchema = schema;
+    void schema.catch(() => {
+      if (g.__trackPool === p && g.__trackSchema === schema)
+        g.__trackSchema = undefined;
     });
   }
   await g.__trackSchema;

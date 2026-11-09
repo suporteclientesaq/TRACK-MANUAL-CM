@@ -354,6 +354,23 @@
   line-height: 1.8;
   margin: 0;
 }
+.fields > .serverHelp {
+  display: block;
+}
+.fields .environmentOption {
+  flex-direction: row;
+  align-items: flex-start;
+  line-height: 1.6;
+  cursor: pointer;
+}
+.fields .environmentOption > input {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  padding: 0;
+  accent-color: var(--brand);
+}
 .formFooter {
   display: flex;
   align-items: center;

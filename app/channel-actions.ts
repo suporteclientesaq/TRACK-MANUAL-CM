@@ -2,6 +2,7 @@
 import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { requireAuth } from "@/lib/auth";
+import { wahaGetState } from "@/lib/waha";
 import { getClient } from "@/lib/store";
 import {
   channelStatus,
@@ -45,10 +46,23 @@ export async function configureAndConnectChannelAction(
     serverUrl: string;
     sessionName: string;
     apiKey: string;
+    useServerDefaults?: boolean;
   },
 ): Promise<ChannelStatus> {
   await requireAuth();
   try {
+    const proposed = await saveChannelConfiguration(clientId, input, true);
+    if (proposed.provider === "waha") {
+      const probe = await wahaGetState(proposed);
+      if (!probe.ok)
+        return {
+          ok: false,
+          state: "close",
+          qrcode: null,
+          phone: null,
+          error: probe.error,
+        };
+    }
     await saveChannelConfiguration(clientId, input);
     const h = await headers();
     const host = h.get("x-forwarded-host") || h.get("host") || "localhost:3000";

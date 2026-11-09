@@ -104,9 +104,6 @@ export function toLead(r: Row): Lead {
 
   // Resolve nome real: usa pushName/notifyName/verifiedName do raw, ou extrai das anotações/propostas
   let resolvedName = str(r.name);
-  if (resolvedName && /continental\s*studio/i.test(resolvedName)) {
-    resolvedName = null;
-  }
   if (
     (!resolvedName || resolvedName === "Sem Nome") &&
     rawObj &&
@@ -123,25 +120,7 @@ export function toLead(r: Row): Lead {
         rn.name.trim() !== "Sem Nome" &&
         rn.name.trim()) ||
       null;
-    if (fromRaw && !/continental\s*studio/i.test(fromRaw)) resolvedName = fromRaw;
-
-    if ((!resolvedName || resolvedName === "Sem Nome") && Array.isArray(rn.messages)) {
-      for (let i = rn.messages.length - 1; i >= 0; i--) {
-        const msg = rn.messages[i];
-        if (msg && typeof msg === "object" && !msg.fromMe) {
-          const candidate = msg.pushName || msg.senderName || msg.notifyName;
-          if (
-            typeof candidate === "string" &&
-            candidate.trim() &&
-            candidate.trim() !== "Sem Nome" &&
-            !/continental\s*studio/i.test(candidate)
-          ) {
-            resolvedName = candidate.trim();
-            break;
-          }
-        }
-      }
-    }
+    if (fromRaw) resolvedName = fromRaw;
   }
   // Se ainda estiver sem nome, tenta extrair de notas ou propostas importadas (ex: "Cliente: Vilson Gregorio")
   if (!resolvedName || resolvedName === "Sem Nome") {

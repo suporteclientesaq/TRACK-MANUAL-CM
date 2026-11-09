@@ -1,4 +1,4 @@
-# Track Manual Flow 3.0.1
+# Track Manual Flow 3.0.3
 
 Central de atendimento e CRM para organizar contatos WhatsApp, acompanhar oportunidades e registrar conversões manuais na Meta. Interface com navegação lateral, atendimento em três painéis, funil persistente e adaptação ao celular.
 
@@ -26,12 +26,26 @@ Sem configuração de banco remoto, o sistema usa SQLite em `data/` ou no diret�
 | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `TRACK_DATA_DIR`                                      | Diretório persistente do SQLite, configuração e sessões locais.                                                                                                                  |
 | `APP_SECRET`                                          | Segredo exclusivo, estável, com pelo menos 32 caracteres aleatórios. Tem prioridade local e online. Preserve-o fora do Git; sua troca exige recadastrar ou recifrar credenciais. |
+| `DATABASE_SSL_CA`                                     | Certificado CA oficial do provedor em PEM; aceita quebras de linha reais ou `\n` literais. Mantém validação do certificado e hostname.                                           |
+| `DATABASE_SSL_CA_BASE64`                              | Alternativa: o PEM completo em base64, em vez de `DATABASE_SSL_CA`. Use apenas uma das duas.                                                                                     |
 | `DATABASE_URL`                                        | Postgres direto. O servidor cria as tabelas ao inicializar o armazenamento.                                                                                                      |
 | `SUPABASE_DATABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` | PostgREST, como alternativa à conexão direta. Use chave de serviço exclusivamente no servidor e prepare o esquema de `supabase-tabelas.sql`.                                     |
 | `TRACK_WHATSAPP_AUTO_RECONNECT=false`                 | Desabilita a retomada automática de canais nativos, útil em homologação e CI.                                                                                                    |
 | `TRACK_WAHA_API_KEY`                                  | Chave opcional de serviço, com pelo menos 32 caracteres, para as rotas internas compatíveis com WAHA. O painel autenticado usa a própria sessão.                                 |
 
 Não coloque `.env`, bancos, chaves ou sessões no repositório nem na imagem Docker. O [guia de migração](docs/FLOW-3.0-MIGRACAO.md) explica volume persistente, segredo antigo exposto, restauração e rollback.
+
+## Certificado SSL do banco
+
+Se aparecer `self-signed certificate`, obtenha o certificado CA oficial com o provedor e configure `DATABASE_SSL_CA` no servidor após aplicar a versão 3.0.2. Mantenha host, porta, usuário e banco da URI fornecida pelo provedor. No Netlify, salve a variável e faça um novo deploy do código atualizado. Uma URL com `sslmode=require` não elimina a CA configurada nesta versão.
+
+Veja [a correção de SSL e as instruções para o Antigravity](docs/FLOW-3.0.2-SSL-POSTGRES.md). Certificado expirado e hostname incorreto precisam ser corrigidos pelo provedor; não se resolvem apenas adicionando uma CA. Testes locais de TLS exigem o OpenSSL CLI; a aplicação em execução usa o TLS do Node.
+
+## WAHA na VPS e QR de pareamento
+
+A versão 3.0.3 corrige QR no formato oficial `{mimetype,data}`, QR bruto e imagem binária; status, start/restart, atualização de sessão por PUT e consulta automática do QR. Chave/endereço recusados não substituem uma configuração funcional antes da verificação.
+
+O WAHA deve existir como serviço persistente separado. Configure no servidor do Track `WAHA_SERVER_URL`, `WAHA_API_KEY`, `WAHA_SESSION_NAME=default` e, se houver várias empresas, `WAHA_CLIENT_ID`. A tela pode usar essas variáveis sem pedir a chave no navegador. Dados manuais também continuam disponíveis. Consulte [instalação e vínculo da VPS](deploy/waha/README.md), com modelo Compose e diagnóstico. O painel YouSecure não é a URL da API do WAHA, e a chave da plataforma não é necessariamente a chave do WAHA.
 
 ## Atendimento e canais
 

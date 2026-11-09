@@ -1,17 +1,19 @@
 {
   "projeto": "suporteclientesaq/TRACK-MANUAL-CM",
-  "versao": "3.0.1",
+  "versao": "3.0.3",
   "base_commit": "7a42f374440688273d15c6beb5c946f3e24f5ca8",
   "branch_local": "codex/leona-flow-redesign",
-  "validado_em_utc": "2026-11-09T12:48:43.393064+00:00",
+  "validado_em_utc": "2026-11-09T18:57:15.199595+00:00",
   "ambiente": {
     "node": "24.22.1",
     "next": "16.4.5",
     "dados": "Fictícios; sem envios reais Meta ou WhatsApp"
   },
   "unitarios": {
-    "aprovados": 235,
-    "arquivos": 20,
+    "aprovados": 293,
+    "ignorados_condicionais": 3,
+    "arquivos_aprovados": 26,
+    "arquivos_totais": 27,
     "falhas": 0
   },
   "typescript": {
@@ -86,7 +88,7 @@
     "errors": []
   },
   "github_origem": "Não alterado; conexão continentalstudio01-a11y com push=false",
-  "integracoes_externas": "Fluxos adicionais usam Graph local simulado; Meta/WhatsApp e bancos remotos reais não exercitados. Homologação necessária.",
+  "integracoes_externas": "PostgreSQL 17.11 real em contêiner isolado com TLS 1.3 foi consultado; banco remoto do usuário, Meta e WhatsApp não acessados.",
   "ctwa_e_campanhas_producao_graph_simulado": {
     "checks": [
       "Catálogo completo com 4 campanhas; tabela padrão mostra apenas as 2 ativas, mesmo sem contatos",
@@ -99,5 +101,36 @@
       "Prévia com Página válida conserva CTWA, ID correto, canal WhatsApp e business_messaging; nenhum envio externo executado"
     ],
     "errors": []
+  },
+  "postgres_ssl_isolado": {
+    "database": "PostgreSQL disposable local container",
+    "scope": "SELECT only; no user database accessed",
+    "answer": 1,
+    "ssl": true,
+    "tls_version": "TLSv1.3",
+    "postgres_version": "17.11 (Debian 17.11-1.pgdg12+2)",
+    "integrationTests": 3,
+    "allPassed": true
+  },
+  "navegador_versao_verificada": "3.0.1",
+  "observacao_navegador": "Os 19 fluxos de interface/CTWA/campanhas e as capturas são evidência da 3.0.1. Seis fluxos WAHA passaram em produção local na 3.0.3 com API simulada; sem pareamento real.",
+  "waha_navegador_producao_api_simulada": {
+    "checks": [
+      "VPS do ambiente vinculada à empresa e chave ausente no HTML",
+      "Navegador → Server Action → API WAHA simulada: STARTING avança por polling e QR oficial data/mimetype aparece como imagem",
+      "WORKING remove QR e confirma o estado real",
+      "Logout explícito encerra a sessão",
+      "Trocar empresa não mantém QR antigo; nova configuração WAHA sugere sessão default",
+      "Tela de canal cabe em 390px"
+    ],
+    "errors": [],
+    "versao": "3.0.3"
+  },
+  "waha_vps_real": {
+    "instalacao_confirmada": false,
+    "painel": "https://yousecure.io/paas/dashboard",
+    "acesso_autenticado": false,
+    "pareamento_real": false,
+    "observacao": "Sem conexão de administração autenticada disponível; usuário não identificou WAHA instalado."
   }
 }
