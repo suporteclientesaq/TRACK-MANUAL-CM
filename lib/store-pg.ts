@@ -102,8 +102,16 @@ function pool(): Pool {
     host === "127.0.0.1" ||
     host === "::1" ||
     host === "";
+  // Conexões remotas usam SSL por padrão.
+  // Provedores como db.yousecure.io, Supabase pooler, Neon, Render e VPS próprios usam
+  // certificados SSL auto-assinados ou cadeias customizadas.
+  // Por padrão, mantemos criptografia SSL ativa com rejectUnauthorized: false,
+  // a menos que o usuário exija explicitamente validação estrita via sslmode=verify-full.
+  const strictSsl = sslmode === "verify-full" || sslmode === "verify-ca";
   const ssl =
-    sslmode === "disable" || local ? undefined : { rejectUnauthorized: true };
+    sslmode === "disable" || local
+      ? undefined
+      : { rejectUnauthorized: strictSsl };
   g.__trackPool = new Pool({
     connectionString: url,
     ssl,
