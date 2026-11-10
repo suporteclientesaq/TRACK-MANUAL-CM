@@ -296,9 +296,8 @@ export async function wahaGetState(
   if (!res.ok) {
     if (
       res.status === 404 &&
-      res.data &&
-      !/cannot (get|post)|route.*not found/i.test(
-        String(res.data.message || ""),
+      /^session(?: ["'][^"']+["'])? (?:not found|does not exist)\.?$/i.test(
+        String(res.data?.message || res.data?.error || ""),
       )
     )
       return { ok: true, state: "not_found", providerStatus: "NOT_FOUND" };
@@ -343,8 +342,8 @@ export async function wahaGetState(
     state: "close",
     providerStatus: status,
     error:
-      status === "PASSKEY_REQUIRED"
-        ? "O WhatsApp solicitou uma passkey. Conclua a autenticação pelo dashboard do WAHA."
+       status === "PASSKEY_REQUIRED" || status === "PASSKEY_CONFIRMATION_REQUIRED"
+         ? "O WhatsApp precisa de confirmação adicional. Conclua a autenticação pelo dashboard do WAHA."
         : "O serviço não retornou um estado WAHA reconhecido. Confira a URL e a versão instalada.",
   };
 }
@@ -362,14 +361,22 @@ export async function wahaQr(
       },
     );
     if (!response.ok) {
-      if ([404, 422].includes(response.status)) return { qrcode: null };
+      const data = await response.json().catch(() => null);
+      // WAHA can change state between the status request and the QR request.
+      if (
+        response.status === 422 &&
+        Array.isArray(data?.expected) &&
+        data.expected.includes("SCAN_QR_CODE") &&
+        typeof data.status === "string" &&
+        data.status !== "SCAN_QR_CODE"
+      )
+        return { qrcode: null };
       return {
         qrcode: null,
-        error: wahaError(
-          response.status,
-          await response.json().catch(() => null),
-          config.apiKey,
-        ),
+        error:
+          response.status === 404
+            ? "O endpoint de QR do WAHA retornou HTTP 404. Confira a sessão, a versão e a rota /api no proxy da VPS."
+            : wahaError(response.status, data, config.apiKey),
       };
     }
     const type = (response.headers.get("content-type") || "").split(";")[0];
@@ -456,19 +463,26 @@ export async function wahaCreateOrConnect(
     if (!created.ok)
       return { ok: false, state: "close", qrcode: null, error: created.error };
   } else {
-    if (webhookUrl) {
-      const previous = current.configuration || {};
-      const webhooks = Array.isArray(previous.webhooks)
-        ? previous.webhooks.filter(
-            (item) =>
-              item &&
-              typeof item === "object" &&
-              (item as Record<string, unknown>).url !== webhookUrl &&
-              !String((item as Record<string, unknown>).url || "").includes(
-                "/api/webhook/waha/",
-              ),
-          )
-        : [];
+    const previous = current.configuration || {};
+    const webhooks = Array.isArray(previous.webhooks) ? previous.webhooks : [];
+    // A PUT restarts a running WAHA session, invalidating its current QR.
+    if (
+      webhookUrl &&
+      !webhooks.some(
+        (item) =>
+          item?.url === webhookUrl &&
+          Array.isArray(item.events) &&
+          (item.events.includes("message") || item.events.includes("*")),
+      )
+    ) {
+      const existingWebhook = webhooks.find((item) => item?.url === webhookUrl);
+      const otherWebhooks = webhooks.filter(
+        (item) =>
+          item &&
+          typeof item === "object" &&
+          item.url !== webhookUrl &&
+          !String(item.url || "").includes("/api/webhook/waha/"),
+      );
       const updated = await wahaRequest(config, `/api/sessions/${session}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -476,7 +490,19 @@ export async function wahaCreateOrConnect(
           name: config.sessionName || "default",
           config: {
             ...previous,
-            webhooks: [...webhooks, { url: webhookUrl, events: ["message"] }],
+            webhooks: [
+              ...otherWebhooks,
+              {
+                ...existingWebhook,
+                url: webhookUrl,
+                events: [
+                  ...(Array.isArray(existingWebhook?.events)
+                    ? existingWebhook.events
+                    : []),
+                  "message",
+                ],
+              },
+            ],
           },
         }),
       });

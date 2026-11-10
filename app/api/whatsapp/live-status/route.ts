@@ -16,7 +16,7 @@ export async function GET() {
     const results = await Promise.all(
       clients.slice(offset, offset + 6).map(async (client) => {
         try {
-          return await channelStatus(client.id);
+          return await channelStatus(client.id, { includeQr: false });
         } catch {
           return { ok: false, state: "close" };
         }

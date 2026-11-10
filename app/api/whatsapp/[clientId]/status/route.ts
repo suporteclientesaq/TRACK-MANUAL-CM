@@ -24,9 +24,9 @@ async function authorize(ctx: Context) {
   return clientId;
 }
 export async function GET(_req: NextRequest, ctx: Context) {
-  const clientId = await authorize(ctx);
-  if (typeof clientId !== "string") return clientId;
   try {
+    const clientId = await authorize(ctx);
+    if (typeof clientId !== "string") return clientId;
     return NextResponse.json(await channelStatus(clientId), {
       headers: { "Cache-Control": "private,no-store" },
     });
@@ -35,6 +35,8 @@ export async function GET(_req: NextRequest, ctx: Context) {
       {
         ok: false,
         state: "close",
+        qrcode: null,
+        phone: null,
         error: "Não foi possível consultar o canal.",
       },
       { status: 502 },
