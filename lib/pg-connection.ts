@@ -5,6 +5,7 @@ import { isIP } from "node:net";
 import { createSecureContext, type ConnectionOptions } from "node:tls";
 import type { PoolConfig } from "pg";
 import { parseIntoClientConfig } from "pg-connection-string";
+import { YOUSECURE_POSTGRES_CA } from "./yousecure-postgres-ca";
 
 export interface PgConnectionEnvironment {
   DATABASE_SSL_CA?: string;
@@ -195,6 +196,15 @@ export function buildPgConnectionOptions(
     throw new Error(
       "sslnegotiation=direct exige TLS. Remova sslmode=disable ou desative a negociação direta.",
     );
+  }
+  if (
+    !ca &&
+    !explicitDisabled &&
+    !explicitNoVerify &&
+    host.toLowerCase() === "db.yousecure.io" &&
+    config.port === 5437
+  ) {
+    ca = YOUSECURE_POSTGRES_CA;
   }
   const enabled =
     !explicitDisabled &&

@@ -6,6 +6,7 @@ import tls, { type ConnectionOptions } from "node:tls";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildPgConnectionOptions } from "@/lib/pg-connection";
+import { YOUSECURE_POSTGRES_CA } from "@/lib/yousecure-postgres-ca";
 
 let directory: string;
 let ca: string;
@@ -267,6 +268,30 @@ describe("configuração SSL do Postgres", () => {
       options: "-c statement_timeout=3000",
       ssl: { rejectUnauthorized: true },
     });
+  });
+
+  it("aplica o certificado da You Secure somente ao endpoint PostgreSQL validado", () => {
+    const uri = "postgresql://u:p@db.yousecure.io:5437/track";
+    expect(
+      buildPgConnectionOptions(uri + "?sslmode=require", {}).config.ssl,
+    ).toEqual({ rejectUnauthorized: true, ca: YOUSECURE_POSTGRES_CA });
+    for (const differentEndpoint of [
+      uri.replace("5437", "5432"),
+      uri.replace("db.yousecure.io", "db.other.example"),
+    ]) {
+      expect(buildPgConnectionOptions(differentEndpoint, {}).config.ssl).toEqual({
+        rejectUnauthorized: true,
+      });
+    }
+  });
+
+  it("prioriza a CA configurada pelo operador sobre o certificado da You Secure", () => {
+    if (!hasOpenSsl) return;
+    expect(
+      buildPgConnectionOptions("postgresql://u:p@db.yousecure.io:5437/track", {
+        DATABASE_SSL_CA: ca,
+      }).config.ssl,
+    ).toEqual({ rejectUnauthorized: true, ca });
   });
 
   it("não reduz verificação por require/prefer/allow/verify-ca", () => {

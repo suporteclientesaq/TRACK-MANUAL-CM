@@ -37,6 +37,8 @@ Não coloque `.env`, bancos, chaves ou sessões no repositório nem na imagem Do
 
 ## Certificado SSL do banco
 
+O Track inclui o certificado público para `db.yousecure.io:5437` e verifica o certificado e o hostname. Uma CA configurada explicitamente no ambiente ou em `sslrootcert` tem prioridade, inclusive após uma rotação de certificado no provedor.
+
 Se aparecer `self-signed certificate`, obtenha o certificado CA oficial com o provedor e configure `DATABASE_SSL_CA` no ambiente do Track Manual. Use o PEM completo com as linhas BEGIN/END CERTIFICATE. Mantenha host, porta, usuário e banco da URI fornecida pelo provedor. Em VPS com Docker, recrie o contêiner do Track Manual com as variáveis novas e o volume existente. Em hospedagem gerenciada, faça um novo deploy. A aplicação aplica a CA configurada também com `sslmode=require`.
 
 Veja [a correção de SSL e as instruções para o Antigravity](docs/FLOW-3.0.2-SSL-POSTGRES.md). Certificado expirado e hostname incorreto precisam ser corrigidos pelo provedor; não se resolvem apenas adicionando uma CA. Testes locais de TLS exigem o OpenSSL CLI; a aplicação em execução usa o TLS do Node.
