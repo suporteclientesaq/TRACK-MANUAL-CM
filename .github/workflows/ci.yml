@@ -13,13 +13,14 @@ jobs:
     env:
       NEXT_TELEMETRY_DISABLED: "1"
       TRACK_WHATSAPP_AUTO_RECONNECT: "false"
-      TRACK_DATA_DIR: ${{ runner.temp }}/track-manual-ci
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
           cache: npm
+      - name: Configurar diretório temporário
+        run: echo "TRACK_DATA_DIR=$RUNNER_TEMP/track-manual-ci" >> "$GITHUB_ENV"
       - run: npm ci
       - run: npm run typecheck
       - run: npm test

@@ -11,6 +11,7 @@ import {
   saveChannelConfiguration,
   type ChannelStatus,
   type ChannelProvider,
+  type PublicChannelConfiguration,
 } from "@/lib/channels";
 export async function inspectChannelAction(
   clientId: string,
@@ -48,8 +49,9 @@ export async function configureAndConnectChannelAction(
     apiKey: string;
     useServerDefaults?: boolean;
   },
-): Promise<ChannelStatus> {
+): Promise<ChannelStatus & { configuration?: PublicChannelConfiguration }> {
   await requireAuth();
+  let configuration: PublicChannelConfiguration | undefined;
   try {
     const proposed = await saveChannelConfiguration(clientId, input, true);
     if (proposed.provider === "waha") {
@@ -63,7 +65,8 @@ export async function configureAndConnectChannelAction(
           error: probe.error,
         };
     }
-    await saveChannelConfiguration(clientId, input);
+    const { apiKey, ...saved } = await saveChannelConfiguration(clientId, input);
+    configuration = { ...saved, hasApiKey: !!apiKey };
     const h = await headers();
     const host = h.get("x-forwarded-host") || h.get("host") || "localhost:3000";
     const proto = (h.get("x-forwarded-proto") || "http").split(",")[0].trim();
@@ -74,13 +77,14 @@ export async function configureAndConnectChannelAction(
         host.split(",")[0].trim(),
     );
     revalidatePath("/whatsapp");
-    return result;
+    return { ...result, configuration };
   } catch (error) {
     return {
       ok: false,
       state: "close",
       qrcode: null,
       phone: null,
+      configuration,
       error:
         error instanceof Error
           ? error.message

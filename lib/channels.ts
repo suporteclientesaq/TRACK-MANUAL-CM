@@ -267,7 +267,10 @@ export async function saveChannelConfiguration(
     });
   return { provider: selected, serverUrl, sessionName, apiKey };
 }
-export async function channelStatus(clientId: string): Promise<ChannelStatus> {
+export async function channelStatus(
+  clientId: string,
+  { includeQr = true } = {},
+): Promise<ChannelStatus> {
   const config = await channelConfiguration(clientId);
   if (config.provider === "native") {
     const status = await getNativeWhatsAppStatus(clientId, {
@@ -291,12 +294,17 @@ export async function channelStatus(clientId: string): Promise<ChannelStatus> {
     };
     const status = await wahaGetState(opts);
     const qr =
-      status.ok && status.providerStatus === "SCAN_QR_CODE"
+      includeQr && status.ok && status.providerStatus === "SCAN_QR_CODE"
         ? await wahaQr(opts)
         : { qrcode: null };
     return {
       ok: status.ok && !qr.error,
-      error: status.error || qr.error,
+      error:
+        status.error ||
+        qr.error ||
+        (status.state === "not_found"
+          ? "A sessão ainda não existe no WAHA. Clique em Salvar e conectar para iniciá-la."
+          : undefined),
       providerStatus: status.providerStatus,
       state:
         status.state === "open"

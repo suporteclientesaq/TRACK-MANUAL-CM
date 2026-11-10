@@ -28,7 +28,6 @@ import {
 import {
   configureAndConnectChannelAction,
   disconnectChannelAction,
-  inspectChannelAction,
 } from "@/app/channel-actions";
 import type {
   ChannelProvider,
@@ -61,6 +60,47 @@ const PROVIDERS = [
     icon: Cloud,
   },
 ];
+function statusFailure(error: string): ChannelStatus {
+  return { ok: false, state: "close", qrcode: null, phone: null, error };
+}
+
+async function fetchChannelStatus(
+  clientId: string,
+  signal?: AbortSignal,
+): Promise<ChannelStatus> {
+  const timeout = AbortSignal.timeout(25_000);
+  try {
+    const response = await fetch(
+      "/api/whatsapp/" + encodeURIComponent(clientId) + "/status",
+      {
+        cache: "no-store",
+        signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+      },
+    );
+    if (response.status === 401)
+      return statusFailure("Sua sessão expirou. Entre novamente no Track Manual.");
+    if (!response.ok && response.status !== 502)
+      return statusFailure("Não foi possível consultar o canal.");
+    return (await response.json()) as ChannelStatus;
+  } catch {
+    return statusFailure(
+      timeout.aborted
+        ? "O servidor demorou para responder. Tente atualizar o status."
+        : "Não foi possível atualizar o canal. Confira a conexão e tente novamente.",
+    );
+  }
+}
+
+function mergePolledStatus(
+  provider: ChannelProvider,
+  previous: ChannelStatus | null,
+  result: ChannelStatus,
+): ChannelStatus {
+  if (provider === "evolution" && result.ok && result.state === "connecting")
+    return { ...result, qrcode: result.qrcode || previous?.qrcode || null };
+  return result;
+}
+
 export function ChannelPanel({
   clients,
   nativeAvailable,
@@ -94,6 +134,7 @@ export function ChannelPanel({
   const draft =
     provider !== configs[selected]?.provider ||
     useDefaults !== !!configs[selected]?.managedByEnvironment ||
+    !!key.trim() ||
     (!useDefaults &&
       (url !== configs[selected]?.serverUrl ||
         session !== configs[selected]?.sessionName));
@@ -101,7 +142,19 @@ export function ChannelPanel({
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [waitingTooLong, setWaitingTooLong] = useState(false);
   const client = clients.find((item) => item.id === selected);
+  const waitingForQr =
+    provider === "waha" &&
+    status?.state === "connecting" &&
+    !status.qrcode &&
+    !status.error;
+  useEffect(() => {
+    setWaitingTooLong(false);
+    if (!waitingForQr) return;
+    const timer = setTimeout(() => setWaitingTooLong(true), 60_000);
+    return () => clearTimeout(timer);
+  }, [waitingForQr, selected]);
   useEffect(() => {
     const configuration = configs[selected];
     setProvider(configuration?.provider || "native");
@@ -114,24 +167,27 @@ export function ChannelPanel({
     setNotice(null);
   }, [selected]);
   useEffect(() => {
-    if (!selected || draft) return;
-    let active = true;
+    if (draft) {
+      setStatus(null);
+      setNotice(null);
+    }
+  }, [draft]);
+  useEffect(() => {
+    if (!selected || draft || busy) return;
+    const controller = new AbortController();
     let pending = false;
     const load = async () => {
       if (pending || document.hidden || operationBusy.current) return;
       pending = true;
       const version = sequence.current;
       try {
-        const result = await inspectChannelAction(selected);
+        const result = await fetchChannelStatus(selected, controller.signal);
         if (
-          active &&
+          !controller.signal.aborted &&
           version === sequence.current &&
           selectedRef.current === selected
         )
-          setStatus(result);
-      } catch {
-        if (active && version === sequence.current)
-          setNotice("Não foi possível atualizar o canal. Tente novamente.");
+          setStatus((previous) => mergePolledStatus(provider, previous, result));
       } finally {
         pending = false;
       }
@@ -139,10 +195,10 @@ export function ChannelPanel({
     void load();
     const timer = setInterval(() => void load(), 5000);
     return () => {
-      active = false;
+      controller.abort();
       clearInterval(timer);
     };
-  }, [selected, draft]);
+  }, [selected, draft, busy, provider]);
   const connect = async (event: React.FormEvent) => {
     event.preventDefault();
     if (operationBusy.current) return;
@@ -151,6 +207,7 @@ export function ChannelPanel({
     const target = selected;
     setBusy(true);
     setNotice(null);
+    setStatus(null);
     try {
       const result = await configureAndConnectChannelAction(selected, {
         provider,
@@ -162,35 +219,25 @@ export function ChannelPanel({
       if (request !== sequence.current || target !== selectedRef.current)
         return;
       setStatus(result);
-      if (result.ok) {
+      if (result.configuration) {
+        const configuration = result.configuration;
         setConfigs((previous) => ({
           ...previous,
           [selected]: {
-            provider,
-            serverUrl: url,
-            sessionName: session,
-            hasApiKey:
-              !!key ||
-              useDefaults ||
-              (previous[selected]?.provider === provider &&
-                previous[selected]?.serverUrl === url &&
-                !!previous[selected]?.hasApiKey),
-            managedByEnvironment: provider === "waha" && useDefaults,
+            ...configuration,
             serverDefaultsAvailable:
               previous[selected]?.serverDefaultsAvailable,
           },
         }));
+        setUrl(configuration.serverUrl);
+        setSession(configuration.sessionName);
+        setUseDefaults(!!configuration.managedByEnvironment);
         setKey("");
-        setNotice(
-          result.state === "open"
-            ? "Canal conectado. Seu atendimento está pronto."
-            : "Solicitação iniciada. Aguarde o QR Code ou a confirmação do provedor.",
-        );
-      } else setNotice(result.error || "Não foi possível conectar.");
-    } catch (error) {
-      setNotice(
-        error instanceof Error ? error.message : "Falha ao conectar o canal.",
-      );
+      }
+      if (!result.ok) setNotice(result.error || "Não foi possível conectar.");
+    } catch {
+      if (request === sequence.current && target === selectedRef.current)
+        setNotice("Falha ao conectar o canal. Consulte o estado antes de tentar novamente.");
     } finally {
       operationBusy.current = false;
       setBusy(false);
@@ -206,12 +253,11 @@ export function ChannelPanel({
     const request = ++sequence.current;
     const target = selected;
     setChecking(true);
+    setNotice(null);
     try {
-      const result = await inspectChannelAction(target);
+      const result = await fetchChannelStatus(target);
       if (request === sequence.current && selectedRef.current === target)
-        setStatus(result);
-    } catch {
-      setNotice("Falha ao consultar o estado da conexão.");
+        setStatus((previous) => mergePolledStatus(provider, previous, result));
     } finally {
       operationBusy.current = false;
       setChecking(false);
@@ -341,13 +387,17 @@ export function ChannelPanel({
                   }
                 >
                   <i />
-                  {status?.state === "open"
+                  {status && !status.ok
+                    ? "Falha na conexão"
+                    : status?.state === "open"
                     ? "Conectado"
                     : status?.state === "connecting"
                       ? "Conectando"
                       : status
                         ? "Desconectado"
-                        : "Consultando"}
+                        : draft
+                          ? "Configuração pendente"
+                          : "Consultando"}
                 </span>
               </div>
               {configs[selected]?.configurationError && (
@@ -501,13 +551,13 @@ export function ChannelPanel({
                     </p>
                   </div>
                 )}
-                {notice && (
+                {notice && !status?.error && (
                   <div className={styles.notice} role="status">
                     <Info size={15} />
                     {notice}
                   </div>
                 )}
-                {status?.error && !notice && (
+                {status?.error && (
                   <div className={styles.notice} role="status">
                     <CircleAlert size={15} />
                     {status.error}
@@ -600,17 +650,31 @@ export function ChannelPanel({
                 />
               ) : (
                 <div className={styles.qrPlaceholder}>
-                  {status?.state === "connecting" ? (
+                  {status?.state === "connecting" && !status.error && !waitingTooLong ? (
                     <Loader2 size={46} className={styles.spin} />
                   ) : (
                     <QrCode size={58} strokeWidth={1} />
                   )}
                   <strong>
-                    {status?.state === "connecting"
+                    {status?.error
+                      ? "QR Code indisponível"
+                      : waitingTooLong
+                        ? "O WAHA ainda não enviou o QR Code"
+                      : status?.state === "connecting"
                       ? "Preparando seu QR Code…"
                       : "Pronto para conectar?"}
                   </strong>
-                  <p>Salve a configuração para gerar o código de pareamento.</p>
+                  <p>
+                    {status?.error
+                      ? "Veja a mensagem no painel de configuração do canal."
+                      : waitingTooLong
+                        ? "Confira a sessão no painel do WAHA e tente novamente."
+                        : status?.providerStatus === "STARTING"
+                          ? "O WAHA está iniciando a sessão."
+                          : status?.providerStatus === "SCAN_QR_CODE"
+                            ? "Aguardando o código de pareamento do WAHA."
+                            : "Salve a configuração para gerar o código de pareamento."}
+                  </p>
                 </div>
               )}
             </div>

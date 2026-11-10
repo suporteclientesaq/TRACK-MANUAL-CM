@@ -56,6 +56,24 @@ describe("WAHA sessions and QR", () => {
     network.mockResolvedValue(new Response("<html>login</html>"));
     expect((await wahaQr(config)).qrcode).toBeNull();
   });
+  it("expõe erros reais do endpoint de QR", async () => {
+    network.mockResolvedValueOnce(json({ message: "Not Found" }, 404));
+    expect(await wahaQr(config)).toMatchObject({
+      qrcode: null,
+      error: expect.stringContaining("HTTP 404"),
+    });
+    network.mockResolvedValueOnce(json({ message: "Engine not supported" }, 422));
+    expect(await wahaQr(config)).toMatchObject({
+      qrcode: null,
+      error: expect.stringContaining("Engine not supported"),
+    });
+  });
+  it("aguarda nova consulta se o WAHA mudou de estado antes de entregar o QR", async () => {
+    network.mockResolvedValue(
+      json({ status: "WORKING", expected: ["SCAN_QR_CODE"] }, 422),
+    );
+    expect(await wahaQr(config)).toEqual({ qrcode: null });
+  });
   it("não tenta criar ou iniciar uma sessão quando a chave falha", async () => {
     network.mockResolvedValue(json({ message: "Unauthorized" }, 401));
     const result = await wahaCreateOrConnect(config);
@@ -68,6 +86,14 @@ describe("WAHA sessions and QR", () => {
       new Response("<html>Dashboard</html>", { status: 404 }),
     );
     expect((await wahaCreateOrConnect(config)).ok).toBe(false);
+    expect(network).toHaveBeenCalledTimes(1);
+  });
+  it("não cria sessão quando um proxy devolve um 404 genérico", async () => {
+    network.mockResolvedValue(json({ message: "Not Found" }, 404));
+    expect(await wahaCreateOrConnect(config)).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("HTTP 404"),
+    });
     expect(network).toHaveBeenCalledTimes(1);
   });
   it("erro ao iniciar não vira sucesso conectando", async () => {
@@ -129,6 +155,23 @@ describe("WAHA sessions and QR", () => {
     const body = JSON.parse(network.mock.calls[1][1].body);
     expect(body.config.proxy).toEqual({ server: "proxy" });
     expect(body.config.webhooks).toHaveLength(2);
+  });
+  it("preserva o QR em andamento quando o webhook já está configurado", async () => {
+    const webhook = "https://track.example/api/webhook/waha/key";
+    const state = {
+      status: "SCAN_QR_CODE",
+      config: { webhooks: [{ url: webhook, events: ["message", "session.status"] }] },
+    };
+    network
+      .mockResolvedValueOnce(json(state))
+      .mockResolvedValueOnce(json(state))
+      .mockResolvedValueOnce(json({ mimetype: "image/png", data: "aGVsbG8=" }));
+    expect(await wahaCreateOrConnect(config, webhook)).toMatchObject({
+      ok: true,
+      state: "connecting",
+      qrcode: "data:image/png;base64,aGVsbG8=",
+    });
+    expect(network.mock.calls.every(([, options]) => !options.method)).toBe(true);
   });
   it("consulta de estado nunca inicia sessão ou pede QR prematuro", async () => {
     network.mockResolvedValue(json({ status: "STARTING" }));

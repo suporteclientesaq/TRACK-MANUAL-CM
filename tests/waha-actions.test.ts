@@ -60,6 +60,25 @@ describe("prévia de credenciais WAHA", () => {
     expect(fake.save).toHaveBeenCalledTimes(2);
     expect(fake.connect).toHaveBeenCalledWith("c", "https://track.example");
   });
+  it("devolve a configuração pública já salva mesmo se a sessão falhar", async () => {
+    fake.connect.mockResolvedValue({
+      ok: false,
+      state: "close",
+      qrcode: null,
+      phone: null,
+      error: "WAHA indisponível",
+    });
+    const result = await configureAndConnectChannelAction("c", input);
+    expect(result).toMatchObject({
+      ok: false,
+      configuration: {
+        serverUrl: "https://waha.example",
+        sessionName: "default",
+        hasApiKey: true,
+      },
+    });
+    expect(result.configuration).not.toHaveProperty("apiKey");
+  });
   it("outros provedores não são consultados como WAHA", async () => {
     fake.save.mockResolvedValue({ provider: "native" });
     await configureAndConnectChannelAction("c", {
