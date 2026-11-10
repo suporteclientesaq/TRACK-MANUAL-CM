@@ -182,7 +182,7 @@ export function explainDatabaseError(err: unknown, url: string): string {
       "CERT_UNTRUSTED",
     ].includes(code)
   ) {
-    return `Não foi possível validar o certificado SSL do banco${where}. Obtenha o certificado CA oficial com o provedor e configure DATABASE_SSL_CA no ambiente do servidor (PEM completo, com quebras de linha ou \\n literais). Depois faça um novo deploy no Netlify e recarregue a página. Mantenha o host e a porta informados pelo provedor; não desative a validação TLS global.`;
+    return `Não foi possível validar o certificado SSL do banco${where}. Obtenha o certificado CA oficial com o provedor e configure DATABASE_SSL_CA no ambiente do Track Manual. Mantenha a verificação TLS ativa e use o host e a porta da URI fornecida pelo provedor.`;
   }
   if (/password authentication failed/i.test(msg) || code === "28P01") {
     return supabase

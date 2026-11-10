@@ -91,8 +91,8 @@ export function StorageProblem({
                 <p>
                   Cadastre <span className="mono">DATABASE_SSL_CA</span> com o
                   certificado CA oficial em PEM completo, incluindo as linhas
-                  BEGIN/END CERTIFICATE. A validação do certificado e do nome do
-                  servidor deve permanecer ativa.
+                  BEGIN/END CERTIFICATE. São aceitas quebras de linha reais ou
+                  a sequência <code>{"\\n"}</code>.
                 </p>
               </div>
             )}
@@ -111,11 +111,11 @@ export function StorageProblem({
               <p className="muted small">
                 Use a URI oficial do seu provedor de Postgres em{" "}
                 <span className="mono">DATABASE_URL</span>, com o host, a porta
-                e o nome do banco fornecidos por ele. No Netlify, abra Site
-                configuration &gt; Environment variables e confira as variáveis
-                da instalação{needsCa ? ", incluindo DATABASE_SSL_CA" : ""}.
-                Após salvar uma alteração, faça um novo deploy em Deploys &gt;
-                Trigger deploy &gt; Deploy site e recarregue esta página.
+                e o nome do banco fornecidos por ele. Salve as variáveis no
+                ambiente que executa o Track Manual. Em uma VPS com Docker,
+                recrie o contêiner do Track Manual com as variáveis atualizadas
+                e o volume existente. Em hospedagem gerenciada, publique um
+                novo deploy. Depois recarregue esta página.
               </p>
             )}
           </>

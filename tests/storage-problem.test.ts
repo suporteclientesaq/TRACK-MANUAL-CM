@@ -20,7 +20,8 @@ describe("tela de conexão por provedor", () => {
     const html = render(message, custom);
     expect(html).toContain("db.yousecure.io:5437/customdb");
     expect(html).toContain("DATABASE_SSL_CA");
-    expect(html).not.toMatch(/Supabase|supabase|pooler|6543/);
+    expect(html).toContain("recrie o contêiner do Track Manual");
+    expect(html).not.toMatch(/Supabase|supabase|pooler|6543|Netlify/);
     expect(html).not.toContain("PrivatePassword123");
     expect(html).not.toContain("query-secret");
   });

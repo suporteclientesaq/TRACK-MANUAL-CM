@@ -37,7 +37,7 @@ Não coloque `.env`, bancos, chaves ou sessões no repositório nem na imagem Do
 
 ## Certificado SSL do banco
 
-Se aparecer `self-signed certificate`, obtenha o certificado CA oficial com o provedor e configure `DATABASE_SSL_CA` no servidor após aplicar a versão 3.0.2. Mantenha host, porta, usuário e banco da URI fornecida pelo provedor. No Netlify, salve a variável e faça um novo deploy do código atualizado. Uma URL com `sslmode=require` não elimina a CA configurada nesta versão.
+Se aparecer `self-signed certificate`, obtenha o certificado CA oficial com o provedor e configure `DATABASE_SSL_CA` no ambiente do Track Manual. Use o PEM completo com as linhas BEGIN/END CERTIFICATE. Mantenha host, porta, usuário e banco da URI fornecida pelo provedor. Em VPS com Docker, recrie o contêiner do Track Manual com as variáveis novas e o volume existente. Em hospedagem gerenciada, faça um novo deploy. A aplicação aplica a CA configurada também com `sslmode=require`.
 
 Veja [a correção de SSL e as instruções para o Antigravity](docs/FLOW-3.0.2-SSL-POSTGRES.md). Certificado expirado e hostname incorreto precisam ser corrigidos pelo provedor; não se resolvem apenas adicionando uma CA. Testes locais de TLS exigem o OpenSSL CLI; a aplicação em execução usa o TLS do Node.
 

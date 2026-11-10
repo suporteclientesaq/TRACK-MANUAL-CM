@@ -10,14 +10,14 @@ A versão anterior mantinha a validação TLS, mas não oferecia configuração 
 
 A versão 3.0.2 interpreta a URI uma vez, entrega campos explícitos ao Pool e configura a confiança TLS separadamente. O certificado e o hostname continuam validados. CA/certificados/credenciais diferentes invalidam o pool e o cache de diagnóstico. A tela separa CA não confiável, certificado expirado e nome incorreto, ocultando credenciais.
 
-## O que configurar no Netlify
+## O que configurar na hospedagem do Track Manual
 
 1. Aplique o código 3.0.2 com seu `package.json` e `package-lock.json`. A instalação passa a declarar `pg-connection-string` 2.14.0 diretamente.
 2. Mantenha `DATABASE_URL` com a URI oficial desse banco, incluindo seu host e sua porta. Não é necessário migrar para um pooler Supabase para corrigir um erro de CA de um provedor diferente.
 3. Obtenha a CA oficial no painel, documentação ou suporte do provedor. Não confie automaticamente em um certificado apenas porque o servidor o apresentou.
-4. Em Environment variables, crie `DATABASE_SSL_CA` com o PEM completo, incluindo `-----BEGIN CERTIFICATE-----` e `-----END CERTIFICATE-----`. São aceitas quebras de linha reais ou `\n` literais.
+4. Nas variáveis de ambiente do Track Manual, crie `DATABASE_SSL_CA` com o PEM completo, incluindo `-----BEGIN CERTIFICATE-----` e `-----END CERTIFICATE-----`. São aceitas quebras de linha reais ou `\n` literais.
 5. Se o painel não facilitar PEM multilinha, pode usar `DATABASE_SSL_CA_BASE64` com o PEM completo codificado em base64, em vez de `DATABASE_SSL_CA`. Não configure ambas.
-6. Faça um novo deploy do código atualizado e recarregue o painel. Para concluir a homologação, confirme uma consulta e o funcionamento do sistema nesse ambiente.
+6. Em uma VPS com Docker, recrie o contêiner do Track Manual com as variáveis atualizadas e o volume existente. Em uma hospedagem que gerencia os contêineres, salve as variáveis no projeto e publique um novo deploy. Abra o Track Manual pelo domínio desse projeto e confirme a conexão.
 
 O suporte à variável depende do código novo; adicionar a variável a uma versão antiga não basta. Não envie a senha do banco no chat. O link oficial da CA ou o nome do painel do provedor ajuda a identificar o arquivo correto sem expor credenciais.
 
