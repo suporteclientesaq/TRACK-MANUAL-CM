@@ -40,7 +40,8 @@ interface NativeSession {
   qrcode: string | null;
   phone: string | null;
   name: string | null;
-  qrWaiters: Array<(qr: string) => void>;
+  error?: string;
+  qrWaiters: Array<() => void>;
   isConnecting: boolean;
 }
 
@@ -61,6 +62,37 @@ type NativeConnectResult = {
   phone?: string | null;
   error?: string;
 };
+
+function sessionResult(session: NativeSession) {
+  return {
+    ok: !session.error,
+    state: session.state,
+    qrcode: session.qrcode,
+    phone: session.phone,
+    name: session.name,
+    error: session.error,
+  };
+}
+
+function settleConnectionWaiters(session: NativeSession): void {
+  for (const resolve of session.qrWaiters.splice(0)) resolve();
+}
+
+async function waitForConnection(session: NativeSession, timeoutMs: number) {
+  if (session.state === "connecting" && !session.qrcode) {
+    await new Promise<void>((resolve) => {
+      const finish = () => {
+        clearTimeout(timer);
+        const index = session.qrWaiters.indexOf(finish);
+        if (index !== -1) session.qrWaiters.splice(index, 1);
+        resolve();
+      };
+      const timer = setTimeout(finish, timeoutMs);
+      session.qrWaiters.push(finish);
+    });
+  }
+  return sessionResult(session);
+}
 
 function getBaseSessionDir(): string {
   if (process.env.TRACK_DATA_DIR?.trim())
@@ -170,17 +202,11 @@ export async function getNativeWhatsAppStatus(
   qrcode: string | null;
   phone: string | null;
   name: string | null;
+  error?: string;
 }> {
   const session = sessions.get(clientId);
   // A status read never reports a saved credential as an active connection.
-  if (session)
-    return {
-      ok: true,
-      state: session.state,
-      qrcode: session.qrcode,
-      phone: session.phone,
-      name: session.name,
-    };
+  if (session) return sessionResult(session);
   if (options.reconnect !== false && !isServerlessEnvironment()) {
     const safeId = clientId.replace(/[^a-zA-Z0-9_-]/g, "_");
     const credentials = path.join(
@@ -214,19 +240,22 @@ export function connectNativeWhatsApp(
   if (existing) return existing;
   const pending = establishNativeWhatsApp(clientId)
     .catch((error: unknown) => {
+      const message = error instanceof Error
+        ? error.message
+        : "Não foi possível iniciar a sessão.";
       const current = sessions.get(clientId);
       if (current) {
         current.isConnecting = false;
         current.state = "close";
+        current.qrcode = null;
+        current.error = message;
+        settleConnectionWaiters(current);
       }
       return {
         ok: false,
         state: "close" as const,
         qrcode: null,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Não foi possível iniciar a sessão.",
+        error: message,
       };
     })
     .finally(() => {
@@ -266,29 +295,7 @@ async function establishNativeWhatsApp(clientId: string): Promise<{
 
   // Se já está conectando com socket ativo, apenas aguarda ou devolve o QR existente sem destruir
   if (session && session.isConnecting) {
-    if (session.qrcode) {
-      return {
-        ok: true,
-        state: "connecting",
-        qrcode: session.qrcode,
-      };
-    }
-    // Aguarda o QR ser gerado pelo socket que já está em conexão ativa
-    const qrPromise = new Promise<string>((resolve) => {
-      session!.qrWaiters.push(resolve);
-    });
-    const timeoutPromise = new Promise<null>((resolve) =>
-      setTimeout(() => resolve(null), 8_000),
-    );
-    const generatedQr = await Promise.race([qrPromise, timeoutPromise]);
-    if (session.state === "open") {
-      return { ok: true, state: "open", qrcode: null, phone: session.phone };
-    }
-    return {
-      ok: true,
-      state: "connecting",
-      qrcode: generatedQr || session.qrcode || null,
-    };
+    return waitForConnection(session, 8_000);
   }
 
   // Se já existia um socket antigo fechado, encerra limpo antes de abrir um novo
@@ -318,6 +325,8 @@ async function establishNativeWhatsApp(clientId: string): Promise<{
 
   session.state = "connecting";
   session.isConnecting = true;
+  session.error = undefined;
+  session.qrcode = null;
   const sessionDir = getSessionDir(clientId);
   await restoreSessionFromDb(clientId);
   const { state: authState, saveCreds } =
@@ -326,7 +335,6 @@ async function establishNativeWhatsApp(clientId: string): Promise<{
   const sock = makeWASocket({
     auth: authState,
     logger: pino({ level: "silent" }),
-    printQRInTerminal: false,
     syncFullHistory: true,
     connectTimeoutMs: 45_000,
     keepAliveIntervalMs: 25_000,
@@ -357,14 +365,14 @@ async function establishNativeWhatsApp(clientId: string): Promise<{
             light: "#ffffff",
           },
         });
+        if (sessions.get(clientId)?.socket !== sock || session!.state !== "connecting")
+          return;
         session!.qrcode = qrDataUrl;
         session!.state = "connecting";
+        session!.error = undefined;
 
         // Notifica quem estiver esperando pelo QR
-        while (session!.qrWaiters.length > 0) {
-          const waiter = session!.qrWaiters.shift();
-          waiter?.(qrDataUrl);
-        }
+        settleConnectionWaiters(session!);
       } catch (err) {
         console.error("[Baileys QR Error]", err);
       }
@@ -374,10 +382,12 @@ async function establishNativeWhatsApp(clientId: string): Promise<{
       session!.state = "open";
       session!.qrcode = null;
       session!.isConnecting = false;
+      session!.error = undefined;
       session!.phone = sock.user?.id
         ? sock.user.id.split(":")[0].replace(/\D/g, "")
         : null;
       session!.name = sock.user?.name || null;
+      settleConnectionWaiters(session!);
       console.log(
         `[Track Manual] WhatsApp Conectado com sucesso para cliente ${clientId}! Número: ${session!.phone}`,
       );
@@ -397,12 +407,19 @@ async function establishNativeWhatsApp(clientId: string): Promise<{
       session!.state = "close";
       session!.qrcode = null;
       session!.isConnecting = false;
+      const shouldReconnect = !isLoggedOut &&
+        (authState.creds.registered || statusCode === DisconnectReason.restartRequired) &&
+        !isServerlessEnvironment();
+      session!.error = shouldReconnect ? undefined : isLoggedOut
+        ? "O WhatsApp encerrou a sessão. Clique em Salvar e conectar para gerar outro QR Code."
+        : `Não foi possível conectar ao WhatsApp${statusCode ? ` (código ${statusCode})` : ""}. Tente novamente. Se persistir, confira a saída HTTPS/WebSocket da VPS para web.whatsapp.com.`;
+      settleConnectionWaiters(session!);
 
       if (isLoggedOut) {
         cleanSessionDir(clientId);
         session!.phone = null;
         session!.name = null;
-      } else if (!isServerlessEnvironment()) {
+      } else if (shouldReconnect) {
         console.log(
           `[Track Manual] WhatsApp temporariamente desconectado. Reconectando em 3s...`,
         );
@@ -763,39 +780,7 @@ async function establishNativeWhatsApp(clientId: string): Promise<{
     },
   );
 
-  // Aguarda até 10 segundos pelo primeiro QR code ou confirmação de conexão
-  if ((session.state as NativeSession["state"]) === "open") {
-    return { ok: true, state: "open", qrcode: null, phone: session.phone };
-  }
-  if (session.qrcode) {
-    return { ok: true, state: "connecting", qrcode: session.qrcode };
-  }
-
-  const qrPromise = new Promise<string>((resolve) => {
-    session!.qrWaiters.push(resolve);
-  });
-
-  const timeoutPromise = new Promise<null>((resolve) =>
-    setTimeout(() => resolve(null), 10_000),
-  );
-
-  const generatedQr = await Promise.race([qrPromise, timeoutPromise]);
-
-  const currentState = session.state as "open" | "connecting" | "close";
-  if (currentState === "open") {
-    return { ok: true, state: "open", qrcode: null, phone: session.phone };
-  }
-
-  if (generatedQr) {
-    return { ok: true, state: "connecting", qrcode: generatedQr };
-  }
-
-  // Se demorou mais de 10s, retorna o estado atual (o front pode dar poll)
-  return {
-    ok: true,
-    state: session.state,
-    qrcode: session.qrcode,
-  };
+  return waitForConnection(session, 10_000);
 }
 
 /** Send success is independent from later local-history persistence. */
